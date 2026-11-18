@@ -38,6 +38,8 @@ final class BilibiliStore: ObservableObject {
     enum Item: Hashable {
         case video(BiliVideo)
         case login, refresh, logout
+        /// 退出登录的确认：先问一次，默认停在"取消"上
+        case keepLogin, confirmLogout
         /// 一个 UP 主（搜索结果里），按确认进他的主页
         case user(BiliUser)
         /// 这一排暂时没有内容时占位的一张卡片，只显示一句话，按了没反应
@@ -56,9 +58,11 @@ final class BilibiliStore: ObservableObject {
     /// 焦点在右上角的头像上（在最上面一排再按上）
     @Published private(set) var accountFocused = false
     /// 头像下面的账号菜单开着，以及选中了第几项
-    @Published private(set) var accountMenuOpen = false
+    @Published private(set) var accountMenuOpen = false { didSet { if !accountMenuOpen { confirmingLogout = false } } }
     @Published private(set) var accountIndex = 0
-    var accountActions: [Item] { account == nil ? [.login] : [.refresh, .logout] }
+    var accountActions: [Item] { account == nil ? [.login] : (confirmingLogout ? [.keepLogin, .confirmLogout] : [.refresh, .logout]) }
+    /// 头像菜单换成了"取消 / 退出登录"两项（菜单一收起就回到原样）
+    @Published private(set) var confirmingLogout = false
 
     /// 正在看的某个 UP 主的主页（从搜索结果或卡片菜单进来）。它盖在当前这一页上，按 Esc 回去。
     /// 关注按钮在页面上方、名字旁边（第一排再按上才到），不放在视频那一排里，免得误触。
@@ -571,6 +575,17 @@ final class BilibiliStore: ObservableObject {
         case .refresh:
             reload()
         case .logout:
+            // 退出登录之前先问一次；默认停在"取消"上，误按确认不会退出
+            withAnimation(Motion.focus) {
+                accountFocused = true
+                accountMenuOpen = true
+                confirmingLogout = true
+                accountIndex = 0
+            }
+        case .keepLogin:
+            withAnimation(Motion.focus) { confirmingLogout = false; accountIndex = 1 }
+        case .confirmLogout:
+            withAnimation(Motion.focus) { accountMenuOpen = false; accountFocused = false }
             Task { @MainActor in
                 let store = tv.profile.websiteDataStore.httpCookieStore
                 for cookie in await store.allCookies() where cookie.domain.hasSuffix("bilibili.com") {

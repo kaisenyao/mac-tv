@@ -8,30 +8,49 @@ struct NeteaseRoot: View {
     }
 }
 
+/// 几个"菜单从这里长出来"的位置：播放界面的"⋯"、头像、选中的卡片、选中的那首歌、歌单页的收藏按钮
+struct NeteaseAnchors: PreferenceKey {
+    static var defaultValue: [String: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
 /// 网易云音乐的电视式页面。
 ///
-/// 首页：上半屏是选中那首歌（或歌单）的名字，下半屏是一排排方形封面；最上面一排再按上是搜索框。
+/// 首页：上半屏是选中那首歌（或歌单）的名字，下半屏是一排排方形封面；最上面一排再按上是顶栏（正在放的歌、搜索、头像）。
 /// 歌单页：左边封面和歌单名，右边竖排的歌曲列表。
-/// 正在播放：左边封面、歌名和进度，右边跟着唱的歌词；按上选音质。
-/// 全程只用方向键、确认、返回。
+/// 正在播放：左边封面、歌名和进度，右边跟着唱的歌词；按上选音质，按下看播放列表。
+/// 全程只用方向键、确认、返回；能看见的东西也都能用鼠标点。
+///
+/// 动画只用这几种，和哔哩哔哩那边一致：
+/// - 焦点移动（卡片、整排、高亮）：Motion.focus
+/// - 面板和页面进出（菜单、音质栏、播放列表、歌单页、播放界面）：slide
+/// - 歌词换句（滚动和变亮）：lyric
+/// - 换内容（切歌时的歌名、歌词）：swap，旧的先出、新的后入，不重叠
 struct NeteaseScreen: View {
     @ObservedObject var store: NeteaseStore
     @Environment(\.canvasSize) private var canvas
     @FocusState private var typing: Bool
-    @Namespace private var qualitySpace
     @FocusState private var namingField: Bool
-    private let menuWidth: CGFloat = 360
+    @Namespace private var qualitySpace
 
+    private let menuWidth: CGFloat = 360
     private let margin: CGFloat = 120
     private let cardSize: CGFloat = 300
     private let cardGap: CGFloat = 40
     private let rowHeight: CGFloat = 500
     private let rowsTop: CGFloat = 430
     private let songHeight: CGFloat = 92
+    private let pageTop: CGFloat = 190
+    /// 歌单页里选中的行尽量停在第 4 行的位置，上面能看到刚过去的几首
+    private let pageAnchor = 3
+
     private static let slide = Animation.spring(response: 0.42, dampingFraction: 0.84)
-    /// 换内容（切歌时的歌名、歌词）：旧的很快淡出，新的稍后淡入，两者不重叠
+    private static let lyric = Animation.spring(response: 0.6, dampingFraction: 0.9)
     private static let swap = AnyTransition.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.4).delay(0.12)),
                                                        removal: .opacity.animation(.easeIn(duration: 0.12)))
+    private static let danger = Color(hex: "#E5484D")
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -44,9 +63,12 @@ struct NeteaseScreen: View {
                         .offset(y: rowsTop)
                     details
                 }
+                // 进歌单：首页往左退一点并淡出，歌单页从右边进来
                 .opacity(store.page == nil ? 1 : 0)
+                .offset(x: store.page == nil ? 0 : -50)
                 if let page = store.page {
-                    playlistPage(page).transition(.opacity)
+                    playlistPage(page)
+                        .transition(.opacity.combined(with: .offset(x: 50)))
                 }
                 if store.loading, store.rows.isEmpty {
                     ProgressView().controlSize(.large).position(x: canvas.width / 2, y: canvas.height / 2)
@@ -56,15 +78,19 @@ struct NeteaseScreen: View {
             }
             topBar
             if let song = store.current {
+                // 播放界面：淡入的同时从稍大一点缩到正好，像是推到眼前
                 nowPlaying(song)
                     .opacity(store.nowPlayingVisible ? 1 : 0)
+                    .scaleEffect(store.nowPlayingVisible ? 1 : 1.04)
                     .allowsHitTesting(store.nowPlayingVisible)
             }
-            menuView
         }
         .frame(width: canvas.width, height: canvas.height)
-        .animation(Motion.navigate, value: store.nowPlayingVisible)
-        .animation(Motion.navigate, value: store.page?.list.id)
+        .overlayPreferenceValue(NeteaseAnchors.self) { anchors in
+            GeometryReader { proxy in menuLayer(anchors, proxy) }
+        }
+        .animation(Self.slide, value: store.nowPlayingVisible)
+        .animation(Self.slide, value: store.page?.list.id)
     }
 
     // MARK: 背景和顶栏
@@ -78,22 +104,19 @@ struct NeteaseScreen: View {
         }
     }
 
+    /// 整屏的柔和底色：选中那一项的封面，小图模糊后放大。换图时新的在旧的上面浮现，不会先空一下
     private var backdrop: some View {
         ZStack {
             Color.black
-            // 小图模糊后再放大：整屏的柔和底色，开销很小
-            BiliImage(url: focusedCover)
+            FadingImage(url: focusedCover)
                 .frame(width: 160, height: 90)
                 .blur(radius: 14)
                 .scaleEffect(x: canvas.width / 160 * 1.15, y: canvas.height / 90 * 1.15)
                 .opacity(0.5)
-                .id(focusedCover)
-                .transition(.opacity)
             LinearGradient(colors: [.black.opacity(0.25), .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
         }
         .frame(width: canvas.width, height: canvas.height)
         .clipped()
-        .animation(.easeInOut(duration: 0.5), value: focusedCover)
     }
 
     /// 顶上一排，从左到右：字标 …… 正在放的歌、搜索、头像。后三个能被选中（最上面一排再按上），确认才进去。
@@ -132,6 +155,7 @@ struct NeteaseScreen: View {
                         .scaleEffect(focused ? 1.12 : 1)
                         .contentShape(Circle())
                         .onTapGesture { store.tapTop(.account) }
+                        .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { ["account": $0] }
                 }
             }
         }
@@ -172,66 +196,81 @@ struct NeteaseScreen: View {
 
     // MARK: 菜单
 
-    /// 长按确认、点"⋯"或点头像弹出来的小菜单：玻璃底板，白色高亮上下滑。和哔哩哔哩卡片菜单是同一种。
-    @ViewBuilder private var menuView: some View {
+    /// 菜单那一层。菜单从被按的地方（"⋯"、头像、卡片、那一行歌）长出来，收起时缩回那里；点菜单外面任何地方收起。
+    private func menuLayer(_ anchors: [String: Anchor<CGRect>], _ proxy: GeometryProxy) -> some View {
         ZStack(alignment: .topLeading) {
+            if store.menu != nil {
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture { store.dismissMenu() }
+            }
             if let menu = store.menu {
-                let height = CGFloat(menu.items.count) * 82 - 8 + 32
-                // 从哪儿弹出来，就以哪个角为准放大：播放界面的"⋯"在它右下，头像在它右上，卡片在它左上
-                let corner: UnitPoint = menu.anchor == .account ? .topTrailing : (menu.anchor == .nowPlaying ? .bottomTrailing : .topLeading)
+                let place = menuPlacement(menu, anchors, proxy)
+                // 摆好位置以后整块铺满屏幕，再以"从哪儿来"的那个点为中心放大 / 缩小
                 menuPanel(menu)
-                    .offset(menuOrigin(height: height))
-                    .transition(.scale(scale: 0.6, anchor: corner).combined(with: .opacity))
+                    .position(x: place.origin.x + place.size.width / 2, y: place.origin.y + place.size.height / 2)
+                    .transition(.scale(scale: 0.04, anchor: UnitPoint(x: place.from.x / max(1, proxy.size.width),
+                                                                      y: place.from.y / max(1, proxy.size.height)))
+                        .combined(with: .opacity))
                     .id(menu.anchor)
             }
         }
-        .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
-        .allowsHitTesting(store.menu != nil)
+        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         .animation(Self.slide, value: store.menu != nil)
     }
 
     private func menuPanel(_ menu: NeteaseStore.Menu) -> some View {
         let items = menu.items
         let index = min(menu.index, max(0, items.count - 1))
-        return VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(items.enumerated()), id: \.offset) { row, item in
-                let focused = row == index
-                HStack(spacing: 18) {
-                    if case .create = item.action, store.naming != nil {
-                        Image(systemName: "plus").font(.system(size: 26, weight: .semibold)).frame(width: 36)
-                        TextField("歌单名字", text: $store.newName)
-                            .textFieldStyle(.plain)
-                            .font(.tv(.callout))
-                            .focused($namingField)
-                            .onSubmit { store.createList() }
-                            .onAppear {
-                                namingField = true
-                                // 输入框刚出现的那一下有时拿不到键盘，稍等再要一次
-                                Task { @MainActor in
-                                    try? await Task.sleep(for: .milliseconds(80))
-                                    if store.naming != nil { namingField = true }
-                                }
-                            }
-                            .environment(\.colorScheme, .light)
-                    } else {
-                        Image(systemName: item.symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36)
-                        Text(title(of: item)).font(.tv(.callout, emphasized: focused)).lineLimit(1)
-                        Spacer(minLength: 0)
-                    }
-                }
-                .foregroundStyle(focused ? .black : .white.opacity(0.8))
-                .padding(.horizontal, 22)
-                .frame(width: menuWidth - 32, height: 74)
-                .contentShape(Rectangle())
-                .onTapGesture { store.tapMenu(row) }
+        let danger = items.indices.contains(index) && items[index].danger
+        return VStack(alignment: .leading, spacing: 12) {
+            if let title = menu.title {
+                Text(title)
+                    .font(.tv(.callout, emphasized: true))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+                    .padding(.horizontal, 22)
+                    .frame(width: menuWidth - 32, height: 44, alignment: .leading)
             }
-        }
-        .background(alignment: .top) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(store.logoutArmed ? Color(hex: "#E5484D") : .white)
-                .frame(height: 74)
-                .offset(y: CGFloat(index) * 82)
-                .opacity(items.isEmpty ? 0 : 1)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(items.enumerated()), id: \.offset) { row, item in
+                    let focused = row == index
+                    HStack(spacing: 18) {
+                        Image(systemName: item.symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36)
+                        if store.naming == item.action {
+                            TextField("歌单名字", text: $store.newName)
+                                .textFieldStyle(.plain)
+                                .font(.tv(.callout))
+                                .focused($namingField)
+                                .onSubmit { store.submitName() }
+                                .onAppear {
+                                    namingField = true
+                                    // 输入框刚出现的那一下有时拿不到键盘，稍等再要一次
+                                    Task { @MainActor in
+                                        try? await Task.sleep(for: .milliseconds(80))
+                                        if store.naming != nil { namingField = true }
+                                    }
+                                }
+                                .environment(\.colorScheme, .light)
+                        } else {
+                            Text(item.title).font(.tv(.callout, emphasized: focused)).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .foregroundStyle(focused ? (danger ? .white : .black) : .white.opacity(0.8))
+                    .padding(.horizontal, 22)
+                    .frame(width: menuWidth - 32, height: 74)
+                    .contentShape(Rectangle())
+                    .onTapGesture { store.tapMenu(row) }
+                }
+            }
+            .background(alignment: .top) {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(danger ? Self.danger : .white)   // 确认"删除""退出登录""取消收藏"时，高亮是红的
+                    .frame(height: 74)
+                    .offset(y: CGFloat(index) * 82)
+                    .opacity(items.isEmpty ? 0 : 1)
+            }
         }
         .padding(16)
         .background {
@@ -243,39 +282,34 @@ struct NeteaseScreen: View {
         .fixedSize()
         .onChange(of: store.naming) { _, naming in namingField = naming != nil }
         .onChange(of: store.focusRequest) { _, _ in if store.naming != nil { namingField = true } }
-        .animation(Self.slide, value: index)
+        .animation(Motion.focus, value: index)
         .animation(Self.slide, value: items.count)
     }
 
-    private func title(of item: NeteaseStore.MenuItem) -> String {
-        if case .logout = item.action, store.logoutArmed { return "再按一次退出" }
-        return item.title
-    }
-
-    /// 菜单摆在哪：贴着它是从哪儿弹出来的
-    private func menuOrigin(height: CGFloat) -> CGSize {
-        switch store.menu?.anchor {
-        case .account:
-            return CGSize(width: canvas.width - margin - menuWidth, height: 58 + 58 + 18)
-        case .nowPlaying:
-            // 歌名那一行"⋯"的上方
-            return CGSize(width: playerLeft + 600 - menuWidth + 8, height: playerTop + 600 + 36 - height)
-        case .song:
-            let visible = min(store.page?.index ?? 0, pageAnchor)
-            return CGSize(width: margin + 560 + 90, height: min(pageTop + CGFloat(visible) * songHeight + 40, canvas.height - height - 40))
-        default:
-            let line = store.rows.indices.contains(store.row) ? store.rows[store.row] : nil
-            let column = line.map { store.column(of: $0) } ?? 0
-            return CGSize(width: margin + (column > 0 ? cardSize + cardGap : 0) + 30, height: rowsTop + 110)
+    /// 菜单摆在哪、从哪个点长出来：贴着它是从哪儿弹出来的，出不了屏幕
+    private func menuPlacement(_ menu: NeteaseStore.Menu, _ anchors: [String: Anchor<CGRect>],
+                               _ proxy: GeometryProxy) -> (origin: CGPoint, size: CGSize, from: CGPoint) {
+        let size = CGSize(width: menuWidth, height: CGFloat(menu.items.count) * 82 + 24 + (menu.title == nil ? 0 : 56))
+        let screen = proxy.size
+        let key = switch menu.anchor {
+        case .nowPlaying: "more"
+        case .account: "account"
+        case .song: "song"
+        case .card: "card"
+        case .pageButton: "pageButton"
         }
+        let rect = anchors[key].map { proxy[$0] } ?? CGRect(x: screen.width / 2, y: screen.height / 2, width: 0, height: 0)
+        var origin = switch menu.anchor {
+        case .nowPlaying: CGPoint(x: rect.maxX - size.width + 10, y: rect.minY - size.height - 4)   // "⋯"正上方，右边对齐
+        case .account: CGPoint(x: rect.maxX - size.width, y: rect.maxY + 16)                     // 头像正下方，右边对齐
+        case .song: CGPoint(x: rect.minX + 70, y: rect.maxY + 4)                                 // 那一行下面
+        case .pageButton: CGPoint(x: rect.minX, y: rect.maxY + 16)                               // 按钮下面
+        case .card: CGPoint(x: rect.minX + 24, y: rect.minY + 24)                                // 压在卡片左上角里面
+        }
+        origin.x = min(max(24, origin.x), screen.width - size.width - 24)
+        origin.y = min(max(24, origin.y), screen.height - size.height - 24)
+        return (origin, size, CGPoint(x: rect.midX, y: rect.midY))
     }
-
-    /// 播放界面左边那一栏（封面、歌名、进度）的左上角
-    private var playerLeft: CGFloat { store.lyricsShown ? (canvas.width - (600 + 130 + 800)) / 2 : (canvas.width - 600) / 2 }
-    private var playerTop: CGFloat { (canvas.height - 820) / 2 }
-    private let pageTop: CGFloat = 190
-    /// 歌单页里选中的行尽量停在第 4 行的位置，上面能看到刚过去的几首
-    private let pageAnchor = 3
 
     // MARK: 登录
 
@@ -308,7 +342,7 @@ struct NeteaseScreen: View {
                 Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
             case .playlist(let list):
                 Text(list.name).font(.tv(.title2, emphasized: true)).foregroundStyle(.white).lineLimit(2)
-                if list.count > 0 { Text("\(list.count) 首").font(.tv(.body)).foregroundStyle(.white.opacity(0.72)) }
+                if let second = secondLine(list) { Text(second).font(.tv(.body)).foregroundStyle(.white.opacity(0.72)).lineLimit(1) }
             case nil:
                 EmptyView()
             }
@@ -318,6 +352,15 @@ struct NeteaseScreen: View {
         .padding(.leading, margin)
         .padding(.top, 220)
         .animation(.easeInOut(duration: 0.22), value: store.focused)
+    }
+
+    /// 卡片和上半屏的第二行：歌手写"歌手"，专辑写歌手名和歌数，歌单写歌数
+    private func secondLine(_ list: NeteasePlaylist) -> String? {
+        switch list.kind {
+        case .artist: "歌手"
+        case .album: [list.subtitle, list.count > 0 ? "\(list.count) 首" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
+        case .playlist: list.count > 0 ? "\(list.count) 首" : nil
+        }
     }
 
     private var rows: some View {
@@ -346,10 +389,10 @@ struct NeteaseScreen: View {
                 ForEach(Array(row.items.enumerated()), id: \.offset) { column, item in
                     // 只画焦点附近的卡片，一排几十张也不卡
                     if abs(column - focusedColumn) <= 8 {
+                        // 滑出左边的那张淡掉：和整排滑动是同一个动画里一起发生的，步调一致
                         card(item, focused: active && column == focusedColumn)
                             .onTapGesture { store.focus(row: index, column: column); store.activate() }
                             .opacity(column < focusedColumn - 1 ? 0 : 1)
-                            .animation(.easeInOut(duration: 0.42), value: focusedColumn)
                     } else {
                         Color.clear.frame(width: cardSize, height: 1)
                     }
@@ -362,7 +405,9 @@ struct NeteaseScreen: View {
 
     @ViewBuilder
     private func card(_ item: NeteaseStore.Item, focused: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        // 歌手是圆的（和哔哩哔哩的 UP 主一样），其余是圆角方块
+        let round = if case .playlist(let list) = item, list.kind == .artist { true } else { false }
+        let shape = RoundedRectangle(cornerRadius: round ? cardSize / 2 : 20, style: .continuous)
         VStack(alignment: .leading, spacing: 16) {
             ZStack {
                 Color.white.opacity(0.06)
@@ -382,6 +427,7 @@ struct NeteaseScreen: View {
             .overlay(shape.strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
             .shadow(color: .black.opacity(focused ? 0.65 : 0), radius: 30, y: 22)
             .scaleEffect(focused ? 1.09 : 1)
+            .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { focused ? ["card": $0] : [:] }
 
             VStack(alignment: .leading, spacing: 6) {
                 switch item {
@@ -390,7 +436,7 @@ struct NeteaseScreen: View {
                     Text(song.artist).font(.tv(.caption2)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
                 case .playlist(let list):
                     Text(list.name).font(.system(size: 27, weight: focused ? .semibold : .medium)).foregroundStyle(.white.opacity(focused ? 1 : 0.78)).lineLimit(1)
-                    if list.count > 0 { Text("\(list.count) 首").font(.tv(.caption2)).foregroundStyle(.white.opacity(0.5)) }
+                    if let second = secondLine(list) { Text(second).font(.tv(.caption2)).foregroundStyle(.white.opacity(0.5)).lineLimit(1) }
                 }
             }
             .frame(width: cardSize, alignment: .leading)
@@ -402,11 +448,12 @@ struct NeteaseScreen: View {
 
     // MARK: 歌单页
 
-    /// 左边封面、歌单名和几个按钮（播放、随机播放、收藏），右边竖排的歌：选中的那一行是白底黑字。
-    /// 在歌曲里按左到按钮，在按钮上按右回到歌曲。
+    /// 左边封面、歌单名和几个按钮（播放、随机播放、收藏），右边竖排的歌。
+    /// 选中的那一行是一块白色高亮，换行时它滑过去；几百首的歌单也只排看得见的那三十来行。
     private func playlistPage(_ page: NeteaseStore.Page) -> some View {
         let shift = -CGFloat(max(0, page.index - pageAnchor)) * songHeight
         let listActive = page.button == nil && store.topFocus == nil
+        let lo = max(0, page.index - 16), hi = min(page.songs.count, page.index + 16)
         return HStack(alignment: .top, spacing: 100) {
             VStack(alignment: .leading, spacing: 0) {
                 BiliImage(url: page.list.cover)
@@ -414,8 +461,18 @@ struct NeteaseScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: page.list.kind == .artist ? 200 : 22, style: .continuous))   // 歌手是圆的
                     .shadow(color: .black.opacity(0.5), radius: 40, y: 24)
                 Text(page.list.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(2).padding(.top, 30)
-                Text(page.songs.isEmpty ? (page.list.count > 0 ? "\(page.list.count) 首" : " ") : "\(page.songs.count) 首")
-                    .font(.tv(.body)).foregroundStyle(.white.opacity(0.6)).padding(.top, 8)
+                Text(pageSubtitle(page)).font(.tv(.body)).foregroundStyle(.white.opacity(0.6)).lineLimit(1).padding(.top, 8)
+                // 歌手：几行简介（和哔哩哔哩 UP 主页上方的那块一样，只放一点信息）
+                if page.list.kind == .artist, !page.list.intro.isEmpty {
+                    Text(page.list.intro)
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(4)
+                        .lineSpacing(4)
+                        .frame(maxWidth: 440, alignment: .leading)
+                        .padding(.top, 16)
+                        .transition(.opacity)
+                }
                 // 一横排圆形图标；选中哪个，哪个拉长、把字显示出来
                 HStack(spacing: 14) {
                     ForEach(Array(store.pageButtons.enumerated()), id: \.offset) { index, button in
@@ -428,16 +485,19 @@ struct NeteaseScreen: View {
             .frame(width: 460, alignment: .leading)
             .padding(.top, pageTop)
 
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(page.songs.enumerated()), id: \.offset) { index, song in
-                    // 只画选中那行附近的，几百首的歌单也不卡
-                    if abs(index - page.index) <= 14 {
-                        songRow(song, number: index + 1, focused: listActive && index == page.index)
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.white)
+                    .frame(height: songHeight - 8)
+                    .offset(y: CGFloat(page.index) * songHeight + 4)
+                    .opacity(listActive && !page.songs.isEmpty ? 1 : 0)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(lo..<hi, id: \.self) { index in
+                        songRow(page.songs[index], number: index + 1, focused: listActive && index == page.index)
                             .onTapGesture { store.tapSong(index) }
-                    } else {
-                        Color.clear.frame(height: songHeight)
                     }
                 }
+                .padding(.top, CGFloat(lo) * songHeight)
             }
             .padding(.top, 44)   // 给顶上的淡出留出位置：第一首歌选中时，白色高亮不会被淡掉一截
             .offset(y: shift)
@@ -453,8 +513,17 @@ struct NeteaseScreen: View {
         }
         .padding(.horizontal, margin)
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
-        .animation(Self.slide, value: page.index)
         .animation(Motion.focus, value: page.button)
+    }
+
+    /// 歌单页左边名字下面那一行
+    private func pageSubtitle(_ page: NeteaseStore.Page) -> String {
+        let count = page.songs.isEmpty ? page.list.count : page.songs.count
+        switch page.list.kind {
+        case .artist: return page.list.subtitle.isEmpty ? "歌手" : page.list.subtitle
+        case .album: return [page.list.subtitle, count > 0 ? "\(count) 首" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
+        case .playlist: return count > 0 ? "\(count) 首" : " "
+        }
     }
 
     private func pageButton(_ button: NeteaseStore.PageButton, list: NeteasePlaylist, focused: Bool) -> some View {
@@ -477,7 +546,8 @@ struct NeteaseScreen: View {
         .frame(height: 68)
         .background(focused ? Color.white : Color.white.opacity(0.14), in: Capsule())
         .contentShape(Capsule())
-        .animation(Self.slide, value: focused)
+        .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { button == .subscribe ? ["pageButton": $0] : [:] }
+        .animation(Motion.focus, value: focused)
     }
 
     private func songRow(_ song: NeteaseSong, number: Int, focused: Bool) -> some View {
@@ -498,26 +568,24 @@ struct NeteaseScreen: View {
             Spacer(minLength: 20)
             if store.liked.contains(song.id) { Image(systemName: "heart.fill").font(.system(size: 20)).opacity(0.5) }
             if song.duration > 0 {
-                Text(clock(Double(song.duration))).font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.55)
+                Text(neteaseClockText(Double(song.duration))).font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.55)
             }
         }
         .foregroundStyle(focused ? .black : .white.opacity(current ? 1 : 0.85))
         .padding(.horizontal, 22)
         .frame(height: songHeight - 8)
-        .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.white).opacity(focused ? 1 : 0)
-        }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+        .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { focused ? ["song": $0] : [:] }
     }
 
     // MARK: 正在播放
 
-    /// 左边封面、歌名和进度，右边跟着唱的歌词。没有按钮：左右切歌，确认暂停，上选音质，返回回列表。
+    /// 左边封面、歌名和进度，右边跟着唱的歌词。没有按钮：左右切歌，确认暂停，上选音质，下看播放列表，返回回列表。
     private func nowPlaying(_ song: NeteaseSong) -> some View {
         ZStack {
             Color.black
-            // 背景和封面：切歌时直接换成新的（新图到手之前留着上一张），不做叠化，不会出现两张图叠在一起
+            // 背景和封面：切歌时新图到手后在旧图上浮现，不会先空一下，也不会两张叠着
             FadingImage(url: song.cover)
                 .frame(width: 160, height: 90)
                 .blur(radius: 12)
@@ -547,39 +615,18 @@ struct NeteaseScreen: View {
                         }
                         .animation(.easeInOut(duration: 0.3), value: song.id)
                         Spacer(minLength: 0)
-                        // "⋯"：长按确认（或点它）展开——喜欢、收藏到歌单、播放模式
+                        // "⋯"：长按确认（或点它）展开——喜欢、收藏到歌单、查看歌手、查看专辑、播放模式
                         Image(systemName: "ellipsis")
                             .font(.system(size: 34, weight: .bold))
                             .foregroundStyle(.white.opacity(store.menu?.anchor == .nowPlaying ? 1 : 0.7))
                             .frame(width: 58, height: 58)
                             .contentShape(Rectangle())
                             .onTapGesture { store.tapMore() }
+                            .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { ["more": $0] }
                     }
                     .padding(.top, 36)
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(.white.opacity(0.22))
-                            Capsule().fill(.white)
-                                .frame(width: geo.size.width * (store.duration > 0 ? min(1, store.time / store.duration) : 0))
-                        }
-                        .frame(height: 7)
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())   // 点的范围比细细一条大一些
-                        .onTapGesture { location in store.seek(toFraction: location.x / max(1, geo.size.width)) }
-                    }
-                    .frame(height: 7)
-                    .padding(.vertical, -14)
-                    .padding(.top, 34)
-                    HStack {
-                        Text(clock(store.time))
-                        Spacer()
-                        if store.paused { Image(systemName: "pause.fill").onTapGesture { store.tapPlayPause() } }
-                        Spacer()
-                        Text("-" + clock(max(0, store.duration - store.time)))
-                    }
-                    .font(.system(size: 24, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.6))
-                    .padding(.top, 14)
+                    NeteaseProgress(store: store, clock: store.clock)
+                        .padding(.top, 20)
                 }
                 .frame(width: 600, alignment: .leading)
                 // 没有歌词的歌（纯音乐等）不留歌词那一栏，封面这一栏自己居中
@@ -589,10 +636,16 @@ struct NeteaseScreen: View {
                         .transition(.opacity)
                 }
             }
-            // 播放列表拉上来时，上面这些退到后面：轻微模糊、变暗。卡片之间的缝里透出来的只是一片暗色，拼不出字
+            // 音质栏、播放列表开着时，上面这些退到后面：轻微模糊、变暗
             .blur(radius: store.queueVisible ? 22 : 0)
             .opacity(store.queueVisible ? 0.75 : 1)
             .animation(Self.slide, value: store.queueVisible)
+            if store.qualityVisible || store.queueVisible {
+                // 点空白处：收起音质栏 / 播放列表
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture { store.dismissPanels() }
+            }
             qualityBar
             queueRow
         }
@@ -600,56 +653,53 @@ struct NeteaseScreen: View {
         .clipped()
     }
 
-    /// 当前的播放列表：按下从屏幕下方滑上来的一排封面，左右挑，确认就放那一首。和哔哩哔哩的相关视频是同一种做法。
+    /// 当前的播放列表：按下从屏幕下方滑上来的一排封面，左右挑，确认（或点）就放那一首。和哔哩哔哩的相关视频是同一种做法。
     private var queueRow: some View {
         let open = store.queueVisible
         let size: CGFloat = 230, gap: CGFloat = 34
         let focus = store.queueFocus
         let shift = -CGFloat(max(0, focus - 1)) * (size + gap)
+        let lo = max(0, focus - 3), hi = min(store.queue.count, focus + 10)
         return VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 22) {
                 Text("播放列表").font(.tv(.headline, emphasized: true)).foregroundStyle(.white).padding(.leading, margin)
                 HStack(alignment: .top, spacing: gap) {
-                    ForEach(Array(store.queue.enumerated()), id: \.offset) { index, song in
-                        if abs(index - focus) <= 9 {
-                            let focused = index == focus
-                            VStack(alignment: .leading, spacing: 12) {
-                                ZStack {
-                                    BiliImage(url: song.cover)
-                                    if index == store.queueIndex {
-                                        Color.black.opacity(0.45)
-                                        NeteaseWave(playing: !store.paused, size: 50).foregroundStyle(.white)
-                                    }
+                    ForEach(lo..<hi, id: \.self) { index in
+                        let song = store.queue[index]
+                        let focused = index == focus
+                        VStack(alignment: .leading, spacing: 12) {
+                            ZStack {
+                                BiliImage(url: song.cover)
+                                if index == store.queueIndex {
+                                    Color.black.opacity(0.45)
+                                    NeteaseWave(playing: !store.paused, size: 50).foregroundStyle(.white)
                                 }
-                                .frame(width: size, height: size)
-                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
-                                .scaleEffect(focused ? 1.08 : 1)
-                                Text(song.name).font(.system(size: 25, weight: focused ? .semibold : .medium))
-                                    .foregroundStyle(.white.opacity(focused ? 1 : 0.75)).lineLimit(1)
-                                    .offset(y: focused ? 10 : 0)
-                                Text(song.artist).font(.system(size: 21)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
-                                    .offset(y: focused ? 10 : 0)
                             }
-                            .frame(width: size, alignment: .leading)
-                            .opacity(index < focus - 1 ? 0 : 1)
-                            .contentShape(Rectangle())
-                            .onTapGesture { store.tapQueue(index) }
-                        } else {
-                            Color.clear.frame(width: size, height: 1)
+                            .frame(width: size, height: size)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
+                            .scaleEffect(focused ? 1.08 : 1)
+                            Text(song.name).font(.system(size: 25, weight: focused ? .semibold : .medium))
+                                .foregroundStyle(.white.opacity(focused ? 1 : 0.75)).lineLimit(1)
+                                .offset(y: focused ? 10 : 0)
+                            Text(song.artist).font(.system(size: 21)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                                .offset(y: focused ? 10 : 0)
                         }
+                        .frame(width: size, alignment: .leading)
+                        .opacity(index < focus - 1 ? 0 : 1)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.tapQueue(index) }
                     }
                 }
-                .padding(.leading, margin)
+                .padding(.leading, margin + CGFloat(lo) * (size + gap))
                 .offset(x: shift)
             }
             .padding(.top, 70)
             .padding(.bottom, 54)
             .frame(width: canvas.width, alignment: .leading)
             .background {
-                // 只在最上沿留一段渐变，卡片背后那一大段几乎不透明
                 // 后面已经模糊了，这里只需要淡淡一层暗色托住文字
                 LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.3), location: 0.2),
                                        .init(color: .black.opacity(0.45), location: 0.45), .init(color: .black.opacity(0.55), location: 1)],
@@ -659,8 +709,9 @@ struct NeteaseScreen: View {
         }
         .offset(y: open ? 0 : 520)
         .opacity(open ? 1 : 0)
+        .allowsHitTesting(open)
         .animation(Self.slide, value: open)
-        .animation(Self.slide, value: focus)
+        .animation(Motion.focus, value: focus)
     }
 
     /// 音质：从屏幕上方滑下来的一行，白色高亮左右滑。和哔哩哔哩的清晰度是同一种做法。
@@ -696,12 +747,11 @@ struct NeteaseScreen: View {
         }
         .offset(y: open ? 0 : -260)
         .opacity(open ? 1 : 0)
+        .allowsHitTesting(open)
         .animation(Self.slide, value: open)
-        .animation(Self.slide, value: store.qualityIndex)
+        .animation(Motion.focus, value: store.qualityIndex)
     }
 
-    /// 歌词：正在唱的那句又大又亮、停在中间，前后的句子越远越淡。
-    /// 有逐字歌词的歌，这一句里唱到哪个字亮到哪个字（卡拉 OK 那样）。
     /// 歌词那一栏。切歌时旧歌词先淡出，新歌词载入后再淡入，两份不会同时出现
     private var lyricsColumn: some View {
         ZStack(alignment: .topLeading) {
@@ -712,57 +762,49 @@ struct NeteaseScreen: View {
         .animation(.easeInOut(duration: 0.3), value: store.lyricsSong)
     }
 
-    @ViewBuilder private var lyricsContent: some View {
-        if store.lyrics.isEmpty {
-            Color.clear
-        } else {
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 34) {
-                        Color.clear.frame(height: 360)
-                        ForEach(Array(store.lyrics.enumerated()), id: \.offset) { index, line in
-                            let current = index == store.lyricIndex
-                            let distance = abs(index - max(0, store.lyricIndex))
-                            lineText(line, current: current)
-                                .font(.system(size: 50, weight: .bold))
-                                .opacity(current ? 1 : max(0.1, 0.38 - Double(distance) * 0.06))
-                                .scaleEffect(current ? 1 : 0.94, anchor: .leading)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                                .onTapGesture { store.seek(toTime: line.time) }
-                                .id(index)
+    /// 正在唱的那句又大又亮、停在中间，前后的句子越远越淡；换句时滚动和变亮用同一条曲线。点哪句跳到哪句。
+    private var lyricsContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 34) {
+                    Color.clear.frame(height: 360)
+                    ForEach(Array(store.lyrics.enumerated()), id: \.offset) { index, line in
+                        let current = index == store.lyricIndex
+                        let distance = abs(index - max(0, store.lyricIndex))
+                        Group {
+                            // 只有正在唱、又有逐字时间的那一句跟着播放进度刷新；其余的句子是静的
+                            if current, !line.words.isEmpty {
+                                NeteaseKaraokeLine(line: line, clock: store.clock)
+                            } else {
+                                Text(line.text).foregroundStyle(.white)
+                            }
                         }
-                        Color.clear.frame(height: 360)
+                        .font(.system(size: 50, weight: .bold))
+                        .opacity(current ? 1 : max(0.1, 0.38 - Double(distance) * 0.06))
+                        .scaleEffect(current ? 1 : 0.94, anchor: .leading)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.seek(toTime: line.time) }
+                        .id(index)
                     }
-                    .animation(.easeInOut(duration: 0.45), value: store.lyricIndex)
+                    Color.clear.frame(height: 360)
                 }
-                .scrollDisabled(true)
-                .onChange(of: store.lyricIndex) { _, index in
-                    withAnimation(.spring(response: 0.6, dampingFraction: 0.9)) { proxy.scrollTo(max(0, index), anchor: .center) }
-                }
-                .onChange(of: store.lyrics) { _, _ in proxy.scrollTo(max(0, store.lyricIndex), anchor: .center) }
-                .onChange(of: store.nowPlayingVisible) { _, _ in proxy.scrollTo(max(0, store.lyricIndex), anchor: .center) }
-                .onAppear { proxy.scrollTo(max(0, store.lyricIndex), anchor: .center) }
+                .animation(Self.lyric, value: store.lyricIndex)
             }
-            // 上下两头渐渐淡出
-            .mask {
-                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.22),
-                                       .init(color: .black, location: 0.78), .init(color: .clear, location: 1)],
-                               startPoint: .top, endPoint: .bottom)
+            .scrollDisabled(true)
+            .onChange(of: store.lyricIndex) { _, index in
+                withAnimation(Self.lyric) { proxy.scrollTo(max(0, index), anchor: .center) }
             }
+            .onChange(of: store.nowPlayingVisible) { _, _ in proxy.scrollTo(max(0, store.lyricIndex), anchor: .center) }
+            .onAppear { proxy.scrollTo(max(0, store.lyricIndex), anchor: .center) }
         }
-    }
-
-    /// 一句歌词。正在唱、并且有逐字时间的那一句：唱到哪个字，哪个字渐渐亮起来。
-    private func lineText(_ line: NeteaseLyricLine, current: Bool) -> Text {
-        guard current, !line.words.isEmpty else { return Text(line.text).foregroundColor(.white) }
-        // 每个字不是一下子变白，而是在它该唱的那一小段时间里从半透明慢慢亮起来
-        return line.words.reduce(Text("")) { text, word in
-            let span = max(0.3, min(word.duration, 0.9))
-            let progress = max(0, min(1, (store.time + 0.05 - word.time) / span))
-            return text + Text(word.text).foregroundColor(.white.opacity(0.42 + 0.58 * progress))
+        // 上下两头渐渐淡出
+        .mask {
+            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.22),
+                                   .init(color: .black, location: 0.78), .init(color: .clear, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
         }
     }
 
@@ -784,11 +826,59 @@ struct NeteaseScreen: View {
             .clipped()
         }
     }
+}
 
-    private func clock(_ seconds: Double) -> String {
-        let total = max(0, Int(seconds))
-        return String(format: "%d:%02d", total / 60, total % 60)
+/// 进度条和两头的时间。只有它（和正在唱的那句歌词）跟着播放时间刷新，整个页面不用跟着重画。
+/// 点进度条上哪儿就跳到哪儿；点的范围比细细一条大一些。
+struct NeteaseProgress: View {
+    @ObservedObject var store: NeteaseStore
+    @ObservedObject var clock: NeteaseClock
+
+    private var fraction: CGFloat { clock.duration > 0 ? min(1, clock.time / clock.duration) : 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.22))
+                    Capsule().fill(.white).frame(width: geo.size.width * fraction)
+                }
+                .frame(height: 7)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { location in store.seek(toFraction: location.x / max(1, geo.size.width)) }
+            }
+            .frame(height: 36)
+            HStack {
+                Text(neteaseClockText(clock.time))
+                Spacer()
+                if store.paused { Image(systemName: "pause.fill").onTapGesture { store.tapPlayPause() } }
+                Spacer()
+                Text("-" + neteaseClockText(max(0, clock.duration - clock.time)))
+            }
+            .font(.system(size: 24, weight: .medium).monospacedDigit())
+            .foregroundStyle(.white.opacity(0.6))
+        }
     }
+}
+
+/// 正在唱的那一句（有逐字时间时）：唱到哪个字，哪个字在它该唱的那一小段时间里慢慢亮起来
+struct NeteaseKaraokeLine: View {
+    let line: NeteaseLyricLine
+    @ObservedObject var clock: NeteaseClock
+
+    var body: some View {
+        line.words.reduce(Text("")) { text, word in
+            let span = max(0.3, min(word.duration, 0.9))
+            let progress = max(0, min(1, (clock.time + 0.05 - word.time) / span))
+            return text + Text(word.text).foregroundColor(.white.opacity(0.42 + 0.58 * progress))
+        }
+    }
+}
+
+func neteaseClockText(_ seconds: Double) -> String {
+    let total = max(0, Int(seconds))
+    return String(format: "%d:%02d", total / 60, total % 60)
 }
 
 /// 正在播放的标记：在放的时候是几根上下起伏的竖条（像声波），暂停时是一个暂停图标

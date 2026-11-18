@@ -5,6 +5,14 @@ import Combine
 import CoreImage
 import SwiftUI
 
+/// 播放进度：一秒变很多次，单独放一处。只有进度条、两头的时间和正在唱的那句歌词看它，
+/// 不会每次都带着整个页面（包括盖在下面看不见的首页）重画一遍。
+@MainActor
+final class NeteaseClock: ObservableObject {
+    @Published var time: Double = 0
+    @Published var duration: Double = 0
+}
+
 /// 网易云音乐的原生页面：扫码登录；首页一排排封面（每日推荐、我喜欢的音乐、推荐歌单、我的歌单、排行榜）；
 /// 搜索；歌单页（竖排的歌曲列表）；带歌词的"正在播放"。
 @MainActor
@@ -47,8 +55,6 @@ final class NeteaseStore: ObservableObject {
         var button: Int?
     }
     @Published private(set) var page: Page?
-    /// "退出登录"按过一次了，再按一次才真的退出
-    @Published private(set) var logoutArmed = false
 
     /// 顶上一排，从左到右：正在放的歌（有歌在放才有）、搜索、头像。最上面一排再按上到这里，
     /// 停在上面只是选中，按确认才进去。
@@ -61,15 +67,28 @@ final class NeteaseStore: ObservableObject {
         case like(NeteaseSong), addTo(NeteaseSong), pick(NeteasePlaylist, NeteaseSong), create(NeteaseSong)
         case subscribe(NeteasePlaylist), cycleMode, logout
         case artist(NeteaseSong), goArtist(NeteaseArtist), album(NeteaseSong)
+        case rename(NeteasePlaylist), delete(NeteasePlaylist), confirmDelete(NeteasePlaylist), cancel
+        case confirmLogout, confirmUnsubscribe(NeteasePlaylist)
     }
-    enum MenuAnchor { case card, song, nowPlaying, account }
-    struct MenuItem: Hashable { let symbol: String; let title: String; let action: MenuAction }
-    struct Menu { var anchor: MenuAnchor; var items: [MenuItem]; var index = 0 }
+    enum MenuAnchor { case card, song, nowPlaying, account, pageButton }
+    struct MenuItem: Hashable {
+        let symbol: String
+        let title: String
+        let action: MenuAction
+        /// 确认"删除""退出登录""取消收藏"的那一项：选中时高亮是红的
+        var danger: Bool {
+            switch action {
+            case .confirmDelete, .confirmLogout, .confirmUnsubscribe: true
+            default: false
+            }
+        }
+    }
+    struct Menu { var anchor: MenuAnchor; var items: [MenuItem]; var index = 0; var title: String? = nil }
     @Published private(set) var menu: Menu?
     /// 菜单是一层一层进去的（比如"收藏到歌单"里面是一列歌单）：这里记着上一层，Esc 一次只退一层
     private var menuParents: [Menu] = []
-    /// 正在给新歌单起名字（菜单里那一行变成输入框）
-    @Published private(set) var naming: NeteaseSong?
+    /// 正在输名字的那一行（新建歌单，或给歌单改名）：菜单里那一行变成输入框
+    @Published private(set) var naming: MenuAction?
     @Published var newName = ""
     /// 有输入框拿着键盘（搜索，或给新歌单起名字）
     var typing: Bool { editing || naming != nil }
@@ -88,8 +107,9 @@ final class NeteaseStore: ObservableObject {
     // 播放
     @Published private(set) var current: NeteaseSong?
     @Published private(set) var paused = false
-    @Published private(set) var time: Double = 0
-    @Published private(set) var duration: Double = 0
+    let clock = NeteaseClock()
+    var time: Double { clock.time }
+    var duration: Double { clock.duration }
     @Published private(set) var nowPlayingVisible = false
     @Published private(set) var lyrics: [NeteaseLyricLine] = []
     /// 现在唱到第几句（-1 = 还没开始）
@@ -108,16 +128,16 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var qualityVisible = false
     @Published private(set) var qualityIndex = 0
     @Published private(set) var actualLevel = ""
-    /// 这首歌最高有哪一档、这个账号最高能听哪一档（还没查到时为空）
-    @Published private(set) var songTop = ""
+    /// 这首歌、这个账号真正能到的最高一档：开始放的时候按最高档问一次服务器，它给回来的那一档就是。还没问到时为空
+    @Published private(set) var reachable = ""
+    /// 歌曲信息里写的"这个账号这首歌能听到哪一档"：问到真正的最高档之前先用它（它不知道超清母带）
     @Published private(set) var accountTop = ""
     private static let order = ["standard", "higher", "exhigh", "lossless", "hires", "jyeffect", "sky", "dolby", "jymaster"]
     private static func rank(_ level: String) -> Int { order.firstIndex(of: level) ?? -1 }
-    /// 音质栏里列出来的档位：只列这首歌真有的（还没查到就先全列）。
-    /// 超清母带不看这首歌的标注：标注写着最高 Hi-Res 的歌，实际也常常能拿到超清母带。
+    /// 音质栏里列出来的档位：只列你这首歌真能用的（会员不够、这首歌没有的都不列），选哪档就是哪档
     var offered: [Quality] {
-        let top = Self.rank(songTop)
-        return top < 0 ? Self.qualities : Self.qualities.filter { Self.rank($0.level) <= top || $0.level == "jymaster" }
+        let top = Self.rank(reachable.isEmpty ? accountTop : reachable)
+        return top < 0 ? Self.qualities : Self.qualities.filter { Self.rank($0.level) <= top }
     }
     private(set) var preferredLevel: String {
         get { UserDefaults.standard.string(forKey: "neteaseQuality") ?? "exhigh" }
@@ -149,10 +169,10 @@ final class NeteaseStore: ObservableObject {
                 guard let self, self.current != nil else { return }
                 // 界面上的时间：歌词是逐字的并且正开着播放界面时才需要这么细，其余时候半秒更新一次就够
                 let seconds = now.seconds.isFinite ? now.seconds : 0
-                let fine = self.nowPlayingVisible && self.lyrics.first?.words.isEmpty == false
-                if fine || abs(seconds - self.time) >= 0.5 || seconds < self.time { self.time = seconds }
+                // 播放界面开着时细细地更新（进度条和逐字歌词要顺），关着时半秒一次就够
+                if self.nowPlayingVisible || abs(seconds - self.clock.time) >= 0.5 || seconds < self.clock.time { self.clock.time = seconds }
                 let position = seconds
-                if let total = self.player.currentItem?.duration.seconds, total.isFinite, total > 0 { self.duration = total }
+                if let total = self.player.currentItem?.duration.seconds, total.isFinite, total > 0, total != self.clock.duration { self.clock.duration = total }
                 let line = (self.lyrics.lastIndex { $0.time <= position + 0.25 }) ?? -1
                 if line != self.lyricIndex { self.lyricIndex = line }
             }
@@ -169,7 +189,7 @@ final class NeteaseStore: ObservableObject {
     /// 焦点或画面变了就会变的一串字：按键音效靠它判断"这一下有没有真的动"
     var focusKey: String {
         "\(page?.list.id ?? 0)-\(page?.index ?? 0)-\(page?.button ?? -1)-\(row)-\(rows.indices.contains(row) ? column(of: rows[row]) : 0)-\(editing)-\(results != nil)"
-            + "-\(nowPlayingVisible)-\(current?.id ?? 0)-\(paused)-\(qualityVisible)-\(qualityIndex)-\(logoutArmed)"
+            + "-\(nowPlayingVisible)-\(current?.id ?? 0)-\(paused)-\(qualityVisible)-\(qualityIndex)"
             + "-\(String(describing: topFocus))-\(menu?.index ?? -1)-\(menu?.items.count ?? 0)-\(queueVisible)-\(queueFocus)-\(mode.rawValue)"
     }
 
@@ -211,7 +231,6 @@ final class NeteaseStore: ObservableObject {
         loginTask?.cancel()
         stopLogin()
         endEditing()
-        logoutArmed = false
         menu = nil
         topFocus = nil
         nowPlayingVisible = false
@@ -262,7 +281,6 @@ final class NeteaseStore: ObservableObject {
                 self.stopLogin()
                 self.account = account
                 if self.open {
-                    tv.showToast("已登录：\(account.name)")
                     await self.loadHome()
                 }
                 return
@@ -295,7 +313,6 @@ final class NeteaseStore: ObservableObject {
                 if let account = await NeteaseAPI.account() {
                     self.account = account
                     tv.returnToNetease()
-                    tv.showToast("已登录：\(account.name)")
                     return
                 }
             }
@@ -362,13 +379,11 @@ final class NeteaseStore: ObservableObject {
         page = nil
         results = nil
         query = ""
-        logoutArmed = false
         menu = nil
         topFocus = nil
         liked = []
         myLists = []
         // 网页那边的登录也一起清掉，不然下次打开登录页会直接又登上
-        tv?.showToast("已退出登录")
         let store = tv?.profile.websiteDataStore.httpCookieStore
         Task { @MainActor [weak self] in
             if let store {
@@ -414,6 +429,7 @@ final class NeteaseStore: ObservableObject {
         }
         loadedAt = Date()
         loading = false
+        for line in built { prefetchCovers(line.items.prefix(7).map(cover)) }
         // 先在后台把"我喜欢的音乐"和前面几个歌单的歌取好，点进去时直接就有
         Task { @MainActor in
             for list in lists.prefix(4) where songCache[list.id] == nil {
@@ -439,7 +455,6 @@ final class NeteaseStore: ObservableObject {
             }
             guard let page, page.list.id == list.id, page.list.kind == list.kind else { return }
             if list.kind == .playlist, !songs.isEmpty { songCache[list.id] = songs }
-            if songs.isEmpty, page.songs.isEmpty { tv?.showToast("没有歌") }
             guard !songs.isEmpty || page.songs.isEmpty else { return }
             // 更新时选中的那一首不跳走：按歌认回去
             let keep = page.songs.indices.contains(page.index) ? page.songs[page.index] : nil
@@ -495,16 +510,22 @@ final class NeteaseStore: ObservableObject {
         loading = true
         Task { @MainActor in
             async let songs = NeteaseAPI.searchSongs(keyword)
+            async let singers = NeteaseAPI.searchArtists(keyword)
+            async let records = NeteaseAPI.searchAlbums(keyword)
             async let lists = NeteaseAPI.searchPlaylists(keyword)
-            let (found, playlists) = await (songs, lists)
+            let (found, artists, albums, playlists) = await (songs, singers, records, lists)
             guard lastKeyword == keyword else { return }
             loading = false
-            var built: [Row] = []
-            if !found.isEmpty { built.append(Row(id: "search-songs", title: "歌曲", items: found.map(Item.song))) }
+            // 歌手、歌曲、专辑、歌单；搜的像是人名（最匹配的歌手名字和搜的词一样）时歌手排最前，否则歌曲在前
+            let songRow = found.isEmpty ? [] : [Row(id: "search-songs", title: "歌曲", items: found.map(Item.song))]
+            let artistRow = artists.isEmpty ? [] : [Row(id: "search-artists", title: "歌手", items: artists.map(Item.playlist))]
+            let personFirst = artists.first.map { $0.name.localizedCaseInsensitiveCompare(keyword) == .orderedSame
+                || $0.name.localizedCaseInsensitiveContains(keyword) && keyword.count >= 2 } ?? false
+            var built: [Row] = personFirst ? artistRow + songRow : songRow + artistRow
+            if !albums.isEmpty { built.append(Row(id: "search-albums", title: "专辑", items: albums.map(Item.playlist))) }
             if !playlists.isEmpty { built.append(Row(id: "search-lists", title: "歌单", items: playlists.map(Item.playlist))) }
             guard !built.isEmpty else { tv?.showToast("没有找到「\(keyword)」"); return }
-            columns["search-songs"] = 0
-            columns["search-lists"] = 0
+            for id in ["search-songs", "search-artists", "search-albums", "search-lists"] { columns[id] = 0 }
             withAnimation(Motion.navigate) { results = built; rowIndex = 0; topFocus = nil }
         }
     }
@@ -514,7 +535,7 @@ final class NeteaseStore: ObservableObject {
     func handle(_ command: RemoteCommand) {
         if naming != nil {
             switch command {
-            case .select: createList()
+            case .select: submitName()
             case .text(let text): newName += text
             case .deleteBackward: if !newName.isEmpty { newName.removeLast() }
             case .back:
@@ -579,7 +600,6 @@ final class NeteaseStore: ObservableObject {
         case .player: if current != nil { withAnimation(Motion.navigate) { nowPlayingVisible = true } }
         case .search: withAnimation(Motion.focus) { editing = true }
         case .account:
-            logoutArmed = false
             menuParents = []
             withAnimation(Motion.focus) {
                 menu = Menu(anchor: .account, items: [MenuItem(symbol: "rectangle.portrait.and.arrow.right", title: "退出登录", action: .logout)])
@@ -651,7 +671,13 @@ final class NeteaseStore: ObservableObject {
             setMode(.shuffle)
             current = nil
             start(page.songs.randomElement() ?? page.songs[0], in: page.songs)
-        case .subscribe: toggleSubscribed(page.list)
+        case .subscribe:
+            if subscribed(page.list) {
+                menuParents = []
+                confirm("取消收藏「\(page.list.name)」？", "取消收藏", symbol: "star.slash", .confirmUnsubscribe(page.list), anchor: .pageButton)
+            } else {
+                toggleSubscribed(page.list)
+            }
         }
     }
 
@@ -732,6 +758,7 @@ final class NeteaseStore: ObservableObject {
         let line = rows[row]
         let next = max(0, min(line.items.count - 1, column(of: line) + delta))
         withAnimation(Motion.focus) { columns[line.id] = next }
+        prefetchCovers(line.items.dropFirst(next + 1).prefix(6).map(cover))
     }
 
     func focus(row r: Int, column c: Int) {
@@ -809,9 +836,15 @@ final class NeteaseStore: ObservableObject {
         } else if case .song(let song)? = focused {
             opened = Menu(anchor: .card, items: songItems(song, withMode: false))
         } else if case .playlist(let list)? = focused {
-            guard list.creator == 0 || list.creator != account?.id else { return false }   // 自己建的歌单没什么可收藏的
-            let on = subscribed(list)
-            opened = Menu(anchor: .card, items: [MenuItem(symbol: on ? "star.fill" : "star", title: on ? "取消收藏" : "收藏歌单", action: .subscribe(list))])
+            if list.creator != 0, list.creator == account?.id {
+                // 自己建的歌单：改名、删除。"我喜欢的音乐"两样都不行
+                guard list.id != myLists.first?.id else { return false }
+                opened = Menu(anchor: .card, items: [MenuItem(symbol: "pencil", title: "重命名", action: .rename(list)),
+                                                     MenuItem(symbol: "trash", title: "删除歌单", action: .delete(list))])
+            } else {
+                let on = subscribed(list)
+                opened = Menu(anchor: .card, items: [MenuItem(symbol: on ? "star.fill" : "star", title: on ? "取消收藏" : "收藏歌单", action: .subscribe(list))])
+            }
         }
         guard let opened else { return false }
         menuParents = []
@@ -833,12 +866,12 @@ final class NeteaseStore: ObservableObject {
     private func handleMenu(_ command: RemoteCommand) {
         guard let menu else { return }
         switch command {
-        case .move(.up): withAnimation(Motion.focus) { self.menu?.index = max(0, menu.index - 1); logoutArmed = false }
-        case .move(.down): withAnimation(Motion.focus) { self.menu?.index = min(menu.items.count - 1, menu.index + 1); logoutArmed = false }
+        case .move(.up): withAnimation(Motion.focus) { self.menu?.index = max(0, menu.index - 1) }
+        case .move(.down): withAnimation(Motion.focus) { self.menu?.index = min(menu.items.count - 1, menu.index + 1) }
         case .select: if menu.items.indices.contains(menu.index) { run(menu.items[menu.index].action) }
         case .back, .move(.left):
             // 退一层：里面那层回到外面那层，最外层才是关掉
-            withAnimation(Motion.focus) { self.menu = menuParents.popLast(); logoutArmed = false }
+            withAnimation(Motion.focus) { self.menu = menuParents.popLast() }
         default: break
         }
     }
@@ -868,12 +901,34 @@ final class NeteaseStore: ObservableObject {
                 let ok = await NeteaseAPI.add(song: song.id, to: list.id)
                 tv?.showToast(ok ? "已收藏到「\(list.name)」" : "操作失败")
             }
-        case .create(let song):
+        case .create:
             newName = ""
-            withAnimation(Motion.focus) { naming = song }
-        case .subscribe(let list):
+            withAnimation(Motion.focus) { naming = action }
+        case .rename(let list):
+            newName = list.name
+            withAnimation(Motion.focus) { naming = action }
+        case .delete(let list):
+            confirm("删除「\(list.name)」？", "删除", symbol: "trash", .confirmDelete(list))
+        case .cancel:
+            withAnimation(Motion.focus) { menu = menuParents.popLast() }
+        case .confirmDelete(let list):
+            menuParents = []
             withAnimation(Motion.focus) { menu = nil }
-            toggleSubscribed(list)
+            Task { @MainActor in
+                let ok = await NeteaseAPI.deletePlaylist(list.id)
+                guard ok else { tv?.showToast("操作失败"); return }
+                myLists.removeAll { $0.id == list.id }
+                songCache[list.id] = nil
+                replaceListsRow()
+            }
+        case .subscribe(let list):
+            if subscribed(list) {
+                confirm("取消收藏「\(list.name)」？", "取消收藏", symbol: "star.slash", .confirmUnsubscribe(list))
+            } else {
+                menuParents = []
+                withAnimation(Motion.focus) { menu = nil }
+                toggleSubscribed(list)
+            }
         case .cycleMode:
             let all = PlayMode.allCases
             setMode(all[((all.firstIndex(of: mode) ?? 0) + 1) % all.count])
@@ -895,23 +950,85 @@ final class NeteaseStore: ObservableObject {
         case .goArtist(let artist): openArtist(artist)
         case .album(let song): openAlbum(of: song)
         case .logout:
-            // 退出登录要按两次，免得误触
-            if logoutArmed { logout() } else { withAnimation(Motion.focus) { logoutArmed = true } }
+            confirm("退出网易云音乐？", "退出登录", symbol: "rectangle.portrait.and.arrow.right", .confirmLogout)
+        case .confirmLogout:
+            menuParents = []
+            withAnimation(Motion.focus) { menu = nil }
+            logout()
+        case .confirmUnsubscribe(let list):
+            menuParents = []
+            withAnimation(Motion.focus) { menu = nil }
+            toggleSubscribed(list)
         }
     }
 
     /// 新歌单的名字输好了：建歌单，把那首歌放进去
-    func createList() {
+    /// 退出登录、删除、取消收藏之前先问一次：菜单换成"取消 / 确认"两项，默认停在"取消"上，误按确认不会做。
+    /// 按 Esc 或"取消"回到上一层。
+    private func confirm(_ title: String, _ verb: String, symbol: String, _ action: MenuAction, anchor: MenuAnchor? = nil) {
+        let anchor = anchor ?? menu?.anchor ?? .card
+        if let menu { menuParents.append(menu) }
+        withAnimation(Motion.focus) {
+            menu = Menu(anchor: anchor, items: [MenuItem(symbol: "xmark", title: "取消", action: .cancel),
+                                                MenuItem(symbol: symbol, title: verb, action: action)],
+                        index: 0, title: title)
+        }
+    }
+
+    /// 输入框里的名字输好了：新建歌单（并把那首歌放进去），或者给歌单改名
+    func submitName() {
         let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let song = naming, !name.isEmpty else { return }
+        guard let target = naming, !name.isEmpty else { return }
         withAnimation(Motion.focus) { endEditing() }
         Task { @MainActor in
-            guard let list = await NeteaseAPI.createPlaylist(name) else { tv?.showToast("操作失败"); return }
-            let ok = await NeteaseAPI.add(song: song.id, to: list.id)
-            tv?.showToast(ok ? "已收藏到「\(list.name)」" : "歌单建好了，但歌没放进去")
-            loadedAt = .distantPast   // 我的歌单多了一个，下次进首页时重新取
-            if let account { myLists = await NeteaseAPI.playlists(user: account.id) }
+            switch target {
+            case .create(let song):
+                guard let list = await NeteaseAPI.createPlaylist(name) else { tv?.showToast("操作失败"); return }
+                let ok = await NeteaseAPI.add(song: song.id, to: list.id)
+                tv?.showToast(ok ? "已收藏到「\(list.name)」" : "歌单建好了，但歌没放进去")
+            case .rename(let list):
+                let ok = await NeteaseAPI.rename(playlist: list.id, to: name)
+                guard ok else { tv?.showToast("操作失败"); return }
+            default:
+                return
+            }
+            await refreshMyLists()
         }
+    }
+
+    /// 我的歌单变了（新建、改名）：重新取一遍，首页那一排当场换掉
+    private func refreshMyLists() async {
+        guard let account else { return }
+        let lists = await NeteaseAPI.playlists(user: account.id)
+        guard !lists.isEmpty else { return }
+        myLists = lists
+        replaceListsRow()
+    }
+
+    /// 首页"我的歌单"那一排换成 myLists 现在的样子（自己建的在前，收藏的在后）
+    private func replaceListsRow() {
+        let row = Row(id: "lists", title: "我的歌单", items: myLists.map(Item.playlist))
+        withAnimation(Motion.navigate) {
+            if let index = home.firstIndex(where: { $0.id == "lists" }) {
+                home[index] = row
+            } else if let after = home.firstIndex(where: { $0.id == "picks" }) {
+                home.insert(row, at: after + 1)
+            } else {
+                home.append(row)
+            }
+        }
+    }
+
+    /// 点菜单外面：收起菜单（正在输名字的话也一起收）
+    func dismissMenu() {
+        endEditing()
+        menuParents = []
+        withAnimation(Motion.focus) { menu = nil }
+    }
+
+    /// 点播放界面上面的空白处：收起音质栏、播放列表
+    func dismissPanels() {
+        withAnimation(Motion.navigate) { qualityVisible = false; queueVisible = false }
     }
 
     private func toggleSubscribed(_ list: NeteasePlaylist) {
@@ -919,11 +1036,11 @@ final class NeteaseStore: ObservableObject {
         Task { @MainActor in
             let ok = await NeteaseAPI.setSubscribed(playlist: list.id, on)
             if ok {
+                // 收藏的歌单也放进"我的歌单"，当场就出现（排在自己建的后面）
                 if on { myLists.append(list) } else { myLists.removeAll { $0.id == list.id } }
-                loadedAt = .distantPast
-                objectWillChange.send()
+                replaceListsRow()
             }
-            tv?.showToast(ok ? (on ? "已收藏歌单" : "已取消收藏") : "操作失败")
+            tv?.showToast(ok ? (on ? "已收藏" : "已取消收藏") : "操作失败")
         }
     }
 
@@ -939,6 +1056,7 @@ final class NeteaseStore: ObservableObject {
     private func start(_ song: NeteaseSong, in songs: [NeteaseSong], show: Bool = true) {
         if current != song {
             queue = songs
+            upcoming = nil
             queueIndex = songs.firstIndex(of: song) ?? 0
             play(song)
         } else if !show, paused {
@@ -952,22 +1070,28 @@ final class NeteaseStore: ObservableObject {
         current = song
         paused = false
         if changed {
-            time = 0
-            duration = Double(song.duration)
+            clock.time = 0
+            clock.duration = Double(song.duration)
             player.pause()
             lyrics = []
             lyricsSong = 0
             lyricIndex = -1
-            songTop = ""
+            reachable = ""
             accountTop = ""
             Task { @MainActor in
                 let levels = await NeteaseAPI.levels(song: song.id)
                 guard current == song, let levels else { return }
-                songTop = levels.song
                 accountTop = levels.account
             }
             Task { @MainActor in
-                let lines = await NeteaseAPI.lyrics(song: song.id)
+                // 按最高档问一次：服务器给回来的就是这首歌、这个账号真正能到的最高一档
+                let top = await NeteaseAPI.address(song: song.id, level: "jymaster")
+                if current == song, let top { reachable = top.level }
+            }
+            Task { @MainActor in
+                // 下一首提前取好的歌词直接用
+                var lines: [NeteaseLyricLine]
+                if let ready = preparedLyrics.removeValue(forKey: song.id) { lines = ready } else { lines = await NeteaseAPI.lyrics(song: song.id) }
                 guard current == song else { return }
                 lyrics = lines
                 lyricsSong = song.id
@@ -976,7 +1100,13 @@ final class NeteaseStore: ObservableObject {
         }
         let level = preferredLevel
         Task { @MainActor in
-            let found = await NeteaseAPI.address(song: song.id, level: level)
+            // 下一首提前取好的地址（十分钟以内、同一档音质）直接用，切歌不用再等
+            var found: (url: URL, level: String)?
+            if resumeAt == nil, let ready = prepared.removeValue(forKey: song.id), ready.asked == level, Date().timeIntervalSince(ready.at) < 600 {
+                found = (ready.url, ready.level)
+            } else {
+                found = await NeteaseAPI.address(song: song.id, level: level)
+            }
             guard current == song else { return }
             guard let found else {
                 // 这一首放不了（版权、会员或地区）：自动跳下一首；连着三首都不行就停下来说一声
@@ -989,12 +1119,6 @@ final class NeteaseStore: ObservableObject {
                 }
                 return
             }
-            // 选的那一档这首歌（或这个账号）没有：服务器给了它能给的最高一档，说一声，免得像是没反应
-            if resumeAt != nil, found.level != level {
-                // 拿到的已经是这首歌自己的最高一档：是歌没有更高的；否则就是没拿到
-                let songMax = !songTop.isEmpty && Self.rank(found.level) >= Self.rank(songTop)
-                tv?.showToast(songMax ? "这首歌最高是「\(Self.name(of: found.level))」" : "只拿到了「\(Self.name(of: found.level))」")
-            }
             let same = found.level == actualLevel && resumeAt != nil && player.currentItem != nil
             actualLevel = found.level
             if !same {
@@ -1003,6 +1127,47 @@ final class NeteaseStore: ObservableObject {
             }
             if !paused { player.play() }
             publishNowPlaying()
+            if resumeAt == nil { prepareNext() }
+        }
+    }
+
+    // MARK: 下一首提前准备
+
+    /// 下一首的播放地址、歌词、封面，在这一首开始放以后就取好；切到下一首时不用再等网易云回话
+    private var prepared: [Int: (url: URL, level: String, asked: String, at: Date)] = [:]
+    private var preparedLyrics: [Int: [NeteaseLyricLine]] = [:]
+    /// 随机播放时，下一首提前挑好（这样才能提前准备）
+    private var upcoming: Int?
+
+    private func prepareNext() {
+        guard queue.count > 1, mode != .single else { return }
+        if mode == .shuffle, upcoming == nil {
+            var next = queueIndex
+            while next == queueIndex { next = Int.random(in: 0..<queue.count) }
+            upcoming = next
+        }
+        let song = queue[mode == .shuffle ? (upcoming ?? 0) : (queueIndex + 1) % queue.count]
+        let level = preferredLevel
+        prefetchCovers([song.cover])
+        Task { @MainActor in
+            if preparedLyrics[song.id] == nil { preparedLyrics[song.id] = await NeteaseAPI.lyrics(song: song.id) }
+            if prepared[song.id] == nil, let found = await NeteaseAPI.address(song: song.id, level: level) {
+                prepared[song.id] = (found.url, found.level, level, Date())
+            }
+        }
+    }
+
+    /// 封面先下好放进内存：滑到它、切到它时直接就有
+    func prefetchCovers(_ urls: [URL?]) {
+        for case let url? in urls where BiliImageCache.shared.image(for: url) == nil {
+            Task { @MainActor in _ = await BiliImageCache.shared.load(url) }
+        }
+    }
+
+    private func cover(of item: Item) -> URL? {
+        switch item {
+        case .song(let song): song.cover
+        case .playlist(let list): list.cover
         }
     }
 
@@ -1011,16 +1176,21 @@ final class NeteaseStore: ObservableObject {
         guard !queue.isEmpty else { return }
         if automatic, mode == .single, let current {
             player.seek(to: .zero)
-            time = 0
+            clock.time = 0
             lyricIndex = -1
             player.play()
             _ = current
             return
         }
         if mode == .shuffle, delta > 0, queue.count > 1 {
-            var next = queueIndex
-            while next == queueIndex { next = Int.random(in: 0..<queue.count) }
-            queueIndex = next
+            if let upcoming, upcoming != queueIndex, queue.indices.contains(upcoming) {
+                queueIndex = upcoming
+            } else {
+                var next = queueIndex
+                while next == queueIndex { next = Int.random(in: 0..<queue.count) }
+                queueIndex = next
+            }
+            upcoming = nil
         } else {
             queueIndex = (queueIndex + delta + queue.count) % queue.count
         }
@@ -1038,7 +1208,7 @@ final class NeteaseStore: ObservableObject {
     private func seek(by seconds: Double) {
         guard duration > 0 else { return }
         let target = max(0, min(duration - 1, time + seconds))
-        time = target
+        clock.time = target
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
         publishNowPlaying()
     }

@@ -219,7 +219,7 @@ struct BilibiliScreen: View {
                     Text(hint(for: action)).font(.tv(.callout, emphasized: focused))
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(focused ? .black : .white.opacity(0.8))
+                .foregroundStyle(focused ? (action == .confirmLogout ? .white : .black) : .white.opacity(0.8))
                 .padding(.horizontal, 22)
                 .frame(width: 300, height: 74)
                 .contentShape(Rectangle())
@@ -227,9 +227,11 @@ struct BilibiliScreen: View {
             }
         }
         .background(alignment: .top) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.white)
+            let index = min(store.accountIndex, max(0, actions.count - 1))
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(actions.indices.contains(index) && actions[index] == .confirmLogout ? Color(hex: "#E5484D") : .white)
                 .frame(height: 74)
-                .offset(y: CGFloat(min(store.accountIndex, max(0, actions.count - 1))) * 82)
+                .offset(y: CGFloat(index) * 82)
         }
         .padding(16)
         .background {
@@ -251,7 +253,8 @@ struct BilibiliScreen: View {
         switch item {
         case .login: "qrcode.viewfinder"
         case .refresh: "arrow.clockwise"
-        case .logout: "rectangle.portrait.and.arrow.right"
+        case .logout, .confirmLogout: "rectangle.portrait.and.arrow.right"
+        case .keepLogin: "xmark"
         case .empty: "star"
         case .user: "person.fill"
         case .video: "play.fill"
@@ -468,7 +471,8 @@ struct BilibiliScreen: View {
         switch item {
         case .login: "扫码登录"
         case .refresh: "刷新"
-        case .logout: "退出登录"
+        case .logout, .confirmLogout: "退出登录"
+        case .keepLogin: "取消"
         case .empty(let text): text
         case .user(let user): user.name
         case .video: ""
@@ -556,7 +560,8 @@ struct BilibiliScreen: View {
                     }
                 case .login: action("qrcode.viewfinder", "扫码登录")
                 case .refresh: action("arrow.clockwise", "刷新")
-                case .logout: action("rectangle.portrait.and.arrow.right", "退出登录")
+                case .logout, .confirmLogout: action("rectangle.portrait.and.arrow.right", "退出登录")
+                case .keepLogin: action("xmark", "取消")
                 case .user(let user):
                     ZStack {
                         Color.white.opacity(0.06)

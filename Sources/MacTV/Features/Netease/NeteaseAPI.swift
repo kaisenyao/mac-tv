@@ -47,6 +47,10 @@ struct NeteasePlaylist: Hashable, Sendable {
     /// 建这个歌单的人
     var creator = 0
     var kind = Kind.playlist
+    /// 卡片第二行：专辑是歌手名；歌手页是"多少首歌 · 多少张专辑"
+    var subtitle = ""
+    /// 歌手简介
+    var intro = ""
 }
 
 struct NeteaseAccount: Hashable, Sendable {
@@ -135,9 +139,17 @@ enum NeteaseAPI {
         if sent["MUSIC_U"] != nil { sent["os"] = "pc" } else { sent["os"] = nil }
         if !sent.isEmpty { request.setValue(sent.map { "\($0.key)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie") }
         request.httpBody = Data("params=\(params)&encSecKey=\(encryptedSecondKey)".utf8)
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else {
+            return hasLogin ? await clientCall(path, payload) : nil
+        }
         remember(response, for: url)
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        // 读取平时走网页版（快一点）；一旦被风控拦下，登录了的话就改走客户端接口再试一次
+        if let code = result?["code"] as? Int, [-460, -462, 405, 406].contains(code), hasLogin,
+           let retry = await clientCall(path, payload), (retry["code"] as? Int) == 200 {
+            return retry
+        }
+        return result
     }
 
     private static func image(_ value: Any?, size: Int = 500) -> URL? {
@@ -359,6 +371,23 @@ enum NeteaseAPI {
         return (result?["songs"] as? [[String: Any]] ?? []).compactMap(song)
     }
 
+    static func searchArtists(_ keyword: String) async -> [NeteasePlaylist] {
+        let result = (await call("cloudsearch/pc", ["s": keyword, "type": 100, "limit": 12, "offset": 0, "total": true]))?["result"] as? [String: Any]
+        return (result?["artists"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let id = item["id"] as? Int, let name = item["name"] as? String else { return nil }
+            return NeteasePlaylist(id: id, name: name, cover: image(item["picUrl"] ?? item["img1v1Url"]), count: 0, kind: .artist)
+        }
+    }
+
+    static func searchAlbums(_ keyword: String) async -> [NeteasePlaylist] {
+        let result = (await call("cloudsearch/pc", ["s": keyword, "type": 10, "limit": 20, "offset": 0, "total": true]))?["result"] as? [String: Any]
+        return (result?["albums"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let id = item["id"] as? Int, let name = item["name"] as? String else { return nil }
+            let artist = (item["artist"] as? [String: Any])?["name"] as? String ?? ""
+            return NeteasePlaylist(id: id, name: name, cover: image(item["picUrl"]), count: item["size"] as? Int ?? 0, kind: .album, subtitle: artist)
+        }
+    }
+
     static func searchPlaylists(_ keyword: String) async -> [NeteasePlaylist] {
         let result = (await call("cloudsearch/pc", ["s": keyword, "type": 1000, "limit": 20, "offset": 0, "total": true]))?["result"] as? [String: Any]
         return (result?["playlists"] as? [[String: Any]] ?? []).compactMap(playlist)
@@ -371,7 +400,11 @@ enum NeteaseAPI {
         guard let data = await call("v1/artist/\(id)", [:]), let artist = data["artist"] as? [String: Any],
               let name = artist["name"] as? String else { return nil }
         let songs = (data["hotSongs"] as? [[String: Any]] ?? []).compactMap(song)
-        return (NeteasePlaylist(id: id, name: name, cover: image(artist["picUrl"] ?? artist["img1v1Url"]), count: songs.count, kind: .artist), songs)
+        let counts = [(artist["musicSize"] as? Int).map { "\($0) 首歌" }, (artist["albumSize"] as? Int).map { "\($0) 张专辑" }]
+            .compactMap { $0 }.joined(separator: " · ")
+        let intro = (artist["briefDesc"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (NeteasePlaylist(id: id, name: name, cover: image(artist["picUrl"] ?? artist["img1v1Url"]), count: songs.count,
+                                kind: .artist, subtitle: counts, intro: intro), songs)
     }
 
     /// 专辑：名字、封面和里面的歌
@@ -410,6 +443,14 @@ enum NeteaseAPI {
 
     static func createPlaylist(_ name: String) async -> NeteasePlaylist? {
         ((await write("playlist/create", ["name": name, "privacy": 0, "type": "NORMAL"]))?["playlist"] as? [String: Any]).flatMap(playlist)
+    }
+
+    static func rename(playlist: Int, to name: String) async -> Bool {
+        done(await write("playlist/update/name", ["id": playlist, "name": name]))
+    }
+
+    static func deletePlaylist(_ id: Int) async -> Bool {
+        done(await write("playlist/remove", ["ids": "[\(id)]"]))
     }
 
     /// 收藏 / 取消收藏别人的歌单
