@@ -70,6 +70,9 @@ enum Catalog {
     /// The home screen, in order: the first six sit in the dock under the Top Shelf.
     /// Mac app tiles only appear when the app is installed.
     static let services: [Service] = [
+        // 原生页面（Features/Bilibili），不是直接打开这个网址；见 TVController.open
+        Service(id: "bilibili", name: "哔哩哔哩", kind: .web(URL(string: "https://www.bilibili.com")!),
+                icon: "bilibili.png", accent: "#FB7299", deep: "#3A0F1E"),
         Service(id: "netflix", name: "Netflix", kind: .web(URL(string: "https://www.netflix.com/browse")!),
                 icon: "netflix.png", accent: "#E50914", deep: "#2B0204"),
         Service(id: "youtube", name: "YouTube", kind: .web(URL(string: "https://www.youtube.com/tv")!),

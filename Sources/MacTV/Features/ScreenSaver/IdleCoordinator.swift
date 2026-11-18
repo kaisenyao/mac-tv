@@ -31,7 +31,7 @@ final class IdleCoordinator: ObservableObject {
 
     private func checkIdle() {
         guard let tv, tv.mode == .launcher, !tv.playbackCoordinator.isAnyPlaybackActive, !tv.displaysSleeping,
-              tv.activeSheet == nil, tv.movies == nil, !screensaver,
+              tv.activeSheet == nil, tv.movies == nil, tv.bilibiliStore.player.current == nil, !screensaver,
               Date().timeIntervalSince(lastActivity) > TimeInterval(ScreenSaverSettings.delayMinutes * 60) else { return }
         showScreensaver()
     }

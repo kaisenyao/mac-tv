@@ -79,7 +79,6 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         tv?.displayCoordinator.holdPlaybackKeepAwake(reason: "Watching \(service.name) in Mac TV")
         tv?.bringToFront()
         Task { @MainActor [weak self] in self?.tv?.window?.makeFirstResponder(web) }
-        tv?.showToast("Home on your phone remote, or ⌘⇧H, comes back here")
     }
 
     func closeWebPlayback() {
@@ -113,6 +112,10 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         config.userContentController.addUserScript(
             WKUserScript(source: AutoPlay.script(skip: tv?.autoSkip ?? true, next: tv?.autoNext ?? true),
                          injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        if service.id == BilibiliStore.loginID {
+            config.userContentController.addUserScript(
+                WKUserScript(source: BilibiliLoginPage.chinese, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         if service.dpadNavigation {
             config.userContentController.addUserScript(
                 WKUserScript(source: SpatialNav.script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -582,6 +585,8 @@ extension PlaybackCoordinator: WKUIDelegate {
     }
 
     func webViewDidClose(_ webView: WKWebView) {
+        // 自用分支：网页应用自己要求关闭（比如 YouTube 电视界面里选"退出"）时，回主屏
+        if webView === self.webView { tv?.goHome(); return }
         guard let popupWindow = popups.first(where: { $0.contentView === webView }) else { return }
         popupWindow.close()
         popups.removeAll { $0 === popupWindow }

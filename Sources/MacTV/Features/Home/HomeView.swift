@@ -321,6 +321,16 @@ struct AppTile: View {
                     .font(.system(size: 76))
                     .foregroundStyle(.white)
             }
+        } else if service.id == BilibiliStore.appID, let icon = Icons.image(for: service) {
+            // 整个方形图标完整放进卡片（小电视轮廓不裁掉），四周用图标自己的底色补满。
+            // 图标四角是白的，裁成圆角后和底色接上，看不出边界。
+            ZStack {
+                Color(hex: "#EC5D85")
+                Image(nsImage: icon).resizable().interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 126, height: 126)
+                    .clipShape(RoundedRectangle(cornerRadius: 23, style: .continuous))
+            }
         } else if let tile = Icons.tile(for: service) {
             Image(nsImage: tile).resizable().interpolation(.high)
         } else {

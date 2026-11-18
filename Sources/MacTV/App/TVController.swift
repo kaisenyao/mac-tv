@@ -63,6 +63,9 @@ final class TVController: NSObject, ObservableObject {
     @Published var playerFailure: PlayerFailure?
     /// The Movies app's screen, while it's open.
     @Published var movies: MoviesBrowser?
+    /// 哔哩哔哩的原生页面（自用分支）
+    let bilibiliStore = BilibiliStore()
+    @Published var bilibiliOpen = false
     /// Who's watching: their apps and their sign-ins.
     @Published var profile: Profile
 
@@ -295,6 +298,10 @@ final class TVController: NSObject, ObservableObject {
         case .controlCenter: handleControlCenter(command); return
         case nil: break
         }
+        if bilibiliOpen {
+            bilibiliStore.handle(command)
+            return
+        }
         if movies != nil {
             handleMovies(command)
             return
@@ -320,7 +327,7 @@ final class TVController: NSObject, ObservableObject {
     }
 
     private var feedbackState: String {
-        String(describing: (focus, sheets, movies, mode == .launcher))
+        String(describing: (focus, sheets, movies, mode == .launcher)) + (bilibiliOpen ? bilibiliStore.focusKey : "")
     }
 
     // MARK: - Command Dispatch
@@ -350,6 +357,13 @@ final class TVController: NSObject, ObservableObject {
         }
 
         switch command {
+        case .wheel(let step):
+            // 转盘 = 沿着当前这一列东西往前 / 往后：哔哩哔哩里由它自己决定（播放中是快进快退）；
+            // 其他地方，弹出的面板是竖着排的，主屏和别的页是横着排的。
+            if bilibiliOpen, mode == .launcher, sheets.top == nil { bilibiliStore.wheel(step); return }
+            let forward = step > 0
+            handle(sheets.top != nil ? .move(forward ? .down : .up) : .move(forward ? .right : .left), from: source)
+            return
         case .home: goHome(); return
         case .activateBrowser:
             if playbackCoordinator.iinaOpen {
@@ -437,7 +451,10 @@ final class TVController: NSObject, ObservableObject {
             case .back where changed: feedback.play(.back, from: source)
             default: break
             }
-        case .player(let service): playbackCoordinator.handleInPlayer(command, service: service)
+        case .player(let service):
+            if !bilibiliStore.handleInPlayer(command, service: service) {
+                playbackCoordinator.handleInPlayer(command, service: service)
+            }
         case .movie: playbackCoordinator.handleInMovie(command)
         }
     }
@@ -445,6 +462,8 @@ final class TVController: NSObject, ObservableObject {
     // MARK: - Opening & Home
 
     func open(_ service: Service) {
+        if service.id == BilibiliStore.appID { openBilibili(); return }
+        if bilibiliOpen { closeBilibili() }   // 开别的应用时，哔哩哔哩不能还在后台放着
         playbackCoordinator.closeIINAPlayback()
         playbackCoordinator.closeExternalBrowser()
         var opened = ["app": analyticsAppName(service)]
@@ -480,6 +499,7 @@ final class TVController: NSObject, ObservableObject {
         playbackCoordinator.clearCurrentLocalMovie()
         playbackCoordinator.stopMoviePlayer()
         movies = nil
+        closeBilibili()
         playbackCoordinator.closeWebPlayback()
         mode = .launcher
         sheets.closeDismissible()

@@ -890,6 +890,16 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
     if (e.detail === 0) send(button.dataset.dir || 'ok', {}, 'tap');
   }));
   let start = null, timer = null, repeated = false;
+  // 转盘（和 iPod 的点按转盘一个做法）：手指绕着圆心转，累计转过的角度，每转过一小段算一格。
+  // 顺时针 = 往后 / 往下 / 快进，逆时针相反。中间的 OK 区域不算；一旦转起来，这次就不再当成按键或滑动。
+  const WHEEL_UNIT = 0.24;      // 每格的弧度（约 14 度）
+  const WHEEL_STARTS = 0.15;    // 转过这么多才算"在转"
+  let wheel = null;
+  const angleAt = (x, y) => {
+    const r = pad.getBoundingClientRect();
+    const cx = x - (r.left + r.width / 2), cy = y - (r.top + r.height / 2);
+    return { angle: Math.atan2(cy, cx), off: Math.hypot(cx, cy), radius: r.width };
+  };
   const zoneAt = (x, y) => {
     const r = pad.getBoundingClientRect();
     const cx = x - (r.left + r.width / 2), cy = y - (r.top + r.height / 2);
@@ -908,6 +918,7 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
     pad.setPointerCapture(e.pointerId);
     start = { x: e.clientX, y: e.clientY, zone: zoneAt(e.clientX, e.clientY) };
     repeated = false;
+    wheel = { angle: angleAt(e.clientX, e.clientY).angle, sum: 0, total: 0, turning: false };
     if (start.zone && start.zone !== 'ok') {
       timer = setTimeout(() => {
         repeated = true;
@@ -916,11 +927,39 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
     }
   });
   pad.addEventListener('pointermove', e => {
+    if (start && wheel) {
+      const { angle, off, radius } = angleAt(e.clientX, e.clientY);
+      if (off >= radius * 0.19) {             // 在中间按钮上划过不算
+        let d = angle - wheel.angle;
+        if (d > Math.PI) d -= Math.PI * 2;
+        if (d < -Math.PI) d += Math.PI * 2;
+        wheel.angle = angle;
+        wheel.sum += d;
+        wheel.total += Math.abs(d);
+        // 直着划过去角度也会变一点：只有离圆心够远、并且确实绕了一段，才认作转盘
+        if (!wheel.turning && wheel.total > WHEEL_STARTS && off > radius * 0.28 &&
+            Math.hypot(e.clientX - start.x, e.clientY - start.y) < wheel.total * off * 1.6 + 30) {
+          wheel.turning = true;
+          wheel.sum = 0;
+          stop();
+        }
+        if (wheel.turning) {
+          const steps = Math.trunc(wheel.sum / WHEEL_UNIT);
+          if (steps) {
+            wheel.sum -= steps * WHEEL_UNIT;
+            for (let i = 0; i < Math.abs(steps); i++) send('wheel', { d: Math.sign(steps) }, 'tick');
+          }
+          return;
+        }
+      }
+    }
     if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 24) stop();
   });
   pad.addEventListener('pointerup', e => {
     if (!start) return;
     stop();
+    if (wheel && wheel.turning) { start = null; wheel = null; return; }   // 刚才是在转盘，不是按键也不是滑动
+    wheel = null;
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
     let zone = start.zone;
     start = null;
@@ -929,7 +968,7 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
     flash(zone);
     send(zone, {}, zone === 'ok' ? 'tap' : 'tick');
   });
-  const cancelHold = () => { stop(); start = null; };
+  const cancelHold = () => { stop(); start = null; wheel = null; };
   pad.addEventListener('pointercancel', cancelHold);
   pad.addEventListener('lostpointercapture', cancelHold);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') cancelHold(); });

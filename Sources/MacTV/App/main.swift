@@ -15,6 +15,16 @@ extension NSScreen {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Esc 按下的时刻，和这一次按住是否已经触发过"回主屏"
+    var escapeDownAt: Date?
+    var escapeHeld = false
+    /// 确认键按下的时刻（哔哩哔哩的列表里：按一下 = 确认，按住 = 这张卡片的菜单）
+    var selectDownAt: Date?
+    var selectHeld = false
+    /// 长按用计时器来认（不靠系统的"按键重复"，那个可以在系统设置里关掉或调慢）
+    var escapeTimer: Timer?
+    var selectTimer: Timer?
+    static let holdTime: TimeInterval = 0.5
     let tv = TVController()
     var window: NSWindow!
     var server: RemoteServer?
@@ -245,6 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tv.startPowerManagement()
         tv.startControllers()
         tv.topShelf.start()
+        // 自用分支：启动时就把哔哩哔哩每一页的内容取好，进去和切换时不用等
+        tv.bilibiliStore.tv = tv
+        tv.bilibiliStore.preload()
         tv.ensureSteamHeroes()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysSlept),
             name: NSWorkspace.screensDidSleepNotification, object: nil)
@@ -401,11 +414,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return nil
         }
+        NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            // 确认键松开：没按到"长按"的程度，才是一次"确认"
+            if let self, event.keyCode == 36 || event.keyCode == 76, self.selectDownAt != nil {
+                let held = self.selectHeld
+                self.selectDownAt = nil
+                self.selectTimer?.invalidate()
+                if !held { self.tv.handle(.select) }
+                return nil
+            }
+            // Esc 松开：没按到"长按"的程度，才是一次"返回"
+            guard let self, event.keyCode == 53, self.escapeDownAt != nil else { return event }
+            let held = self.escapeHeld
+            self.escapeDownAt = nil
+            self.escapeTimer?.invalidate()
+            if !held { self.tv.handle(.back) }
+            return nil
+        }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let tv = self?.tv, event.window === self?.window else { return event }
             if tv.noteActivity() { return nil }
+            // 只有 ⌘ ⌥ ⌃ ⇧ 算"按着修饰键"。大写锁定不算：它亮着的时候（很多人用它切换中英文输入），
+            // 方向键、回车、Esc 照样要起作用，否则整个键盘像被锁住一样。
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .subtracting([.numericPad, .function, .capsLock, .help])
+            // 自用分支：Esc 的规矩，在哪都一样：
+            //   按一下 = 返回（松开时才算数）；按住半秒 = 回主屏。
+            // 搜索框里输入法还有待选字时，Esc 是输入法的，不拦。
+            if event.keyCode == 53, mods.isEmpty {
+                let composing = tv.mode == .launcher && tv.bilibiliOpen && tv.bilibiliStore.editing
+                    && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
+                if composing { return event }
+                if !event.isARepeat {
+                    self?.escapeDownAt = Date()
+                    self?.escapeHeld = false
+                    self?.escapeTimer?.invalidate()
+                    self?.escapeTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.escapeDownAt != nil, !self.escapeHeld else { return }
+                            self.escapeHeld = true
+                            self.tv.handle(.home)
+                        }
+                    }
+                }
+                return nil   // 按住时系统重发的 Esc 一律忽略
+            }
+            // 哔哩哔哩里的确认键：
+            //   在列表里，按一下（松开时算数）= 确认；在视频卡片上按住半秒 = 这张卡片的菜单。
+            //   按住不放时系统重发的"确认"一律不当成新的一次——菜单弹出来以后，不管还按着多久都不会自己选中第一项。
+            //   不是视频卡片的地方没有菜单，按多久都还是一次普通的确认。
+            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.bilibiliOpen, tv.activeSheet == nil,
+               !tv.bilibiliStore.editing {
+                if event.isARepeat { return nil }
+                if tv.bilibiliStore.player.current == nil, tv.bilibiliStore.cardMenu == nil {
+                    self?.selectDownAt = Date()
+                    self?.selectHeld = false
+                    self?.selectTimer?.invalidate()
+                    self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
+                            if self.tv.bilibiliStore.openCardMenu() { self.selectHeld = true }
+                        }
+                    }
+                    return nil
+                }
+                // 播放中、或菜单已经开着：新按下的这一次立刻生效（走下面的常规处理）
+            }
+            // 哔哩哔哩的搜索框正在输入时，其余按键整个交给输入框（中文输入法要用到方向键、回车）
+            if tv.mode == .launcher, tv.bilibiliOpen, tv.bilibiliStore.editing {
+                // 输入框确实拿着键盘时才交给它。万一它没拿到（比如应用刚切回来），
+                // 就退出输入状态，按键照常起作用，而不是整个键盘都没反应。
+                if self?.window.firstResponder is NSTextView { return event }
+                tv.bilibiliStore.stopEditing()
+            }
             guard tv.mode == .launcher || tv.mode == .movie else { return event }
-            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function])
             // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.
             // So does naming a new profile.
             if tv.adder != nil || tv.profilePicker?.naming != nil || tv.movies?.shareForm != nil {

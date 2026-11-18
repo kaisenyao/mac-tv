@@ -6,6 +6,8 @@ enum RemoteCommand {
 
     case move(Direction), select, back, home
     case playPause, seek(forward: Bool)
+    /// 手机遥控器的转盘转了一格：+1 顺时针，-1 逆时针
+    case wheel(Int)
     case volume(Int), mute
     case text(String), deleteBackward
     case pointer(dx: Double, dy: Double), click, scroll(dy: Double)
@@ -24,6 +26,7 @@ enum RemoteCommand {
         case "back": self = .back
         case "home": self = .home
         case "playpause": self = .playPause
+        case "wheel": self = .wheel((json["d"] as? Int ?? 1) < 0 ? -1 : 1)
         case "rewind": self = .seek(forward: false)
         case "forward": self = .seek(forward: true)
         case "volup": self = .volume(6)

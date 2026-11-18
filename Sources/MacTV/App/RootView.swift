@@ -18,7 +18,10 @@ struct RootView: View {
             } else if tv.mode == .movie, let player = tv.moviePlayer {
                 MoviePlayerView(player: player).id(ObjectIdentifier(player))
             } else {
-                if tv.movies != nil {
+                if tv.bilibiliOpen {
+                    BilibiliRoot(store: tv.bilibiliStore)
+                        .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
+                } else if tv.movies != nil {
                     // Opaque, and the only screen drawn, so nothing shows through on the way back from a movie.
                     TVCanvas { MoviesScreen(tv: tv) }
                         .ignoresSafeArea()
@@ -45,6 +48,7 @@ struct RootView: View {
         .background(Color.black.ignoresSafeArea())
         .animation(Motion.appear, value: tv.sheets.open)
         .animation(Motion.appear, value: tv.movies != nil)
+        .animation(Motion.appear, value: tv.bilibiliOpen)
         .animation(.easeInOut(duration: 1.2), value: tv.screensaver)
     }
 }

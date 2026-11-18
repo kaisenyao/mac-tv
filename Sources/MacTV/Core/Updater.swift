@@ -60,6 +60,8 @@ final class Updater: ObservableObject {
 
     private static let latestRelease = URL(string: "https://api.github.com/repos/Arunprakaash/mac-tv/releases/latest")!
     private static let checkInterval: TimeInterval = 24 * 60 * 60
+    /// 自用分支的总开关：false = 完全不联系 GitHub 的发布页。
+    static let upstreamUpdatesEnabled = false
     private var timer: Timer?
     private var idleTimer: Timer?
     private var download: URLSessionDownloadTask?
@@ -77,6 +79,9 @@ final class Updater: ObservableObject {
     }
 
     func start() {
+        // 自用分支：不从上游自动检查 / 下载 / 安装更新，否则会把本地改动换回官方版。
+        // 需要时在这里用 git 合并上游即可。
+        if !Self.upstreamUpdatesEnabled { return }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(20))
             self.check()

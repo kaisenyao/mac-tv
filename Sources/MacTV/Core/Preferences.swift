@@ -19,7 +19,7 @@ final class Preferences: ObservableObject {
         lidOverride = defaults.bool(forKey: Key.lidOverride)
         navigationSounds = defaults.object(forKey: Key.navigationSounds) as? Bool ?? true
         navigationSoundVolume = defaults.object(forKey: Key.navigationSoundVolume) as? Float ?? 0.7
-        automaticUpdates = defaults.object(forKey: Key.automaticUpdates) as? Bool ?? true
+        automaticUpdates = defaults.object(forKey: Key.automaticUpdates) as? Bool ?? false // 自用分支：默认不自动更新
         analyticsConsent = defaults.string(forKey: Key.analyticsConsent)
         saverWallpaper = defaults.string(forKey: Key.saverWallpaper)
         saverDelay = defaults.object(forKey: Key.saverDelay) as? Int

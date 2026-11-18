@@ -44,6 +44,6 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Mac TV runs a remote control page that your phone opens over your Wi-Fi.</string>
 	<key>TelemetryDeckAppID</key>
-	<string>C6E3D1C8-27C4-4431-B37C-ADBBA51AD8AF</string>
+	<string></string>
 </dict>
 </plist>
