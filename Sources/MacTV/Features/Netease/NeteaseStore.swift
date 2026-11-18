@@ -69,7 +69,7 @@ final class NeteaseStore: ObservableObject {
         case subscribe(NeteasePlaylist), cycleMode, logout
         case artist(NeteaseSong), goArtist(NeteaseArtist), album(NeteaseSong)
         case rename(NeteasePlaylist), delete(NeteasePlaylist), confirmDelete(NeteasePlaylist), cancel
-        case confirmLogout, confirmUnsubscribe(NeteasePlaylist)
+        case confirmLogout, confirmUnsubscribe(NeteasePlaylist), showQueue
     }
     enum MenuAnchor { case card, song, nowPlaying, account, pageButton }
     struct MenuItem: Hashable {
@@ -502,15 +502,32 @@ final class NeteaseStore: ObservableObject {
         }
     }
 
+    /// 去歌手页、专辑页之前在哪（哪个歌单页、是不是在播放界面）：返回时一层层退回去，从哪里来回到哪里
+    private var pageHistory: [(page: Page?, player: Bool)] = []
+
     func openArtist(_ artist: NeteaseArtist) {
+        pageHistory.append((page, nowPlayingVisible))
         leaveOverlays()
         openPlaylist(NeteasePlaylist(id: artist.id, name: artist.name, kind: .artist))
     }
 
     func openAlbum(of song: NeteaseSong) {
         guard song.album > 0 else { return }
+        pageHistory.append((page, nowPlayingVisible))
         leaveOverlays()
         openPlaylist(NeteasePlaylist(id: song.album, name: song.albumName, cover: song.cover, kind: .album))
+    }
+
+    /// 从歌单页 / 歌手页 / 专辑页返回：回到进来之前的地方（播放界面、上一个歌单页，或者首页）
+    private func leavePage() {
+        guard let previous = pageHistory.popLast() else {
+            withAnimation(Motion.navigate) { page = nil }
+            return
+        }
+        withAnimation(Motion.navigate) {
+            page = previous.page
+            if previous.player, current != nil { nowPlayingVisible = true }
+        }
     }
 
     /// 去歌手页、专辑页之前：菜单、播放界面这些盖在上面的都收起来
@@ -665,7 +682,7 @@ final class NeteaseStore: ObservableObject {
             case .move(.up): if current != nil { withAnimation(Motion.focus) { topFocus = .player } }
             case .select: pressPageButton(button)
             case .playPause: playPauseHere()
-            case .back: withAnimation(Motion.navigate) { self.page = nil }
+            case .back: leavePage()
             default: break
             }
             return
@@ -680,7 +697,7 @@ final class NeteaseStore: ObservableObject {
             guard page.songs.indices.contains(page.index) else { return }
             start(page.songs[page.index], in: page.songs)
         case .playPause: playPauseHere()
-        case .back: withAnimation(Motion.navigate) { self.page = nil }
+        case .back: leavePage()
         default: break
         }
     }
@@ -834,13 +851,22 @@ final class NeteaseStore: ObservableObject {
         switch item {
         case .song(let song):
             start(song, in: rows[row].items.compactMap { item -> NeteaseSong? in if case .song(let s) = item { return s } else { return nil } })
-        case .playlist(let list): openPlaylist(list)
+        case .playlist(let list):
+            pageHistory.removeAll()   // 从首页进的：返回就是回首页
+            openPlaylist(list)
         }
     }
 
     // MARK: 鼠标 / 触控板点击（播放界面）
 
     func tapPlayPause() { if current != nil { togglePause() } }
+
+    /// 点进度条下面的音质：音质栏从上面滑下来（和在播放界面按上键一样）
+    func openQualityBar() {
+        guard nowPlayingVisible, current != nil, !qualityVisible else { return }
+        if queueVisible { withAnimation(Motion.navigate) { queueVisible = false } }
+        handleNowPlaying(.move(.up))
+    }
 
     func seek(toFraction fraction: Double) {
         guard duration > 0 else { return }
@@ -913,6 +939,7 @@ final class NeteaseStore: ObservableObject {
                      MenuItem(symbol: "text.badge.plus", title: "收藏到歌单", action: .addTo(song))]
         if !song.artists.isEmpty { items.append(MenuItem(symbol: "person.crop.circle", title: "查看歌手", action: .artist(song))) }
         if song.album > 0 { items.append(MenuItem(symbol: "square.stack", title: "查看专辑", action: .album(song))) }
+        if withMode, queue.count > 1 { items.append(MenuItem(symbol: "list.bullet", title: "播放列表", action: .showQueue)) }
         if withMode { items.append(MenuItem(symbol: mode.symbol, title: mode.title, action: .cycleMode)) }
         return items
     }
@@ -1029,6 +1056,12 @@ final class NeteaseStore: ObservableObject {
                 withAnimation(Motion.focus) { menu = nil }
                 toggleSubscribed(list)
             }
+        case .showQueue:
+            // 和在播放界面按下键一样：当前的播放列表从下面滑上来
+            menuParents = []
+            withAnimation(Motion.focus) { menu = nil }
+            queueFocus = queueIndex
+            withAnimation(Motion.navigate) { queueVisible = true }
         case .cycleMode:
             let all = PlayMode.allCases
             setMode(all[((all.firstIndex(of: mode) ?? 0) + 1) % all.count])
@@ -1276,7 +1309,7 @@ final class NeteaseStore: ObservableObject {
             }
             if !paused { player.play() }
             publishNowPlaying()
-            if resumeAt == nil { prepareNext() }
+            if resumeAt == nil { prepareNext() } else { realignWhenBuffered() }
         }
     }
 
@@ -1349,9 +1382,35 @@ final class NeteaseStore: ObservableObject {
 
     private func togglePause() {
         paused.toggle()
-        if paused { player.pause() } else { player.play() }
+        if paused {
+            player.pause()
+        } else {
+            // 继续之前，先在原地精确对齐一次再放（还在暂停中做，听不出来）：无损、超清母带这类边下边放的文件，
+            // 暂停后接着放时，声音和播放器报的时间可能错开，歌词就对不上了。效果和点一下歌词一样
+            jump(to: playbackTime()) { [weak self] in
+                if self?.paused == false { self?.player.play() }
+            }
+        }
         clock.time = playbackTime()
         publishNowPlaying()
+    }
+
+    /// 跳到一个还没下载到的位置时（比如切音质换了新文件），系统只能估算，声音会和报的时间错开。
+    /// 等当前这一段下载好以后，在原地精确对齐一次——和点一下歌词的效果一样，歌词就跟上了
+    private func realignWhenBuffered() {
+        let song = current
+        Task { @MainActor in
+            for _ in 0..<40 {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard current == song, !seeking, !scrubbing, let item = player.currentItem else { return }
+                let now = player.currentTime().seconds
+                let ready = item.loadedTimeRanges.contains { value in
+                    let range = value.timeRangeValue
+                    return range.start.seconds <= now && range.end.seconds >= now + 3
+                }
+                if ready { jump(to: playbackTime()); return }
+            }
+        }
     }
 
     private func seek(by seconds: Double) {

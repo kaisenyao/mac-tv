@@ -910,10 +910,13 @@ struct NeteaseProgress: View {
             HStack {
                 Text(neteaseClockText(clock.time))
                 Spacer()
-                // 中间：一直是这首歌实际在放的音质（暂停图标在封面上）
+                // 中间：一直是这首歌实际在放的音质（暂停图标在封面上）。点它打开音质栏
                 Text(NeteaseStore.name(of: store.actualLevel))
                     .contentTransition(.opacity)
                     .animation(.easeInOut(duration: 0.3), value: store.actualLevel)
+                    .contentShape(Rectangle())
+                    .hoverLift(scale: 1.06, brighten: 0.25)
+                    .onTapGesture { store.openQualityBar() }
                 Spacer()
                 Text("-" + neteaseClockText(max(0, clock.duration - clock.time)))
             }
