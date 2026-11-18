@@ -581,6 +581,10 @@ struct NeteaseScreen: View {
                         .transition(.opacity)
                 }
             }
+            // 播放列表拉上来时，上面这些退到后面：轻微模糊、变暗。卡片之间的缝里透出来的只是一片暗色，拼不出字
+            .blur(radius: store.queueVisible ? 22 : 0)
+            .opacity(store.queueVisible ? 0.4 : 1)
+            .animation(Self.slide, value: store.queueVisible)
             qualityBar
             queueRow
         }
@@ -635,7 +639,10 @@ struct NeteaseScreen: View {
             .padding(.bottom, 54)
             .frame(width: canvas.width, alignment: .leading)
             .background {
-                LinearGradient(colors: [.clear, .black.opacity(0.7), .black.opacity(0.92)], startPoint: .top, endPoint: .bottom)
+                // 只在最上沿留一段渐变，卡片背后那一大段几乎不透明
+                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.78), location: 0.16),
+                                       .init(color: .black.opacity(0.9), location: 0.32), .init(color: .black.opacity(0.94), location: 1)],
+                               startPoint: .top, endPoint: .bottom)
                     .padding(.bottom, -400)   // 往屏幕外多铺一段：滑上来回弹时底下不露缝
             }
         }
