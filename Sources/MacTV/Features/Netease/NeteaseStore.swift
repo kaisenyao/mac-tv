@@ -723,7 +723,11 @@ final class NeteaseStore: ObservableObject {
                 guard offered.indices.contains(qualityIndex) else { return }
                 let chosen = offered[qualityIndex].level
                 withAnimation(Motion.navigate) { qualityVisible = false }
-                preferredLevel = chosen
+                // 音质是全局的：选了哪档，以后每首歌都按这一档去要，歌没有就由服务器给它有的最高一档。
+                // 选的正好是这首歌能到的最高一档，就当作"要最高的"——不把已经设得更高的偏好往下拉
+                // （不然在一首只有无损的歌上点一下"无损"，以后有超清母带的歌也只放无损了）
+                let isSongTop = chosen == offered.last?.level
+                if !(isSongTop && Self.rank(preferredLevel) > Self.rank(chosen)) { preferredLevel = chosen }
                 if chosen != actualLevel, let current { play(current, resumeAt: time) }   // 换音质：从现在的位置接着放
             case .back, .move(.down), .move(.up): withAnimation(Motion.navigate) { qualityVisible = false }
             default: break
