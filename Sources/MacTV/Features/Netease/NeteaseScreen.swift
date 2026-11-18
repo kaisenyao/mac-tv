@@ -268,7 +268,7 @@ struct NeteaseScreen: View {
     }
 
     /// 播放界面左边那一栏（封面、歌名、进度）的左上角
-    private var playerLeft: CGFloat { store.lyrics.isEmpty ? (canvas.width - 600) / 2 : (canvas.width - (600 + 130 + 800)) / 2 }
+    private var playerLeft: CGFloat { store.lyricsShown ? (canvas.width - (600 + 130 + 800)) / 2 : (canvas.width - 600) / 2 }
     private var playerTop: CGFloat { (canvas.height - 820) / 2 }
     private let pageTop: CGFloat = 190
     /// 歌单页里选中的行尽量停在第 4 行的位置，上面能看到刚过去的几首
@@ -514,23 +514,21 @@ struct NeteaseScreen: View {
     private func nowPlaying(_ song: NeteaseSong) -> some View {
         ZStack {
             Color.black
-            BiliImage(url: song.cover)
+            // 背景和封面：切歌时直接换成新的（新图到手之前留着上一张），不做叠化，不会出现两张图叠在一起
+            BiliImage(url: song.cover, keepsPrevious: true)
                 .frame(width: 160, height: 90)
                 .blur(radius: 12)
                 .scaleEffect(x: canvas.width / 160 * 1.2, y: canvas.height / 90 * 1.2)
                 .opacity(0.8)
-                .id(song.id)
             Color.black.opacity(0.32)
             HStack(alignment: .center, spacing: 130) {
                 VStack(alignment: .leading, spacing: 0) {
-                    BiliImage(url: song.cover)
+                    BiliImage(url: song.cover, keepsPrevious: true)
                         .frame(width: 600, height: 600)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .shadow(color: .black.opacity(0.55), radius: 50, y: 30)
                         .scaleEffect(store.paused ? 0.9 : 1)
                         .animation(Self.slide, value: store.paused)
-                        .id(song.id)
-                        .transition(.opacity)
                     HStack(alignment: .center, spacing: 16) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(song.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(1)
@@ -568,9 +566,10 @@ struct NeteaseScreen: View {
                 }
                 .frame(width: 600, alignment: .leading)
                 // 没有歌词的歌（纯音乐等）不留歌词那一栏，封面这一栏自己居中
-                if !store.lyrics.isEmpty {
+                if store.lyricsShown {
                     lyricsColumn
                         .frame(width: 800, height: 820, alignment: .leading)
+                        .id(song.id)   // 每首歌一份全新的歌词：换歌时直接换，旧歌词不会和新歌词叠着过渡
                         .transition(.opacity)
                 }
             }
@@ -579,8 +578,6 @@ struct NeteaseScreen: View {
         }
         .frame(width: canvas.width, height: canvas.height)
         .clipped()
-        .animation(.easeInOut(duration: 0.4), value: song.id)
-        .animation(Self.slide, value: store.lyrics.isEmpty)
     }
 
     /// 当前的播放列表：按下从屏幕下方滑上来的一排封面，左右挑，确认就放那一首。和哔哩哔哩的相关视频是同一种做法。
@@ -648,7 +645,7 @@ struct NeteaseScreen: View {
                 Text("音质").font(.tv(.callout, emphasized: true)).foregroundStyle(.white.opacity(0.75))
                 // 一条竖线把"这一栏叫什么"和"能选的档位"分开
                 Capsule().fill(.white.opacity(0.35)).frame(width: 3, height: 36).padding(.horizontal, 22)
-                ForEach(Array(NeteaseStore.qualities.enumerated()), id: \.offset) { index, quality in
+                ForEach(Array(store.offered.enumerated()), id: \.offset) { index, quality in
                     let focused = index == store.qualityIndex
                     Text(quality.name)
                         .font(.tv(.callout, emphasized: focused))

@@ -65,6 +65,8 @@ final class NeteaseStore: ObservableObject {
     struct MenuItem: Hashable { let symbol: String; let title: String; let action: MenuAction }
     struct Menu { var anchor: MenuAnchor; var items: [MenuItem]; var index = 0 }
     @Published private(set) var menu: Menu?
+    /// 菜单是一层一层进去的（比如"收藏到歌单"里面是一列歌单）：这里记着上一层，Esc 一次只退一层
+    private var menuParents: [Menu] = []
     /// 正在给新歌单起名字（菜单里那一行变成输入框）
     @Published private(set) var naming: NeteaseSong?
     @Published var newName = ""
@@ -89,6 +91,9 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var lyrics: [NeteaseLyricLine] = []
     /// 现在唱到第几句（-1 = 还没开始）
     @Published private(set) var lyricIndex = -1
+    /// 播放界面要不要留歌词那一栏。切歌时歌词会先清空再载入，这个值等新歌的歌词结果回来才改，
+    /// 所以布局不会在切歌的那一下左右晃。
+    @Published private(set) var lyricsShown = true
 
     /// 音质档位。选了账号或这首歌没有的档位，服务器会给它能给的最高一档，actualLevel 是实际拿到的。
     struct Quality: Hashable { let level: String; let name: String }
@@ -98,6 +103,16 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var qualityVisible = false
     @Published private(set) var qualityIndex = 0
     @Published private(set) var actualLevel = ""
+    /// 这首歌最高有哪一档、这个账号最高能听哪一档（还没查到时为空）
+    @Published private(set) var songTop = ""
+    @Published private(set) var accountTop = ""
+    private static let order = ["standard", "higher", "exhigh", "lossless", "hires", "jyeffect", "sky", "dolby", "jymaster"]
+    private static func rank(_ level: String) -> Int { order.firstIndex(of: level) ?? -1 }
+    /// 音质栏里列出来的档位：只列这首歌真有的（还没查到就先全列）
+    var offered: [Quality] {
+        let top = Self.rank(songTop)
+        return top < 0 ? Self.qualities : Self.qualities.filter { Self.rank($0.level) <= top }
+    }
     private(set) var preferredLevel: String {
         get { UserDefaults.standard.string(forKey: "neteaseQuality") ?? "exhigh" }
         set { UserDefaults.standard.set(newValue, forKey: "neteaseQuality") }
@@ -451,7 +466,9 @@ final class NeteaseStore: ObservableObject {
             case .select: createList()
             case .text(let text): newName += text
             case .deleteBackward: if !newName.isEmpty { newName.removeLast() }
-            case .back: withAnimation(Motion.focus) { endEditing() }
+            case .back:
+                withAnimation(Motion.focus) { naming = nil }
+                tv?.window?.makeFirstResponder(nil)
             default: break
             }
             return
@@ -512,6 +529,7 @@ final class NeteaseStore: ObservableObject {
         case .search: withAnimation(Motion.focus) { editing = true }
         case .account:
             logoutArmed = false
+            menuParents = []
             withAnimation(Motion.focus) {
                 menu = Menu(anchor: .account, items: [MenuItem(symbol: "rectangle.portrait.and.arrow.right", title: "退出登录", action: .logout)])
             }
@@ -589,9 +607,10 @@ final class NeteaseStore: ObservableObject {
         if qualityVisible {
             switch command {
             case .move(.left): withAnimation(Motion.focus) { qualityIndex = max(0, qualityIndex - 1) }
-            case .move(.right): withAnimation(Motion.focus) { qualityIndex = min(Self.qualities.count - 1, qualityIndex + 1) }
+            case .move(.right): withAnimation(Motion.focus) { qualityIndex = min(offered.count - 1, qualityIndex + 1) }
             case .select:
-                let chosen = Self.qualities[qualityIndex].level
+                guard offered.indices.contains(qualityIndex) else { return }
+                let chosen = offered[qualityIndex].level
                 withAnimation(Motion.navigate) { qualityVisible = false }
                 preferredLevel = chosen
                 if chosen != actualLevel, let current { play(current, resumeAt: time) }   // 换音质：从现在的位置接着放
@@ -622,7 +641,7 @@ final class NeteaseStore: ObservableObject {
         case .move(.right): skip(1)
         case .move(.up):
             // 上：音质。停在现在用的那一档上
-            qualityIndex = Self.qualities.firstIndex { $0.level == (actualLevel.isEmpty ? preferredLevel : actualLevel) } ?? 2
+            qualityIndex = offered.firstIndex { $0.level == (actualLevel.isEmpty ? preferredLevel : actualLevel) } ?? max(0, offered.count - 1)
             withAnimation(Motion.navigate) { qualityVisible = true }
         case .move(.down):
             // 下：当前的播放列表
@@ -694,13 +713,14 @@ final class NeteaseStore: ObservableObject {
             opened = Menu(anchor: .card, items: [MenuItem(symbol: on ? "star.fill" : "star", title: on ? "取消收藏" : "收藏歌单", action: .subscribe(list))])
         }
         guard let opened else { return false }
+        menuParents = []
         withAnimation(Motion.focus) { menu = opened }
         return true
     }
 
     /// 触控板点播放界面里的"⋯"
     func tapMore() {
-        if menu != nil { withAnimation(Motion.focus) { menu = nil } } else { openCardMenu() }
+        if menu != nil { menuParents = []; withAnimation(Motion.focus) { menu = nil } } else { openCardMenu() }
     }
 
     func tapMenu(_ index: Int) {
@@ -715,7 +735,9 @@ final class NeteaseStore: ObservableObject {
         case .move(.up): withAnimation(Motion.focus) { self.menu?.index = max(0, menu.index - 1); logoutArmed = false }
         case .move(.down): withAnimation(Motion.focus) { self.menu?.index = min(menu.items.count - 1, menu.index + 1); logoutArmed = false }
         case .select: if menu.items.indices.contains(menu.index) { run(menu.items[menu.index].action) }
-        case .back, .move(.left), .move(.right): withAnimation(Motion.focus) { self.menu = nil; logoutArmed = false }
+        case .back, .move(.left):
+            // 退一层：里面那层回到外面那层，最外层才是关掉
+            withAnimation(Motion.focus) { self.menu = menuParents.popLast(); logoutArmed = false }
         default: break
         }
     }
@@ -734,6 +756,7 @@ final class NeteaseStore: ObservableObject {
             // 换成一列歌单让你挑：只有自己建的歌单能往里加歌（"我喜欢的音乐"走上面的"喜欢"）
             let mine = myLists.dropFirst().filter { $0.creator == account?.id }
             let anchor = menu?.anchor ?? .card
+            if let menu { menuParents.append(menu) }
             withAnimation(Motion.focus) {
                 menu = Menu(anchor: anchor, items: [MenuItem(symbol: "plus", title: "新建歌单", action: .create(song))]
                             + mine.prefix(7).map { MenuItem(symbol: "music.note.list", title: $0.name, action: .pick($0, song)) })
@@ -817,9 +840,19 @@ final class NeteaseStore: ObservableObject {
             player.pause()
             lyrics = []
             lyricIndex = -1
+            songTop = ""
+            accountTop = ""
+            Task { @MainActor in
+                let levels = await NeteaseAPI.levels(song: song.id)
+                guard current == song, let levels else { return }
+                songTop = levels.song
+                accountTop = levels.account
+            }
             Task { @MainActor in
                 let lines = await NeteaseAPI.lyrics(song: song.id)
-                if current == song { lyrics = lines }
+                guard current == song else { return }
+                lyrics = lines
+                if lyricsShown != !lines.isEmpty { withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) { lyricsShown = !lines.isEmpty } }
             }
         }
         let level = preferredLevel
@@ -839,7 +872,9 @@ final class NeteaseStore: ObservableObject {
             }
             // 选的那一档这首歌（或这个账号）没有：服务器给了它能给的最高一档，说一声，免得像是没反应
             if resumeAt != nil, found.level != level {
-                tv?.showToast("这首歌最高是「\(Self.name(of: found.level))」")
+                // 分清是账号的会员等级不够，还是别的原因
+                let blocked = !accountTop.isEmpty && Self.rank(level) > Self.rank(accountTop)
+                tv?.showToast(blocked ? "你的会员最高能听「\(Self.name(of: accountTop))」" : "只拿到了「\(Self.name(of: found.level))」")
             }
             let same = found.level == actualLevel && resumeAt != nil && player.currentItem != nil
             actualLevel = found.level
