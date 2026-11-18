@@ -509,7 +509,7 @@ final class TVController: NSObject, ObservableObject {
         playbackCoordinator.stopMoviePlayer()
         movies = nil
         closeBilibili()
-        closeNetease()
+        leaveNetease()
         playbackCoordinator.closeWebPlayback()
         mode = .launcher
         sheets.closeDismissible()

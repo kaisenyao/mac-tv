@@ -444,7 +444,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             //   按一下 = 返回（松开时才算数）；按住半秒 = 回主屏。
             // 搜索框里输入法还有待选字时，Esc 是输入法的，不拦。
             if event.keyCode == 53, mods.isEmpty {
-                let composing = tv.mode == .launcher && tv.bilibiliOpen && tv.bilibiliStore.editing
+                let composing = tv.mode == .launcher
+                    && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.editing))
                     && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
                 if composing { return event }
                 if !event.isARepeat {
@@ -488,6 +489,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // 就退出输入状态，按键照常起作用，而不是整个键盘都没反应。
                 if self?.window.firstResponder is NSTextView { return event }
                 tv.bilibiliStore.stopEditing()
+            }
+            // 网易云音乐的搜索框同理
+            if tv.mode == .launcher, tv.neteaseOpen, tv.neteaseStore.editing {
+                if self?.window.firstResponder is NSTextView { return event }
+                tv.neteaseStore.stopEditing()
             }
             guard tv.mode == .launcher || tv.mode == .movie else { return event }
             // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.

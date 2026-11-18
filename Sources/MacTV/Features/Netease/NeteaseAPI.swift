@@ -11,8 +11,15 @@ struct NeteaseSong: Hashable, Sendable {
 }
 
 struct NeteaseLyricLine: Hashable, Sendable {
+    /// 逐字歌词里的一个字（或一个英文单词）：从第几秒开始唱
+    struct Word: Hashable, Sendable {
+        let time: Double
+        let text: String
+    }
     let time: Double
     let text: String
+    /// 有逐字歌词的歌才有；没有就是空的，整句一起亮
+    var words: [Word] = []
 }
 
 struct NeteasePlaylist: Hashable, Sendable {
@@ -150,15 +157,11 @@ enum NeteaseAPI {
 
     /// 我的歌单；第一个是"我喜欢的音乐"
     static func playlists(user: Int) async -> [NeteasePlaylist] {
-        let list = (await call("user/playlist", ["uid": user, "limit": 60, "offset": 0, "includeVideo": false]))?["playlist"] as? [[String: Any]] ?? []
-        return list.compactMap { item in
-            guard let id = item["id"] as? Int, let name = item["name"] as? String else { return nil }
-            return NeteasePlaylist(id: id, name: name, cover: image(item["coverImgUrl"]), count: item["trackCount"] as? Int ?? 0)
-        }
+        ((await call("user/playlist", ["uid": user, "limit": 60, "offset": 0, "includeVideo": false]))?["playlist"] as? [[String: Any]] ?? []).compactMap(playlist)
     }
 
     /// 歌单里的歌（最多前 limit 首）
-    static func songs(playlist: Int, limit: Int = 200) async -> [NeteaseSong] {
+    static func songs(playlist: Int, limit: Int = 500) async -> [NeteaseSong] {
         let detail = (await call("v6/playlist/detail", ["id": playlist, "n": 100000, "s": 8]))?["playlist"] as? [String: Any]
         let tracks = (detail?["tracks"] as? [[String: Any]] ?? []).compactMap(song)
         if tracks.count >= limit { return Array(tracks.prefix(limit)) }
@@ -172,9 +175,13 @@ enum NeteaseAPI {
         return ids.compactMap { all[$0] }
     }
 
-    /// 带时间的歌词：每一句从第几秒开始唱。没有歌词（纯音乐）返回空。
+    /// 带时间的歌词。优先用逐字歌词（每个字什么时候唱都有，卡拉 OK 那种）；没有就用普通的按句歌词。
+    /// 没有歌词（纯音乐）返回空。
     static func lyrics(song: Int) async -> [NeteaseLyricLine] {
-        let text = ((await call("song/lyric", ["id": song, "lv": -1, "tv": -1]))?["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
+        let data = await call("song/lyric/v1", ["id": song, "cp": false, "tv": 0, "lv": 0, "rv": 0, "kv": 0, "yv": 0, "ytv": 0, "yrv": 0])
+        let byWord = wordLines((data?["yrc"] as? [String: Any])?["lyric"] as? String ?? "")
+        if !byWord.isEmpty { return byWord }
+        let text = (data?["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
         var lines: [NeteaseLyricLine] = []
         for raw in text.split(separator: "\n") {
             // 一行开头可以有一个或几个 [分:秒] 标记，后面是这句词
@@ -192,10 +199,62 @@ enum NeteaseAPI {
         return lines.sorted { $0.time < $1.time }
     }
 
-    /// 这首歌的播放地址（约 20 分钟内有效）。没有版权、需要会员或地区不可用时返回 nil。
-    static func address(song: Int) async -> URL? {
-        let list = (await call("song/enhance/player/url/v1", ["ids": "[\(song)]", "level": "exhigh", "encodeType": "aac"]))?["data"] as? [[String: Any]]
-        guard let text = list?.first?["url"] as? String, !text.isEmpty else { return nil }
-        return URL(string: text.replacingOccurrences(of: "http://", with: "https://"))
+    /// 逐字歌词的格式：`[句子开始毫秒,时长](字开始毫秒,时长,0)字(…)字`
+    private static func wordLines(_ text: String) -> [NeteaseLyricLine] {
+        var lines: [NeteaseLyricLine] = []
+        for raw in text.split(separator: "\n") where raw.hasPrefix("[") {
+            guard let close = raw.firstIndex(of: "]"),
+                  let start = Double(raw[raw.index(after: raw.startIndex)..<close].split(separator: ",").first ?? "") else { continue }
+            var words: [NeteaseLyricLine.Word] = []
+            var rest = raw[raw.index(after: close)...]
+            while let open = rest.firstIndex(of: "("), let shut = rest[open...].firstIndex(of: ")") {
+                let time = Double(rest[rest.index(after: open)..<shut].split(separator: ",").first ?? "") ?? start
+                let after = rest[rest.index(after: shut)...]
+                let end = after.firstIndex(of: "(") ?? after.endIndex
+                words.append(.init(time: time / 1000, text: String(after[..<end])))
+                rest = after[end...]
+            }
+            let whole = words.map(\.text).joined().trimmingCharacters(in: .whitespaces)
+            if !whole.isEmpty { lines.append(NeteaseLyricLine(time: start / 1000, text: whole, words: words)) }
+        }
+        return lines
+    }
+
+    /// 这首歌的播放地址（约 20 分钟内有效），以及实际给到的音质。
+    /// level：standard 标准、higher 较高、exhigh 极高、lossless 无损、hires Hi-Res、jymaster 超清母带；
+    /// 账号或这首歌没有那一档时，服务器会给它能给的最高一档。没有版权、需要会员或地区不可用时返回 nil。
+    static func address(song: Int, level: String) async -> (url: URL, level: String)? {
+        let lossless = ["lossless", "hires", "jymaster"].contains(level)
+        let list = (await call("song/enhance/player/url/v1", ["ids": "[\(song)]", "level": level, "encodeType": lossless ? "flac" : "aac"]))?["data"] as? [[String: Any]]
+        guard let item = list?.first, let text = item["url"] as? String, !text.isEmpty,
+              let url = URL(string: text.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
+        return (url, item["level"] as? String ?? level)
+    }
+
+    // MARK: 发现
+
+    private static func playlist(_ item: [String: Any]) -> NeteasePlaylist? {
+        guard let id = item["id"] as? Int, let name = item["name"] as? String else { return nil }
+        return NeteasePlaylist(id: id, name: name, cover: image(item["coverImgUrl"] ?? item["picUrl"]), count: item["trackCount"] as? Int ?? 0)
+    }
+
+    /// 推荐歌单（登录后是按你的口味推荐的）
+    static func recommendedPlaylists() async -> [NeteasePlaylist] {
+        ((await call("personalized/playlist", ["limit": 30, "total": true, "n": 1000]))?["result"] as? [[String: Any]] ?? []).compactMap(playlist)
+    }
+
+    /// 排行榜（飙升榜、新歌榜、热歌榜……每个榜是一个歌单）
+    static func charts() async -> [NeteasePlaylist] {
+        Array(((await call("toplist", [:]))?["list"] as? [[String: Any]] ?? []).compactMap(playlist).prefix(20))
+    }
+
+    static func searchSongs(_ keyword: String) async -> [NeteaseSong] {
+        let result = (await call("cloudsearch/pc", ["s": keyword, "type": 1, "limit": 40, "offset": 0, "total": true]))?["result"] as? [String: Any]
+        return (result?["songs"] as? [[String: Any]] ?? []).compactMap(song)
+    }
+
+    static func searchPlaylists(_ keyword: String) async -> [NeteasePlaylist] {
+        let result = (await call("cloudsearch/pc", ["s": keyword, "type": 1000, "limit": 20, "offset": 0, "total": true]))?["result"] as? [String: Any]
+        return (result?["playlists"] as? [[String: Any]] ?? []).compactMap(playlist)
     }
 }
