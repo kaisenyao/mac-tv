@@ -416,7 +416,7 @@ struct NeteaseScreen: View {
                     BiliImage(url: song.cover)
                     if store.current == song {
                         Color.black.opacity(0.45)
-                        NeteaseWave(playing: !store.paused, size: 64).foregroundStyle(.white)
+                        NeteaseWave(playing: !store.paused, active: !store.nowPlayingVisible, size: 64).foregroundStyle(.white)
                     }
                 case .playlist(let list):
                     BiliImage(url: list.cover)
@@ -566,7 +566,7 @@ struct NeteaseScreen: View {
         return HStack(spacing: 24) {
             ZStack {
                 if current {
-                    NeteaseWave(playing: !store.paused, size: 26)   // 正在放的这一首：波形跟着动，暂停时停住
+                    NeteaseWave(playing: !store.paused, active: !store.nowPlayingVisible, size: 26)   // 正在放的这一首：波形跟着动，暂停时停住
                 } else {
                     Text("\(number)").font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.5)
                 }
@@ -683,7 +683,7 @@ struct NeteaseScreen: View {
                                 BiliImage(url: song.cover)
                                 if index == store.queueIndex {
                                     Color.black.opacity(0.45)
-                                    NeteaseWave(playing: !store.paused, size: 50).foregroundStyle(.white)
+                                    NeteaseWave(playing: !store.paused, active: store.queueVisible, size: 50).foregroundStyle(.white)
                                 }
                             }
                             .frame(width: size, height: size)
@@ -783,7 +783,7 @@ struct NeteaseScreen: View {
                         Group {
                             // 只有正在唱、又有逐字时间的那一句跟着播放进度刷新；其余的句子是静的
                             if current, !line.words.isEmpty {
-                                NeteaseKaraokeLine(line: line, clock: store.clock, playing: !store.paused)
+                                NeteaseKaraokeLine(line: line, clock: store.clock, playing: !store.paused && store.nowPlayingVisible)
                             } else {
                                 Text(line.text).foregroundStyle(.white)
                             }
@@ -849,7 +849,8 @@ struct NeteaseProgress: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.22))
                     // 进度条也按帧往前走，不跟着读数一跳一跳
-                    TimelineView(.animation(minimumInterval: nil, paused: store.paused)) { context in
+                    // 播放界面关着时不推算（看不见，不用每帧算）
+                    TimelineView(.animation(minimumInterval: nil, paused: store.paused || !store.nowPlayingVisible)) { context in
                         let now = clock.estimate(at: context.date, playing: !store.paused)
                         let fraction = clock.duration > 0 ? min(1, max(0, now / clock.duration)) : 0
                         Capsule().fill(.white).frame(width: geo.size.width * fraction)
@@ -899,13 +900,22 @@ func neteaseClockText(_ seconds: Double) -> String {
     return String(format: "%d:%02d", total / 60, total % 60)
 }
 
-/// 正在播放的标记：在放的时候是几根上下起伏的竖条（像声波），暂停时是一个暂停图标
+/// 正在播放的标记：在放的时候是几根上下起伏的竖条（像声波），暂停时是一个暂停图标。
+/// active = 现在看得见：被盖住、收起来的时候竖条停住不动，不白白每秒算三十次
 struct NeteaseWave: View {
     let playing: Bool
+    var active = true
     var size: CGFloat = 24
 
     var body: some View {
-        if playing {
+        if playing, !active {
+            HStack(alignment: .center, spacing: size * 0.09) {
+                ForEach(0..<5, id: \.self) { bar in
+                    Capsule().frame(width: size * 0.11, height: size * [0.5, 0.8, 0.6, 0.9, 0.55][bar])
+                }
+            }
+            .frame(width: size, height: size)
+        } else if playing {
             TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 HStack(alignment: .center, spacing: size * 0.09) {
