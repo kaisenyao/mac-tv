@@ -70,6 +70,9 @@ final class NeteaseStore: ObservableObject {
     @Published var newName = ""
     /// 有输入框拿着键盘（搜索，或给新歌单起名字）
     var typing: Bool { editing || naming != nil }
+    /// 输入框该拿着键盘却没拿到时加一，界面看到它变了就再去要一次
+    @Published private(set) var focusRequest = 0
+    func refocus() { focusRequest += 1 }
 
     @Published private(set) var liked: Set<Int> = []
     /// 我的歌单（自己建的和收藏的），第一个是"我喜欢的音乐"
@@ -523,18 +526,19 @@ final class NeteaseStore: ObservableObject {
         activateTop(item)
     }
 
-    /// 歌单页。右边：上下选歌，确认播放（整个歌单接着往下放）。按左到左边的按钮（播放、随机播放、收藏），
-    /// 按右回到歌曲。返回回到首页。
+    /// 歌单页。右边：上下选歌，确认播放（整个歌单接着往下放）。按左到左边那一排按钮（播放、随机播放、收藏），
+    /// 在按钮上左右换，最右边再按右回到歌曲。返回回到首页。
     private func handlePage(_ command: RemoteCommand) {
         guard let page else { return }
         if let button = page.button {
             let count = pageButtons.count
             switch command {
-            case .move(.up):
-                if button > 0 { withAnimation(Motion.focus) { self.page?.button = button - 1 } }
-                else if current != nil { withAnimation(Motion.focus) { topFocus = .player } }
-            case .move(.down): if button < count - 1 { withAnimation(Motion.focus) { self.page?.button = button + 1 } }
-            case .move(.right): if !page.songs.isEmpty { withAnimation(Motion.focus) { self.page?.button = nil } }
+            // 按钮是横着一排：左右换，最右边再按右回到歌曲
+            case .move(.left): if button > 0 { withAnimation(Motion.focus) { self.page?.button = button - 1 } }
+            case .move(.right):
+                if button < count - 1 { withAnimation(Motion.focus) { self.page?.button = button + 1 } }
+                else if !page.songs.isEmpty { withAnimation(Motion.focus) { self.page?.button = nil } }
+            case .move(.up): if current != nil { withAnimation(Motion.focus) { topFocus = .player } }
             case .select: pressPageButton(button)
             case .playPause: if current != nil { togglePause() }
             case .back: withAnimation(Motion.navigate) { self.page = nil }

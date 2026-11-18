@@ -163,18 +163,33 @@ struct NeteaseScreen: View {
         .contentShape(Capsule())
         .onTapGesture { store.tapTop(.search) }
         .onChange(of: store.editing) { _, editing in typing = editing }
+        .onChange(of: store.focusRequest) { _, _ in if store.editing { typing = true } }
         .animation(Self.slide, value: store.editing)
     }
 
     // MARK: 菜单
 
     /// 长按确认、点"⋯"或点头像弹出来的小菜单：玻璃底板，白色高亮上下滑。和哔哩哔哩卡片菜单是同一种。
-    private var menuView: some View {
-        let menu = store.menu
-        let items = menu?.items ?? []
-        let open = menu != nil
-        let index = min(menu?.index ?? 0, max(0, items.count - 1))
-        let height = CGFloat(items.count) * 82 - 8 + 32
+    @ViewBuilder private var menuView: some View {
+        ZStack(alignment: .topLeading) {
+            if let menu = store.menu {
+                let height = CGFloat(menu.items.count) * 82 - 8 + 32
+                // 从哪儿弹出来，就以哪个角为准放大：播放界面的"⋯"在它右下，头像在它右上，卡片在它左上
+                let corner: UnitPoint = menu.anchor == .account ? .topTrailing : (menu.anchor == .nowPlaying ? .bottomTrailing : .topLeading)
+                menuPanel(menu)
+                    .offset(menuOrigin(height: height))
+                    .transition(.scale(scale: 0.6, anchor: corner).combined(with: .opacity))
+                    .id(menu.anchor)
+            }
+        }
+        .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+        .allowsHitTesting(store.menu != nil)
+        .animation(Self.slide, value: store.menu != nil)
+    }
+
+    private func menuPanel(_ menu: NeteaseStore.Menu) -> some View {
+        let items = menu.items
+        let index = min(menu.index, max(0, items.count - 1))
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(items.enumerated()), id: \.offset) { row, item in
                 let focused = row == index
@@ -186,7 +201,14 @@ struct NeteaseScreen: View {
                             .font(.tv(.callout))
                             .focused($namingField)
                             .onSubmit { store.createList() }
-                            .onAppear { namingField = true }
+                            .onAppear {
+                                namingField = true
+                                // 输入框刚出现的那一下有时拿不到键盘，稍等再要一次
+                                Task { @MainActor in
+                                    try? await Task.sleep(for: .milliseconds(80))
+                                    if store.naming != nil { namingField = true }
+                                }
+                            }
                             .environment(\.colorScheme, .light)
                     } else {
                         Image(systemName: item.symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36)
@@ -216,12 +238,8 @@ struct NeteaseScreen: View {
         }
         .shadow(color: .black.opacity(0.55), radius: 30, y: 14)
         .fixedSize()
-        .scaleEffect(open ? 1 : 0.86, anchor: menu?.anchor == .account ? .topTrailing : (menu?.anchor == .nowPlaying ? .bottomTrailing : .topLeading))
-        .opacity(open ? 1 : 0)
-        .allowsHitTesting(open)
-        .offset(menuOrigin(height: height))
         .onChange(of: store.naming) { _, naming in namingField = naming != nil }
-        .animation(Self.slide, value: open)
+        .onChange(of: store.focusRequest) { _, _ in if store.naming != nil { namingField = true } }
         .animation(Self.slide, value: index)
         .animation(Self.slide, value: items.count)
     }
@@ -238,7 +256,7 @@ struct NeteaseScreen: View {
             return CGSize(width: canvas.width - margin - menuWidth, height: 58 + 58 + 18)
         case .nowPlaying:
             // 歌名那一行"⋯"的上方
-            return CGSize(width: playerLeft + 600 - menuWidth, height: playerTop + 600 + 30 - height)
+            return CGSize(width: playerLeft + 600 - menuWidth + 8, height: playerTop + 600 + 36 - height)
         case .song:
             let visible = min(store.page?.index ?? 0, pageAnchor)
             return CGSize(width: margin + 560 + 90, height: min(pageTop + CGFloat(visible) * songHeight + 40, canvas.height - height - 40))
@@ -250,7 +268,7 @@ struct NeteaseScreen: View {
     }
 
     /// 播放界面左边那一栏（封面、歌名、进度）的左上角
-    private var playerLeft: CGFloat { (canvas.width - (600 + 130 + 800)) / 2 }
+    private var playerLeft: CGFloat { store.lyrics.isEmpty ? (canvas.width - 600) / 2 : (canvas.width - (600 + 130 + 800)) / 2 }
     private var playerTop: CGFloat { (canvas.height - 820) / 2 }
     private let pageTop: CGFloat = 190
     /// 歌单页里选中的行尽量停在第 4 行的位置，上面能看到刚过去的几首
@@ -395,7 +413,8 @@ struct NeteaseScreen: View {
                 Text(page.list.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(2).padding(.top, 30)
                 Text(page.loading ? "正在载入…" : "\(page.songs.count) 首")
                     .font(.tv(.body)).foregroundStyle(.white.opacity(0.6)).padding(.top, 8)
-                VStack(alignment: .leading, spacing: 14) {
+                // 一横排圆形图标；选中哪个，哪个拉长、把字显示出来
+                HStack(spacing: 14) {
                     ForEach(Array(store.pageButtons.enumerated()), id: \.offset) { index, button in
                         pageButton(button, list: page.list, focused: page.button == index && store.topFocus == nil)
                             .onTapGesture { store.pressPageButton(index) }
@@ -442,17 +461,20 @@ struct NeteaseScreen: View {
         case .shuffle: ("shuffle", "随机播放")
         case .subscribe: (on ? "star.fill" : "star", on ? "已收藏" : "收藏")
         }
-        return HStack(spacing: 14) {
-            Image(systemName: symbol).font(.system(size: 24, weight: .semibold)).frame(width: 32)
-            Text(title).font(.tv(.callout, emphasized: focused))
-            Spacer(minLength: 0)
+        return HStack(spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 24, weight: .semibold)).frame(width: 28)
+            if focused {
+                Text(title).font(.tv(.callout, emphasized: true)).fixedSize()
+                    .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .leading)))
+            }
         }
         .foregroundStyle(focused ? .black : .white.opacity(0.9))
-        .padding(.horizontal, 26)
-        .frame(width: 300, height: 68)
-        .background(focused ? Color.white : Color.white.opacity(0.12), in: Capsule())
-        .scaleEffect(focused ? 1.05 : 1, anchor: .leading)
+        .padding(.horizontal, focused ? 26 : 0)
+        .frame(minWidth: 68)
+        .frame(height: 68)
+        .background(focused ? Color.white : Color.white.opacity(0.14), in: Capsule())
         .contentShape(Capsule())
+        .animation(Self.slide, value: focused)
     }
 
     private func songRow(_ song: NeteaseSong, number: Int, focused: Bool) -> some View {
@@ -515,16 +537,12 @@ struct NeteaseScreen: View {
                             Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
                         }
                         Spacer(minLength: 0)
-                        if store.liked.contains(song.id) {
-                            Image(systemName: "heart.fill").font(.system(size: 26)).foregroundStyle(.white.opacity(0.75))
-                        }
                         // "⋯"：长按确认（或点它）展开——喜欢、收藏到歌单、播放模式
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(store.menu?.anchor == .nowPlaying ? .black : .white)
+                            .font(.system(size: 34, weight: .bold))
+                            .foregroundStyle(.white.opacity(store.menu?.anchor == .nowPlaying ? 1 : 0.7))
                             .frame(width: 58, height: 58)
-                            .background(store.menu?.anchor == .nowPlaying ? Color.white : Color.white.opacity(0.16), in: Circle())
-                            .contentShape(Circle())
+                            .contentShape(Rectangle())
                             .onTapGesture { store.tapMore() }
                     }
                     .padding(.top, 36)
@@ -540,11 +558,7 @@ struct NeteaseScreen: View {
                     HStack {
                         Text(clock(store.time))
                         Spacer()
-                        HStack(spacing: 14) {
-                            if store.paused { Image(systemName: "pause.fill") }
-                            if store.mode != .list { Image(systemName: store.mode.symbol) }
-                            if !store.actualLevel.isEmpty { Text(NeteaseStore.name(of: store.actualLevel)) }   // 实际拿到的音质
-                        }
+                        if store.paused { Image(systemName: "pause.fill") }
                         Spacer()
                         Text("-" + clock(max(0, store.duration - store.time)))
                     }
@@ -553,8 +567,12 @@ struct NeteaseScreen: View {
                     .padding(.top, 14)
                 }
                 .frame(width: 600, alignment: .leading)
-                lyricsColumn
-                    .frame(width: 800, height: 820, alignment: .leading)
+                // 没有歌词的歌（纯音乐等）不留歌词那一栏，封面这一栏自己居中
+                if !store.lyrics.isEmpty {
+                    lyricsColumn
+                        .frame(width: 800, height: 820, alignment: .leading)
+                        .transition(.opacity)
+                }
             }
             qualityBar
             queueRow
@@ -562,6 +580,7 @@ struct NeteaseScreen: View {
         .frame(width: canvas.width, height: canvas.height)
         .clipped()
         .animation(.easeInOut(duration: 0.4), value: song.id)
+        .animation(Self.slide, value: store.lyrics.isEmpty)
     }
 
     /// 当前的播放列表：按下从屏幕下方滑上来的一排封面，左右挑，确认就放那一首。和哔哩哔哩的相关视频是同一种做法。
@@ -716,14 +735,27 @@ struct NeteaseScreen: View {
     }
 }
 
-/// 正在播放的小波形：在放的时候一格一格地律动，暂停时停住
+/// 正在播放的标记：在放的时候是几根上下起伏的竖条（像声波），暂停时是一个暂停图标
 struct NeteaseWave: View {
     let playing: Bool
     var size: CGFloat = 24
 
     var body: some View {
-        Image(systemName: "waveform")
-            .font(.system(size: size, weight: .semibold))
-            .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, isActive: playing)
+        if playing {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                HStack(alignment: .center, spacing: size * 0.09) {
+                    ForEach(0..<5, id: \.self) { bar in
+                        // 每根竖条用两个不同快慢的波叠起来，各自错开一点，看着像在跟着音乐动
+                        let phase = Double(bar) * 1.3
+                        let level = 0.55 + 0.3 * sin(t * 5.2 + phase) + 0.15 * sin(t * 8.7 + phase * 2.1)
+                        Capsule().frame(width: size * 0.11, height: size * max(0.18, min(1, level)))
+                    }
+                }
+                .frame(width: size, height: size)
+            }
+        } else {
+            Image(systemName: "pause.fill").font(.system(size: size * 0.82, weight: .semibold)).frame(width: size, height: size)
+        }
     }
 }

@@ -184,7 +184,7 @@ enum NeteaseAPI {
     static func lyrics(song: Int) async -> [NeteaseLyricLine] {
         let data = await call("song/lyric/v1", ["id": song, "cp": false, "tv": 0, "lv": 0, "rv": 0, "kv": 0, "yv": 0, "ytv": 0, "yrv": 0])
         let byWord = wordLines((data?["yrc"] as? [String: Any])?["lyric"] as? String ?? "")
-        if !byWord.isEmpty { return byWord }
+        if byWord.count > 2 { return byWord }
         let text = (data?["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
         var lines: [NeteaseLyricLine] = []
         for raw in text.split(separator: "\n") {
@@ -200,7 +200,9 @@ enum NeteaseAPI {
             guard !words.isEmpty else { continue }
             for time in times { lines.append(NeteaseLyricLine(time: time, text: words)) }
         }
-        return lines.sorted { $0.time < $1.time }
+        // 没有词的歌，网易云会给一句"纯音乐，请欣赏"之类的话：那不是歌词，当作没有
+        let real = lines.filter { !$0.text.contains("纯音乐") }
+        return real.count > 2 ? real.sorted { $0.time < $1.time } : []
     }
 
     /// 逐字歌词的格式：`[句子开始毫秒,时长](字开始毫秒,时长,0)字(…)字`

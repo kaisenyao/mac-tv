@@ -512,7 +512,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 网易云音乐的搜索框同理
             if tv.mode == .launcher, tv.neteaseOpen, tv.neteaseStore.typing {
                 if self?.window.firstResponder is NSTextView { return event }
-                tv.neteaseStore.stopEditing()
+                // 输入框还没拿到键盘（刚出现的那一瞬间）：让它再要一次，这一下按键不算，也不把输入框收掉
+                tv.neteaseStore.refocus()
+                return nil
             }
             guard tv.mode == .launcher || tv.mode == .movie else { return event }
             // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.
