@@ -146,6 +146,7 @@ final class BilibiliStore: ObservableObject {
 
     private func wirePlayer() {
         player.cookie = { [weak self] in await self?.cookieHeader() ?? "" }
+        player.toast = { [weak self] text in self?.tv?.showToast(text) }
         player.keepAwake = { [weak self] on in
             if on { self?.tv?.displayCoordinator.holdPlaybackKeepAwake(reason: "在 Mac TV 里看哔哩哔哩") }
             else { self?.tv?.displayCoordinator.releasePlaybackKeepAwake() }

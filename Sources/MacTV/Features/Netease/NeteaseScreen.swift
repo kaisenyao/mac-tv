@@ -735,7 +735,7 @@ struct NeteaseScreen: View {
                     let focused = index == store.qualityIndex
                     Text(quality.name)
                         .font(.tv(.callout, emphasized: focused))
-                        .foregroundStyle(focused ? .black : .white.opacity(quality.level == store.actualLevel ? 1 : 0.7))
+                        .foregroundStyle(focused ? .black : .white.opacity(quality.level == store.preferredLevel ? 1 : 0.7))
                         .padding(.horizontal, 28)
                         .frame(height: 64)
                         .background {

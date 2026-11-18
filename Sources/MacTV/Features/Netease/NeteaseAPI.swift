@@ -269,7 +269,6 @@ enum NeteaseAPI {
             list = (await call("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
         }
         let item = list?.first
-        note("取歌 \(song) 要=\(level) 给=\(item?["level"] ?? "无") 码率=\(item?["br"] ?? "无") 格式=\(item?["type"] ?? "无") code=\(item?["code"] ?? "无") fee=\(item?["fee"] ?? "无")")
         guard let item, let text = item["url"] as? String, !text.isEmpty,
               let url = URL(string: text.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
         return (url, item["level"] as? String ?? level)
@@ -324,26 +323,6 @@ enum NeteaseAPI {
         request.httpBody = Data("params=\(sealed.map { String(format: "%02X", $0) }.joined())".utf8)
         guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    }
-
-    /// 这首歌最高有哪一档音质（song），以及这个账号最高能听到哪一档（account）
-    static func levels(song: Int) async -> (song: String, account: String)? {
-        let data = await call("v3/song/detail", ["c": "[{\"id\":\(song)}]"])
-        guard let privilege = (data?["privileges"] as? [[String: Any]])?.first else { return nil }
-        note("权限 \(song) 歌曲最高=\(privilege["maxBrLevel"] ?? "无") 账号可听=\(privilege["plLevel"] ?? "无") 可下载=\(privilege["dlLevel"] ?? "无") fee=\(privilege["fee"] ?? "无")")
-        guard let top = privilege["maxBrLevel"] as? String, let mine = privilege["plLevel"] as? String else { return nil }
-        return (top, mine)
-    }
-
-    /// 排查用的记录（~/Library/Logs/MacTV-netease.log）：只记音质档位这类信息，不记任何登录内容
-    private static func note(_ line: String) {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/MacTV-netease.log")
-        let text = "\(Date()) \(line)\n"
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile(); handle.write(Data(text.utf8)); try? handle.close()
-        } else {
-            try? Data(text.utf8).write(to: url)
-        }
     }
 
     // MARK: 发现

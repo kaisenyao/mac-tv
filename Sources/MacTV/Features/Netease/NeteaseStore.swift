@@ -138,16 +138,30 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var qualityVisible = false
     @Published private(set) var qualityIndex = 0
     @Published private(set) var actualLevel = ""
-    /// 这首歌、这个账号真正能到的最高一档：开始放的时候按最高档问一次服务器，它给回来的那一档就是。还没问到时为空
-    @Published private(set) var reachable = ""
-    /// 歌曲信息里写的"这个账号这首歌能听到哪一档"：问到真正的最高档之前先用它（它不知道超清母带）
-    @Published private(set) var accountTop = ""
+    /// 这个账号最高能听到哪一档（会员等级决定，和歌无关）。登录后问一次，之后每首歌的结果顺便更新；记在本机
+    @Published private(set) var accountMax = UserDefaults.standard.string(forKey: "neteaseAccountMax") ?? "" {
+        didSet { UserDefaults.standard.set(accountMax, forKey: "neteaseAccountMax") }
+    }
     private static let order = ["standard", "higher", "exhigh", "lossless", "hires", "jyeffect", "sky", "dolby", "jymaster"]
     private static func rank(_ level: String) -> Int { order.firstIndex(of: level) ?? -1 }
-    /// 音质栏里列出来的档位：只列你这首歌真能用的（会员不够、这首歌没有的都不列），选哪档就是哪档
+    /// 音质栏就是全局的"最高想要哪一档"设置（为了极简，不另做设置页，放在播放界面里）。
+    /// 只列账号能用的档位，和正在放的这首歌无关；每首歌按这个设置去要，歌没有就从高往低退到它有的最高一档。
     var offered: [Quality] {
-        let top = Self.rank(reachable.isEmpty ? accountTop : reachable)
+        let top = Self.rank(accountMax)
         return top < 0 ? Self.qualities : Self.qualities.filter { Self.rank($0.level) <= top }
+    }
+
+    /// 问一次账号的上限：用一首确定有"超清母带"的歌按最高档去要，服务器给回来的那一档就是这个账号能到的最高一档
+    private func probeAccountMax() async {
+        guard let found = await NeteaseAPI.address(song: Self.referenceSong, level: "jymaster") else { return }
+        noteReachable(found.level)
+    }
+    /// 一首有超清母带的歌，只用来问账号上限
+    private static let referenceSong = 2698851599
+
+    /// 某首歌实际拿到了这一档：账号至少能到这一档
+    private func noteReachable(_ level: String) {
+        if Self.rank(level) > Self.rank(accountMax) { accountMax = level }
     }
     private(set) var preferredLevel: String {
         get { UserDefaults.standard.string(forKey: "neteaseQuality") ?? "exhigh" }
@@ -385,6 +399,7 @@ final class NeteaseStore: ObservableObject {
 
     private func logout() {
         stop()
+        accountMax = ""
         NeteaseAPI.forgetLogin()
         account = nil
         home = []
@@ -441,6 +456,7 @@ final class NeteaseStore: ObservableObject {
         }
         loadedAt = Date()
         loading = false
+        if accountMax.isEmpty { Task { @MainActor in await probeAccountMax() } }
         for line in built { prefetchCovers(line.items.prefix(7).map(cover)) }
         // 先在后台把"我喜欢的音乐"和前面几个歌单的歌取好，点进去时直接就有
         Task { @MainActor in
@@ -723,12 +739,13 @@ final class NeteaseStore: ObservableObject {
                 guard offered.indices.contains(qualityIndex) else { return }
                 let chosen = offered[qualityIndex].level
                 withAnimation(Motion.navigate) { qualityVisible = false }
-                // 音质是全局的：选了哪档，以后每首歌都按这一档去要，歌没有就由服务器给它有的最高一档。
-                // 选的正好是这首歌能到的最高一档，就当作"要最高的"——不把已经设得更高的偏好往下拉
-                // （不然在一首只有无损的歌上点一下"无损"，以后有超清母带的歌也只放无损了）
-                let isSongTop = chosen == offered.last?.level
-                if !(isSongTop && Self.rank(preferredLevel) > Self.rank(chosen)) { preferredLevel = chosen }
-                if chosen != actualLevel, let current { play(current, resumeAt: time) }   // 换音质：从现在的位置接着放
+                // 音质是全局的：选了哪档，以后每首歌都按这一档去要，歌没有就由服务器给它有的最高一档
+                let changed = chosen != preferredLevel
+                preferredLevel = chosen
+                if changed {
+                    tv?.showToast("已切换至「\(Self.name(of: chosen))」")
+                    if let current { play(current, resumeAt: time) }   // 这首歌按新设置重新要一次，从现在的位置接着放
+                }
             case .back, .move(.down), .move(.up): withAnimation(Motion.navigate) { qualityVisible = false }
             default: break
             }
@@ -756,7 +773,8 @@ final class NeteaseStore: ObservableObject {
         case .move(.right): skip(1)
         case .move(.up):
             // 上：音质。停在现在用的那一档上
-            qualityIndex = offered.firstIndex { $0.level == (actualLevel.isEmpty ? preferredLevel : actualLevel) } ?? max(0, offered.count - 1)
+            // 打开时停在当前设置上（不是这首歌实际的档位）：只是看一眼再按确认，什么都不会变
+            qualityIndex = offered.firstIndex { $0.level == preferredLevel } ?? max(0, offered.count - 1)
             withAnimation(Motion.navigate) { qualityVisible = true }
         case .move(.down):
             // 下：当前的播放列表
@@ -1132,18 +1150,6 @@ final class NeteaseStore: ObservableObject {
             lyrics = []
             lyricsSong = 0
             lyricIndex = -1
-            reachable = ""
-            accountTop = ""
-            Task { @MainActor in
-                let levels = await NeteaseAPI.levels(song: song.id)
-                guard current == song, let levels else { return }
-                accountTop = levels.account
-            }
-            Task { @MainActor in
-                // 按最高档问一次：服务器给回来的就是这首歌、这个账号真正能到的最高一档
-                let top = await NeteaseAPI.address(song: song.id, level: "jymaster")
-                if current == song, let top { reachable = top.level }
-            }
             Task { @MainActor in
                 // 下一首提前取好的歌词直接用
                 var lines: [NeteaseLyricLine]
@@ -1177,6 +1183,7 @@ final class NeteaseStore: ObservableObject {
             }
             let same = found.level == actualLevel && resumeAt != nil && player.currentItem != nil
             actualLevel = found.level
+            noteReachable(found.level)
             if !same {
                 player.replaceCurrentItem(with: AVPlayerItem(url: found.url))
                 if let resumeAt, resumeAt > 1 { await player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600)) }

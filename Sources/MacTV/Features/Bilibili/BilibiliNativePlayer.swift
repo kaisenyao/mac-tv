@@ -38,6 +38,8 @@ final class BilibiliNativePlayer: ObservableObject {
     let player = AVPlayer()
     var cookie: () async -> String = { "" }
     var keepAwake: (Bool) -> Void = { _ in }
+    /// 显示一句提示（由外面接到应用的提示条上）
+    var toast: ((String) -> Void)?
     var noteActivity: () -> Void = {}
 
     private var warmed: (video: BiliVideo, item: AVPlayerItem, stream: BiliStream)?
@@ -302,6 +304,7 @@ final class BilibiliNativePlayer: ObservableObject {
             self.qualities = prepared.stream.available
             await self.player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
             if !wasPaused { self.player.play() }
+            self.toast?("已切换至「\(BiliStream.name(of: prepared.stream.qualityID))」")
             self.flashControls()
         }
     }
