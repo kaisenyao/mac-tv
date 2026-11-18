@@ -1,4 +1,5 @@
 import CommonCrypto
+import CryptoKit
 import Foundation
 
 struct NeteaseSong: Hashable, Sendable {
@@ -231,13 +232,65 @@ enum NeteaseAPI {
     /// level：standard 标准、higher 较高、exhigh 极高、lossless 无损、hires Hi-Res、jymaster 超清母带；
     /// 账号或这首歌没有那一档时，服务器会给它能给的最高一档。没有版权、需要会员或地区不可用时返回 nil。
     static func address(song: Int, level: String) async -> (url: URL, level: String)? {
-        let lossless = ["lossless", "hires", "jymaster"].contains(level)
-        let list = (await call("song/enhance/player/url/v1", ["ids": "[\(song)]", "level": level, "encodeType": lossless ? "flac" : "aac"]))?["data"] as? [[String: Any]]
+        let payload: [String: Any] = ["ids": "[\(song)]", "level": level, "encodeType": "flac"]
+        // 先走客户端那套接口（网页版最高只给到无损）；它不通再退回网页版
+        var list = (await clientCall("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
+        if list?.first?["url"] as? String == nil {
+            list = (await call("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
+        }
         let item = list?.first
         note("取歌 \(song) 要=\(level) 给=\(item?["level"] ?? "无") 码率=\(item?["br"] ?? "无") 格式=\(item?["type"] ?? "无") code=\(item?["code"] ?? "无") fee=\(item?["fee"] ?? "无")")
         guard let item, let text = item["url"] as? String, !text.isEmpty,
               let url = URL(string: text.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
         return (url, item["level"] as? String ?? level)
+    }
+
+    // MARK: 官方客户端用的那套接口（eapi）
+
+    // 网页版的取歌接口最高只给到无损；Hi-Res、超清母带只从客户端这套接口给。
+    // 用的仍是你自己的登录、你账号本来就有的权限，和官方电脑客户端发出的请求一样。
+    private static let clientKey = "e82ckenh8dichen8"
+    private static let clientAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.17.204416"
+
+    private static func aesECB(_ data: Data, key: String) -> Data? {
+        let keyBytes = Array(key.utf8), input = [UInt8](data)
+        var output = [UInt8](repeating: 0, count: input.count + kCCBlockSizeAES128)
+        var length = 0
+        let status = CCCrypt(CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding | kCCOptionECBMode),
+                             keyBytes, keyBytes.count, nil, input, input.count, &output, output.count, &length)
+        return status == kCCSuccess ? Data(output.prefix(length)) : nil
+    }
+
+    private static func escape(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? text
+    }
+
+    private static func clientCall(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
+        let jar = snapshot()
+        guard let token = jar["MUSIC_U"] else { return nil }
+        let now = Date().timeIntervalSince1970
+        let header: [String: String] = [
+            "os": "pc", "appver": "3.1.17.204416", "osver": "Microsoft-Windows-10", "versioncode": "140",
+            "buildver": "\(Int(now))", "resolution": "1920x1080", "__csrf": jar["__csrf"] ?? "", "MUSIC_U": token,
+            "requestId": "\(Int(now * 1000))_\(String(format: "%04d", Int.random(in: 0..<1000)))",
+        ]
+        var body = payload
+        body["header"] = header
+        guard let json = try? JSONSerialization.data(withJSONObject: body, options: .withoutEscapingSlashes),
+              let text = String(data: json, encoding: .utf8) else { return nil }
+        let api = "/api/" + path
+        let digest = Insecure.MD5.hash(data: Data("nobody\(api)use\(text)md5forencrypt".utf8)).map { String(format: "%02x", $0) }.joined()
+        guard let sealed = aesECB(Data("\(api)-36cd479b6b5-\(text)-36cd479b6b5-\(digest)".utf8), key: clientKey),
+              let url = URL(string: "https://interface.music.163.com/eapi/" + path) else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "POST"
+        request.setValue(clientAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(header.map { "\(escape($0.key))=\(escape($0.value))" }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        request.httpShouldHandleCookies = false
+        request.httpBody = Data("params=\(sealed.map { String(format: "%02X", $0) }.joined())".utf8)
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     /// 这首歌最高有哪一档音质（song），以及这个账号最高能听到哪一档（account）

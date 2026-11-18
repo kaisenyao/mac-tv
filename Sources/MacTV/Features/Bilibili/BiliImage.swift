@@ -7,12 +7,10 @@ import SwiftUI
 /// 2. 解码在后台做完才交给界面，不占用画动画的那条线。
 struct BiliImage: View {
     let url: URL?
-    /// 换了图片地址后，新图到手之前继续显示上一张（而不是先空一下）。播放界面的封面用它：切歌时不闪。
-    var keepsPrevious = false
     @State private var loaded: (url: URL, image: NSImage)?
 
     var body: some View {
-        let ready = url.flatMap { BiliImageCache.shared.image(for: $0) } ?? (loaded?.url == url || keepsPrevious ? loaded?.image : nil)
+        let ready = url.flatMap { BiliImageCache.shared.image(for: $0) } ?? (loaded?.url == url ? loaded?.image : nil)
         ZStack {
             if let ready {
                 Image(nsImage: ready).resizable().aspectRatio(contentMode: .fill)
@@ -21,12 +19,38 @@ struct BiliImage: View {
             }
         }
         .task(id: url) {
-            guard let url else { return }
-            if let cached = BiliImageCache.shared.image(for: url) {
-                if keepsPrevious { loaded = (url, cached) }   // 记住这一张，下次换图时它就是"上一张"
-                return
-            }
+            guard let url, BiliImageCache.shared.image(for: url) == nil else { return }
             if let image = await BiliImageCache.shared.load(url), !Task.isCancelled { loaded = (url, image) }
+        }
+    }
+}
+
+/// 会换图的地方用它（播放界面的封面和背景）：新图到手之前，上一张原样留着；
+/// 到手后新图在上面慢慢浮现，上一张一直垫在下面——不会先空一下，也不会两张半透明地叠在一起。
+struct FadingImage: View {
+    let url: URL?
+    @State private var back: NSImage?
+    @State private var front: NSImage?
+    @State private var frontURL: URL?
+    @State private var shown = 1.0
+
+    var body: some View {
+        ZStack {
+            Color.white.opacity(0.05)
+            if let back { Image(nsImage: back).resizable().aspectRatio(contentMode: .fill) }
+            if let front { Image(nsImage: front).resizable().aspectRatio(contentMode: .fill).opacity(shown) }
+        }
+        .task(id: url) {
+            guard let url, url != frontURL else { return }
+            var image = BiliImageCache.shared.image(for: url)
+            if image == nil { image = await BiliImageCache.shared.load(url) }
+            guard let image, !Task.isCancelled else { return }
+            back = front
+            front = image
+            frontURL = url
+            shown = 0
+            try? await Task.sleep(for: .milliseconds(16))   // 先让新图以透明的样子出现一帧，再开始浮现
+            withAnimation(.easeInOut(duration: 0.45)) { shown = 1 }
         }
     }
 }

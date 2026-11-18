@@ -94,6 +94,8 @@ final class NeteaseStore: ObservableObject {
     /// 播放界面要不要留歌词那一栏。切歌时歌词会先清空再载入，这个值等新歌的歌词结果回来才改，
     /// 所以布局不会在切歌的那一下左右晃。
     @Published private(set) var lyricsShown = true
+    /// 现在这份歌词属于哪首歌（还没载入时为 0）：切歌时旧歌词先淡出，新歌词到了再淡入
+    @Published private(set) var lyricsSong = 0
 
     /// 音质档位。选了账号或这首歌没有的档位，服务器会给它能给的最高一档，actualLevel 是实际拿到的。
     struct Quality: Hashable { let level: String; let name: String }
@@ -108,10 +110,11 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var accountTop = ""
     private static let order = ["standard", "higher", "exhigh", "lossless", "hires", "jyeffect", "sky", "dolby", "jymaster"]
     private static func rank(_ level: String) -> Int { order.firstIndex(of: level) ?? -1 }
-    /// 音质栏里列出来的档位：只列这首歌真有的（还没查到就先全列）
+    /// 音质栏里列出来的档位：只列这首歌真有的（还没查到就先全列）。
+    /// 超清母带不看这首歌的标注：标注写着最高 Hi-Res 的歌，实际也常常能拿到超清母带。
     var offered: [Quality] {
         let top = Self.rank(songTop)
-        return top < 0 ? Self.qualities : Self.qualities.filter { Self.rank($0.level) <= top }
+        return top < 0 ? Self.qualities : Self.qualities.filter { Self.rank($0.level) <= top || $0.level == "jymaster" }
     }
     private(set) var preferredLevel: String {
         get { UserDefaults.standard.string(forKey: "neteaseQuality") ?? "exhigh" }
@@ -839,6 +842,7 @@ final class NeteaseStore: ObservableObject {
             duration = Double(song.duration)
             player.pause()
             lyrics = []
+            lyricsSong = 0
             lyricIndex = -1
             songTop = ""
             accountTop = ""
@@ -852,6 +856,7 @@ final class NeteaseStore: ObservableObject {
                 let lines = await NeteaseAPI.lyrics(song: song.id)
                 guard current == song else { return }
                 lyrics = lines
+                lyricsSong = song.id
                 if lyricsShown != !lines.isEmpty { withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) { lyricsShown = !lines.isEmpty } }
             }
         }

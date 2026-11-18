@@ -29,6 +29,9 @@ struct NeteaseScreen: View {
     private let rowsTop: CGFloat = 430
     private let songHeight: CGFloat = 92
     private static let slide = Animation.spring(response: 0.42, dampingFraction: 0.84)
+    /// 换内容（切歌时的歌名、歌词）：旧的很快淡出，新的稍后淡入，两者不重叠
+    private static let swap = AnyTransition.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.4).delay(0.12)),
+                                                       removal: .opacity.animation(.easeIn(duration: 0.12)))
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -515,7 +518,7 @@ struct NeteaseScreen: View {
         ZStack {
             Color.black
             // 背景和封面：切歌时直接换成新的（新图到手之前留着上一张），不做叠化，不会出现两张图叠在一起
-            BiliImage(url: song.cover, keepsPrevious: true)
+            FadingImage(url: song.cover)
                 .frame(width: 160, height: 90)
                 .blur(radius: 12)
                 .scaleEffect(x: canvas.width / 160 * 1.2, y: canvas.height / 90 * 1.2)
@@ -523,17 +526,23 @@ struct NeteaseScreen: View {
             Color.black.opacity(0.32)
             HStack(alignment: .center, spacing: 130) {
                 VStack(alignment: .leading, spacing: 0) {
-                    BiliImage(url: song.cover, keepsPrevious: true)
+                    FadingImage(url: song.cover)
                         .frame(width: 600, height: 600)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .shadow(color: .black.opacity(0.55), radius: 50, y: 30)
                         .scaleEffect(store.paused ? 0.9 : 1)
                         .animation(Self.slide, value: store.paused)
                     HStack(alignment: .center, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(song.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(1)
-                            Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                        // 切歌：旧歌名先淡出，新歌名随后淡入（不同时出现，不会重影）
+                        ZStack(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(song.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(1)
+                                Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                            }
+                            .id(song.id)
+                            .transition(Self.swap)
                         }
+                        .animation(.easeInOut(duration: 0.3), value: song.id)
                         Spacer(minLength: 0)
                         // "⋯"：长按确认（或点它）展开——喜欢、收藏到歌单、播放模式
                         Image(systemName: "ellipsis")
@@ -569,7 +578,6 @@ struct NeteaseScreen: View {
                 if store.lyricsShown {
                     lyricsColumn
                         .frame(width: 800, height: 820, alignment: .leading)
-                        .id(song.id)   // 每首歌一份全新的歌词：换歌时直接换，旧歌词不会和新歌词叠着过渡
                         .transition(.opacity)
                 }
             }
@@ -674,7 +682,17 @@ struct NeteaseScreen: View {
 
     /// 歌词：正在唱的那句又大又亮、停在中间，前后的句子越远越淡。
     /// 有逐字歌词的歌，这一句里唱到哪个字亮到哪个字（卡拉 OK 那样）。
-    @ViewBuilder private var lyricsColumn: some View {
+    /// 歌词那一栏。切歌时旧歌词先淡出，新歌词载入后再淡入，两份不会同时出现
+    private var lyricsColumn: some View {
+        ZStack(alignment: .topLeading) {
+            if !store.lyrics.isEmpty {
+                lyricsContent.id(store.lyricsSong).transition(Self.swap)
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: store.lyricsSong)
+    }
+
+    @ViewBuilder private var lyricsContent: some View {
         if store.lyrics.isEmpty {
             Color.clear
         } else {
