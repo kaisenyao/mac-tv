@@ -11,6 +11,16 @@ import SwiftUI
 final class NeteaseClock: ObservableObject {
     @Published var time: Double = 0
     @Published var duration: Double = 0
+    /// 最近一次从播放器读到的时间，和读到它的那一刻。逐字歌词、进度条按屏幕刷新率在两次读数之间自己往前推，
+    /// 每一帧都在动，而不是等下一次读数才跳一下
+    private(set) var mark = (time: 0.0, at: Date.distantPast)
+
+    func note(_ seconds: Double) { mark = (seconds, Date()) }
+
+    func estimate(at date: Date, playing: Bool) -> Double {
+        guard playing else { return mark.time }
+        return mark.time + max(0, min(0.5, date.timeIntervalSince(mark.at)))   // 播放器卡住时最多往前推半秒，不会越推越远
+    }
 }
 
 /// 网易云音乐的原生页面：扫码登录；首页一排排封面（每日推荐、我喜欢的音乐、推荐歌单、我的歌单、排行榜）；
@@ -169,8 +179,10 @@ final class NeteaseStore: ObservableObject {
                 guard let self, self.current != nil else { return }
                 // 界面上的时间：歌词是逐字的并且正开着播放界面时才需要这么细，其余时候半秒更新一次就够
                 let seconds = now.seconds.isFinite ? now.seconds : 0
-                // 播放界面开着时细细地更新（进度条和逐字歌词要顺），关着时半秒一次就够
-                if self.nowPlayingVisible || abs(seconds - self.clock.time) >= 0.5 || seconds < self.clock.time { self.clock.time = seconds }
+                // 每次都记下读数（逐字歌词、进度条拿它按帧往前推）；显示的秒数播放界面开着时四分之一秒更新一次，关着时半秒
+                self.clock.note(seconds)
+                let step = self.nowPlayingVisible ? 0.25 : 0.5
+                if abs(seconds - self.clock.time) >= step || seconds < self.clock.time { self.clock.time = seconds }
                 let position = seconds
                 if let total = self.player.currentItem?.duration.seconds, total.isFinite, total > 0, total != self.clock.duration { self.clock.duration = total }
                 let line = (self.lyrics.lastIndex { $0.time <= position + 0.25 }) ?? -1
@@ -891,10 +903,13 @@ final class NeteaseStore: ObservableObject {
         switch action {
         case .like(let song):
             let on = !liked.contains(song.id)
+            menuParents = []
             withAnimation(Motion.focus) { menu = nil }
+            // 先在界面上改好（"我喜欢的音乐"里当场加上或拿掉），不等服务器；服务器说失败再改回来
+            setLiked(song, on)
             Task { @MainActor in
                 let ok = await NeteaseAPI.setLiked(song: song.id, on)
-                if ok { if on { liked.insert(song.id) } else { liked.remove(song.id) } }
+                if !ok { setLiked(song, !on) }
                 tv?.showToast(ok ? (on ? "已喜欢" : "已取消喜欢") : "操作失败")
             }
         case .addTo(let song):
@@ -974,6 +989,31 @@ final class NeteaseStore: ObservableObject {
     }
 
     /// 新歌单的名字输好了：建歌单，把那首歌放进去
+    /// 喜欢 / 取消喜欢在界面上的样子：心形、"我喜欢的音乐"里的歌（缓存和开着的歌单页）、首页上它的歌数
+    private func setLiked(_ song: NeteaseSong, _ on: Bool) {
+        if on { liked.insert(song.id) } else { liked.remove(song.id) }
+        guard let favorites = myLists.first else { return }
+        if var songs = songCache[favorites.id] {
+            songs.removeAll { $0 == song }
+            if on { songs.insert(song, at: 0) }
+            songCache[favorites.id] = songs
+        }
+        if let index = myLists.firstIndex(where: { $0.id == favorites.id }) {
+            myLists[index].count = max(0, myLists[index].count + (on ? 1 : -1))
+            replaceListsRow()
+        }
+        guard var page, page.list.id == favorites.id, page.list.kind == .playlist else { return }
+        if let removed = page.songs.firstIndex(of: song) {
+            page.songs.remove(at: removed)
+            // 拿掉的在选中那一行上面：选中的往上挪一格，还停在原来那首歌上；拿掉的就是选中的：停在它下面那首
+            if removed < page.index { page.index -= 1 }
+        }
+        if on { page.songs.insert(song, at: 0); page.index += page.songs.count > 1 ? 1 : 0 }
+        page.index = max(0, min(page.index, page.songs.count - 1))
+        page.list.count = page.songs.count
+        withAnimation(Motion.focus) { self.page = page }
+    }
+
     /// 退出登录、删除、取消收藏之前先问一次：菜单换成"取消 / 确认"两项，默认停在"取消"上，误按确认不会做。
     /// 按 Esc 或"取消"回到上一层。
     private func confirm(_ title: String, _ verb: String, symbol: String, _ action: MenuAction, anchor: MenuAnchor? = nil) {
@@ -1082,6 +1122,7 @@ final class NeteaseStore: ObservableObject {
         paused = false
         if changed {
             clock.time = 0
+            clock.note(0)
             clock.duration = Double(song.duration)
             player.pause()
             lyrics = []
@@ -1188,6 +1229,7 @@ final class NeteaseStore: ObservableObject {
         if automatic, mode == .single, let current {
             player.seek(to: .zero)
             clock.time = 0
+            clock.note(0)
             lyricIndex = -1
             player.play()
             _ = current
@@ -1220,6 +1262,7 @@ final class NeteaseStore: ObservableObject {
         guard duration > 0 else { return }
         let target = max(0, min(duration - 1, time + seconds))
         clock.time = target
+        clock.note(target)
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
         publishNowPlaying()
     }

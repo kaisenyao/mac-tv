@@ -783,7 +783,7 @@ struct NeteaseScreen: View {
                         Group {
                             // 只有正在唱、又有逐字时间的那一句跟着播放进度刷新；其余的句子是静的
                             if current, !line.words.isEmpty {
-                                NeteaseKaraokeLine(line: line, clock: store.clock)
+                                NeteaseKaraokeLine(line: line, clock: store.clock, playing: !store.paused)
                             } else {
                                 Text(line.text).foregroundStyle(.white)
                             }
@@ -843,14 +843,17 @@ struct NeteaseProgress: View {
     @ObservedObject var store: NeteaseStore
     @ObservedObject var clock: NeteaseClock
 
-    private var fraction: CGFloat { clock.duration > 0 ? min(1, clock.time / clock.duration) : 0 }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.22))
-                    Capsule().fill(.white).frame(width: geo.size.width * fraction)
+                    // 进度条也按帧往前走，不跟着读数一跳一跳
+                    TimelineView(.animation(minimumInterval: nil, paused: store.paused)) { context in
+                        let now = clock.estimate(at: context.date, playing: !store.paused)
+                        let fraction = clock.duration > 0 ? min(1, max(0, now / clock.duration)) : 0
+                        Capsule().fill(.white).frame(width: geo.size.width * fraction)
+                    }
                 }
                 .frame(height: 7)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -871,16 +874,22 @@ struct NeteaseProgress: View {
     }
 }
 
-/// 正在唱的那一句（有逐字时间时）：唱到哪个字，哪个字在它该唱的那一小段时间里慢慢亮起来
+/// 正在唱的那一句（有逐字时间时）：唱到哪个字，哪个字在它该唱的那一小段时间里慢慢亮起来。
+/// 按屏幕刷新率逐帧算（暂停时停住），亮起来的过程两头缓、中间快，看着是"晕开"而不是"跳亮"。
 struct NeteaseKaraokeLine: View {
     let line: NeteaseLyricLine
-    @ObservedObject var clock: NeteaseClock
+    let clock: NeteaseClock
+    let playing: Bool
 
     var body: some View {
-        line.words.reduce(Text("")) { text, word in
-            let span = max(0.3, min(word.duration, 0.9))
-            let progress = max(0, min(1, (clock.time + 0.05 - word.time) / span))
-            return text + Text(word.text).foregroundColor(.white.opacity(0.42 + 0.58 * progress))
+        TimelineView(.animation(minimumInterval: nil, paused: !playing)) { context in
+            let now = clock.estimate(at: context.date, playing: playing)
+            line.words.reduce(Text("")) { text, word in
+                let span = max(0.3, min(word.duration, 0.9))
+                let linear = max(0, min(1, (now + 0.05 - word.time) / span))
+                let eased = linear * linear * (3 - 2 * linear)
+                return text + Text(word.text).foregroundColor(.white.opacity(0.42 + 0.58 * eased))
+            }
         }
     }
 }
