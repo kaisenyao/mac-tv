@@ -18,7 +18,6 @@ struct NeteaseScreen: View {
     private let cardGap: CGFloat = 40
     private let rowHeight: CGFloat = 500
     private let rowsTop: CGFloat = 430
-    private let red = Color(hex: "#E60026")
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -29,7 +28,6 @@ struct NeteaseScreen: View {
                     .clipped()
                     .offset(y: rowsTop)
                 details
-                if store.loading, store.rows.isEmpty { ProgressView().controlSize(.large).frame(width: canvas.width, height: canvas.height) }
             } else if store.checked {
                 login
             }
@@ -73,7 +71,7 @@ struct NeteaseScreen: View {
     private var topBar: some View {
         HStack {
             if let mark = NeteaseStore.wordmark {
-                Image(nsImage: mark).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(height: 64)
+                Image(nsImage: mark).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(height: 46)
             } else {
               HStack(spacing: 18) {
                 if let icon = NeteaseStore.appIcon {
@@ -112,7 +110,7 @@ struct NeteaseScreen: View {
             }
             .frame(width: 420, height: 420)
             .background(.white, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
-            Text(store.loginScanned ? "请在手机上确认" : "用网易云音乐 App 扫码登录")
+            Text(store.loginScanned ? "请在手机上确认" : (store.loginSlow && store.loginImage == nil ? "按确认打开官方登录页" : "用网易云音乐 App 扫码登录"))
                 .font(.tv(.headline, emphasized: true))
                 .foregroundStyle(.white)
         }
@@ -229,6 +227,7 @@ struct NeteaseScreen: View {
 
     // MARK: 正在播放
 
+    /// 左边封面、歌名和进度，右边跟着唱的歌词。没有按钮：左右切歌，确认暂停，返回回列表。
     private func nowPlaying(_ song: NeteaseSong) -> some View {
         ZStack {
             Color.black
@@ -236,22 +235,21 @@ struct NeteaseScreen: View {
                 .frame(width: 160, height: 90)
                 .blur(radius: 12)
                 .scaleEffect(x: canvas.width / 160 * 1.2, y: canvas.height / 90 * 1.2)
-                .opacity(0.75)
+                .opacity(0.8)
                 .id(song.id)
-            Color.black.opacity(0.35)
-            HStack(spacing: 110) {
-                BiliImage(url: song.cover)
-                    .frame(width: 560, height: 560)
-                    .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
-                    .shadow(color: .black.opacity(0.6), radius: 50, y: 30)
-                    .scaleEffect(store.paused ? 0.92 : 1)
-                    .animation(.spring(response: 0.42, dampingFraction: 0.84), value: store.paused)
-                    .id(song.id)
-                    .transition(.opacity)
-                VStack(alignment: .leading, spacing: 20) {
-                    Text(song.name).font(.tv(.title1, emphasized: true)).foregroundStyle(.white).lineLimit(3)
-                    Text(song.artist).font(.tv(.headline)).foregroundStyle(.white.opacity(0.7)).lineLimit(2)
-                    Spacer().frame(height: 50)
+            Color.black.opacity(0.32)
+            HStack(alignment: .center, spacing: 130) {
+                VStack(alignment: .leading, spacing: 0) {
+                    BiliImage(url: song.cover)
+                        .frame(width: 600, height: 600)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .shadow(color: .black.opacity(0.55), radius: 50, y: 30)
+                        .scaleEffect(store.paused ? 0.9 : 1)
+                        .animation(.spring(response: 0.42, dampingFraction: 0.84), value: store.paused)
+                        .id(song.id)
+                        .transition(.opacity)
+                    Text(song.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(1).padding(.top, 44)
+                    Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.65)).lineLimit(1).padding(.top, 8)
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule().fill(.white.opacity(0.22))
@@ -259,21 +257,67 @@ struct NeteaseScreen: View {
                                 .frame(width: geo.size.width * (store.duration > 0 ? min(1, store.time / store.duration) : 0))
                         }
                     }
-                    .frame(height: 8)
+                    .frame(height: 7)
+                    .padding(.top, 34)
                     HStack {
                         Text(clock(store.time))
                         Spacer()
-                        Text(clock(store.duration))
+                        if store.paused { Image(systemName: "pause.fill") }
+                        Spacer()
+                        Text("-" + clock(max(0, store.duration - store.time)))
                     }
-                    .font(.system(size: 26, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.65))
+                    .font(.system(size: 24, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.top, 14)
                 }
-                .frame(width: 760, alignment: .leading)
+                .frame(width: 600, alignment: .leading)
+                lyricsColumn
+                    .frame(width: 800, height: 820, alignment: .leading)
             }
         }
         .frame(width: canvas.width, height: canvas.height)
         .clipped()
         .animation(.easeInOut(duration: 0.4), value: song.id)
+    }
+
+    /// 歌词：正在唱的那句又大又亮、停在中间，前后的句子越远越淡
+    @ViewBuilder private var lyricsColumn: some View {
+        if store.lyrics.isEmpty {
+            Color.clear
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 34) {
+                        Color.clear.frame(height: 360)
+                        ForEach(Array(store.lyrics.enumerated()), id: \.offset) { index, line in
+                            let distance = abs(index - max(0, store.lyricIndex))
+                            Text(line.text)
+                                .font(.system(size: 50, weight: .bold))
+                                .foregroundStyle(.white.opacity(index == store.lyricIndex ? 1 : max(0.1, 0.38 - Double(distance) * 0.06)))
+                                .scaleEffect(index == store.lyricIndex ? 1 : 0.94, anchor: .leading)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(index)
+                        }
+                        Color.clear.frame(height: 360)
+                    }
+                    .animation(.easeInOut(duration: 0.45), value: store.lyricIndex)
+                }
+                .scrollDisabled(true)
+                .onChange(of: store.lyricIndex) { _, index in
+                    withAnimation(.spring(response: 0.6, dampingFraction: 0.9)) { proxy.scrollTo(max(0, index), anchor: .center) }
+                }
+                .onChange(of: store.lyrics) { _, _ in proxy.scrollTo(max(0, store.lyricIndex), anchor: .center) }
+                .onAppear { proxy.scrollTo(max(0, store.lyricIndex), anchor: .center) }
+            }
+            // 上下两头渐渐淡出
+            .mask {
+                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.22),
+                                       .init(color: .black, location: 0.78), .init(color: .clear, location: 1)],
+                               startPoint: .top, endPoint: .bottom)
+            }
+        }
     }
 
     private func clock(_ seconds: Double) -> String {

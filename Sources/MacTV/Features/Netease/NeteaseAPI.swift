@@ -10,6 +10,11 @@ struct NeteaseSong: Hashable, Sendable {
     var duration = 0
 }
 
+struct NeteaseLyricLine: Hashable, Sendable {
+    let time: Double
+    let text: String
+}
+
 struct NeteasePlaylist: Hashable, Sendable {
     let id: Int
     let name: String
@@ -24,7 +29,7 @@ struct NeteaseAccount: Hashable, Sendable {
 }
 
 /// 网易云音乐网页版自己在用的接口。登录信息由系统的网络库自己保存和携带（这个应用自己的那一份），
-/// 这里的代码不读也不存账号密码；登录只有扫码一种方式。
+/// 这里的代码不读也不存账号密码；登录由你在官方网页上自己完成。
 /// 这些接口不是公开给第三方的，网易云改版时这里可能需要跟着改。
 enum NeteaseAPI {
     private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
@@ -45,32 +50,45 @@ enum NeteaseAPI {
         return status == kCCSuccess ? Data(output.prefix(length)) : nil
     }
 
-    private static var csrf: String {
-        HTTPCookieStorage.shared.cookies(for: home)?.first { $0.name == "__csrf" }?.value ?? ""
+    // 登录信息自己管：系统自带的那份存储在应用被关掉时不一定来得及写盘，重启后就成了"没登录"。
+    // 这里把服务器发回来的登录信息记在内存里，并存进这个应用自己的偏好设置（退出登录时删掉）。
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var jar: [String: String] = UserDefaults.standard.dictionary(forKey: storeKey) as? [String: String] ?? [:]
+    private static let storeKey = "neteaseLogin"
+
+    private static func value(_ name: String) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return jar[name] ?? ""
     }
 
-    /// 是否有登录信息（不代表一定还有效）
-    static var hasLogin: Bool {
-        HTTPCookieStorage.shared.cookies(for: home)?.contains { $0.name == "MUSIC_U" && !$0.value.isEmpty } ?? false
+    private static func snapshot() -> [String: String] {
+        lock.lock(); defer { lock.unlock() }
+        return jar
     }
+
+    private static func remember(_ response: URLResponse, for url: URL) {
+        guard let http = response as? HTTPURLResponse, let fields = http.allHeaderFields as? [String: String] else { return }
+        let fresh = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
+        guard !fresh.isEmpty else { return }
+        lock.lock()
+        for cookie in fresh { jar[cookie.name] = cookie.value.isEmpty ? nil : cookie.value }
+        let snapshot = jar
+        lock.unlock()
+        UserDefaults.standard.set(snapshot, forKey: storeKey)
+    }
+
+    private static var csrf: String { value("__csrf") }
+
+    /// 是否有登录信息（不代表一定还有效）
+    static var hasLogin: Bool { !value("MUSIC_U").isEmpty }
 
     /// 退出登录：把这个应用里网易云的登录信息全部删掉
     static func forgetLogin() {
-        for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.domain.hasSuffix("163.com") {
-            HTTPCookieStorage.shared.deleteCookie(cookie)
-        }
+        lock.lock(); jar = [:]; lock.unlock()
+        UserDefaults.standard.removeObject(forKey: storeKey)
     }
 
     private static func call(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
-        // 告诉服务器这是电脑端（取歌曲地址时要）。只在登录之后带：登录前带着它，要二维码的请求会被风控拒绝。
-        let marked = HTTPCookieStorage.shared.cookies(for: home)?.first { $0.name == "os" }
-        if hasLogin {
-            if marked == nil, let cookie = HTTPCookie(properties: [.domain: ".music.163.com", .path: "/", .name: "os", .value: "pc"]) {
-                HTTPCookieStorage.shared.setCookie(cookie)
-            }
-        } else if let marked {
-            HTTPCookieStorage.shared.deleteCookie(marked)
-        }
         var body = payload
         let token = csrf
         body["csrf_token"] = token
@@ -84,8 +102,14 @@ enum NeteaseAPI {
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpShouldHandleCookies = false
+        var sent = snapshot()
+        // 告诉服务器这是电脑端（取歌曲地址时要）。只在登录之后带：登录前带着它，要二维码的请求会被风控拒绝。
+        if sent["MUSIC_U"] != nil { sent["os"] = "pc" } else { sent["os"] = nil }
+        if !sent.isEmpty { request.setValue(sent.map { "\($0.key)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie") }
         request.httpBody = Data("params=\(params)&encSecKey=\(encryptedSecondKey)".utf8)
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        remember(response, for: url)
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
@@ -101,17 +125,13 @@ enum NeteaseAPI {
                            cover: image((item["al"] as? [String: Any])?["picUrl"]), duration: (item["dt"] as? Int ?? 0) / 1000)
     }
 
-    // MARK: 扫码登录
+    // MARK: 登录
 
-    /// 要一个新的二维码；返回二维码里的网址和它的编号
-    static func loginCode() async -> (key: String, address: String)? {
-        guard let key = (await call("login/qrcode/unikey", ["type": 3, "noCheckToken": true]))?["unikey"] as? String else { return nil }
-        return (key, "https://music.163.com/login?codekey=\(key)")
-    }
-
-    /// 800 二维码过期、801 等待扫码、802 已扫码等确认、803 登录成功（登录信息这时已经由系统存好）
-    static func loginState(key: String) async -> Int {
-        (await call("login/qrcode/client/login", ["key": key, "type": 3]))?["code"] as? Int ?? 0
+    /// 登录在网易云官方网页上完成（应用里打开的网页）。登录好以后，把网页那边的登录信息交到这里，
+    /// 之后取歌单、取歌就用它。直接调接口扫码登录会被网易云拒绝（8821），所以不走那条路。
+    static func importLogin(_ cookies: [String: String]) {
+        lock.lock(); jar = cookies; lock.unlock()
+        UserDefaults.standard.set(cookies, forKey: storeKey)
     }
 
     static func account() async -> NeteaseAccount? {
@@ -150,6 +170,26 @@ enum NeteaseAPI {
         let more = ((await call("v3/song/detail", ["c": query]))?["songs"] as? [[String: Any]] ?? []).compactMap(song)
         let all = Dictionary((tracks + more).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         return ids.compactMap { all[$0] }
+    }
+
+    /// 带时间的歌词：每一句从第几秒开始唱。没有歌词（纯音乐）返回空。
+    static func lyrics(song: Int) async -> [NeteaseLyricLine] {
+        let text = ((await call("song/lyric", ["id": song, "lv": -1, "tv": -1]))?["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
+        var lines: [NeteaseLyricLine] = []
+        for raw in text.split(separator: "\n") {
+            // 一行开头可以有一个或几个 [分:秒] 标记，后面是这句词
+            var rest = Substring(raw)
+            var times: [Double] = []
+            while rest.hasPrefix("["), let close = rest.firstIndex(of: "]") {
+                let parts = rest[rest.index(after: rest.startIndex)..<close].split(separator: ":")
+                if parts.count == 2, let minutes = Double(parts[0]), let seconds = Double(parts[1]) { times.append(minutes * 60 + seconds) }
+                rest = rest[rest.index(after: close)...]
+            }
+            let words = rest.trimmingCharacters(in: .whitespaces)
+            guard !words.isEmpty else { continue }
+            for time in times { lines.append(NeteaseLyricLine(time: time, text: words)) }
+        }
+        return lines.sorted { $0.time < $1.time }
     }
 
     /// 这首歌的播放地址（约 20 分钟内有效）。没有版权、需要会员或地区不可用时返回 nil。

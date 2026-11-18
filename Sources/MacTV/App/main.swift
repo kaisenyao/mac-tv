@@ -258,6 +258,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 自用分支：启动时就把哔哩哔哩每一页的内容取好，进去和切换时不用等
         tv.bilibiliStore.tv = tv
         tv.bilibiliStore.preload()
+        tv.neteaseStore.tv = tv
+        tv.neteaseStore.preload()
         tv.ensureSteamHeroes()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysSlept),
             name: NSWorkspace.screensDidSleepNotification, object: nil)

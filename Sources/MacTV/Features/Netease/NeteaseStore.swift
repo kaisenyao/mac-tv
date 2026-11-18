@@ -22,8 +22,13 @@ final class NeteaseStore: ObservableObject {
     /// 登录状态查过了没有（没查完之前不显示二维码，免得闪一下）
     @Published private(set) var checked = false
     @Published private(set) var loading = false
+    /// 从官方登录页取出来的二维码；loginScanned = 已扫码，等手机上确认
     @Published private(set) var loginImage: NSImage?
     @Published private(set) var loginScanned = false
+    /// 等了好一会儿二维码还没来：提示可以改去官方网页登录
+    @Published private(set) var loginSlow = false
+    private let loginPage = NeteaseLoginPage()
+    private var loginWatch: Task<Void, Never>?
 
     @Published private(set) var home: [Row] = []
     /// 打开的某个歌单
@@ -37,6 +42,9 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var time: Double = 0
     @Published private(set) var duration: Double = 0
     @Published private(set) var nowPlayingVisible = false
+    @Published private(set) var lyrics: [NeteaseLyricLine] = []
+    /// 现在唱到第几句（-1 = 还没开始）
+    @Published private(set) var lyricIndex = -1
     private var queue: [NeteaseSong] = []
     private var queueIndex = 0
     private let player = AVPlayer()
@@ -46,11 +54,13 @@ final class NeteaseStore: ObservableObject {
     private var open = false
 
     init() {
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] now in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] now in
             MainActor.assumeIsolated {
                 guard let self, self.current != nil else { return }
                 self.time = now.seconds.isFinite ? now.seconds : 0
                 if let total = self.player.currentItem?.duration.seconds, total.isFinite, total > 0 { self.duration = total }
+                let line = (self.lyrics.lastIndex { $0.time <= self.time + 0.3 }) ?? -1
+                if line != self.lyricIndex { self.lyricIndex = line }
             }
         }
         NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification).receive(on: RunLoop.main).sink { [weak self] note in
@@ -60,6 +70,9 @@ final class NeteaseStore: ObservableObject {
             }
         }.store(in: &bag)
     }
+
+    /// 焦点或画面变了就会变的一串字：按键音效靠它判断"这一下有没有真的动"
+    var focusKey: String { "\(page?.id ?? "")-\(row)-\(rows.indices.contains(row) ? column(of: rows[row]) : 0)-\(nowPlayingVisible)-\(current?.id ?? 0)-\(paused)" }
 
     var rows: [Row] { page.map { [$0] } ?? home }
     var row: Int { page != nil ? 0 : min(rowIndex, max(0, rows.count - 1)) }
@@ -74,52 +87,120 @@ final class NeteaseStore: ObservableObject {
 
     func opened() {
         open = true
-        Task { @MainActor in
+        prepare()
+    }
+
+    private var preparing: Task<Void, Never>?
+    private var loadedAt = Date.distantPast
+
+    /// 查登录状态、取首页内容。应用一启动就在后台做一遍，所以点进来时通常已经好了；
+    /// 放久了（一刻钟）再进来会在后台悄悄更新一次，不打断眼前的内容。
+    private func prepare() {
+        guard preparing == nil else { return }
+        preparing = Task { @MainActor in
+            defer { preparing = nil }
             if account == nil { account = NeteaseAPI.hasLogin ? await NeteaseAPI.account() : nil }
             checked = true
-            if account == nil { startLogin() } else if home.isEmpty { await loadHome() }
+            if account == nil { startLogin() }
+            else if home.isEmpty || Date().timeIntervalSince(loadedAt) > 900 { await loadHome() }
         }
     }
 
     func closed() {
         open = false
         loginTask?.cancel()
+        stopLogin()
         stop()
     }
 
-    // MARK: 登录
+    // MARK: 登录（在官方网页上）
 
+    static let loginID = "netease-login"
+
+    /// 应用启动时调用：已登录就先把账号和首页内容取好。没登录什么都不做，二维码等你进来了才取。
+    func preload() {
+        if NeteaseAPI.hasLogin { prepare() }
+    }
+
+    /// 进到二维码页时才调用：加载官方登录页，取它的二维码显示；同时盯着登录状态，登上了就进列表。离开时关掉。
     private func startLogin() {
-        loginTask?.cancel()
-        loginTask = Task { @MainActor in
-            while !Task.isCancelled, open, account == nil {
-                guard let code = await NeteaseAPI.loginCode() else {
-                    try? await Task.sleep(for: .seconds(10)); continue   // 别问得太勤，会被当成刷接口
+        guard let tv, loginWatch == nil else { return }
+        loginPage.onImage = { [weak self] image in self?.loginImage = image; self?.loginScanned = false }
+        loginPage.onState = { [weak self] code in
+            if code == 802 { self?.loginScanned = true }
+            guard code == 800, let self else { return }
+            // 二维码过期了：官方页通常会自己换一张（脚本会替它点"刷新"）。3 秒后还是原来那张，就整页重来。
+            let stale = self.loginImage
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, let tv = self.tv, self.loginWatch != nil, self.loginImage === stale else { return }
+                self.loginImage = nil
+                self.loginPage.start(store: tv.profile.websiteDataStore, in: tv.window)
+            }
+        }
+        loginPage.start(store: tv.profile.websiteDataStore, in: tv.window)
+        loginSlow = false
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            if let self, self.loginWatch != nil, self.loginImage == nil { self.loginSlow = true }
+        }
+        loginWatch = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(1200))
+                guard let self, !Task.isCancelled, let tv = self.tv else { return }
+                let cookies = await tv.profile.websiteDataStore.httpCookieStore.allCookies().filter { $0.domain.hasSuffix("163.com") }
+                guard cookies.contains(where: { $0.name == "MUSIC_U" && !$0.value.isEmpty }) else { continue }
+                NeteaseAPI.importLogin(Dictionary(cookies.map { ($0.name, $0.value) }, uniquingKeysWith: { a, _ in a }))
+                guard let account = await NeteaseAPI.account() else { continue }
+                self.loginWatch = nil
+                self.stopLogin()
+                self.account = account
+                if self.open {
+                    tv.showToast("已登录：\(account.name)")
+                    await self.loadHome()
                 }
-                loginImage = Self.qrImage(code.address)
-                loginScanned = false
-                // 等扫码：过期了（约两分钟）就换一张新的
-                waiting: while !Task.isCancelled, open {
-                    try? await Task.sleep(for: .seconds(2))
-                    switch await NeteaseAPI.loginState(key: code.key) {
-                    case 802: loginScanned = true
-                    case 803:
-                        account = await NeteaseAPI.account()
-                        if account != nil {
-                            loginImage = nil
-                            await loadHome()
-                            return
-                        }
-                        break waiting
-                    case 800: break waiting
-                    default: break
-                    }
+                return
+            }
+        }
+    }
+
+    private func stopLogin() {
+        loginWatch?.cancel()
+        loginWatch = nil
+        loginPage.stop()
+        loginImage = nil
+        loginScanned = false
+    }
+
+    /// 打开网易云官方网页，你在上面自己登录（扫码或别的方式都行）；登录好了会自动回到这里
+    private func openLogin() {
+        guard let tv, let url = URL(string: "https://music.163.com/#/login") else { return }
+        let service = Service(id: Self.loginID, name: "网易云音乐", kind: .web(url), accent: "#E60026", deep: "#2B0206")
+        tv.playbackCoordinator.playWeb(service, url: url)
+        loginTask?.cancel()
+        loginTask = Task { @MainActor [weak self] in
+            for _ in 0..<300 {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, !Task.isCancelled, let tv = self.tv else { return }
+                guard case .player(let service) = tv.mode, service.id == Self.loginID else { return }
+                let cookies = await tv.profile.websiteDataStore.httpCookieStore.allCookies().filter { $0.domain.hasSuffix("163.com") }
+                guard cookies.contains(where: { $0.name == "MUSIC_U" && !$0.value.isEmpty }) else { continue }
+                NeteaseAPI.importLogin(Dictionary(cookies.map { ($0.name, $0.value) }, uniquingKeysWith: { a, _ in a }))
+                if let account = await NeteaseAPI.account() {
+                    self.account = account
+                    tv.returnToNetease()
+                    tv.showToast("已登录：\(account.name)")
+                    return
                 }
             }
         }
     }
 
-    private static func qrImage(_ text: String) -> NSImage? { QRCode.image(for: text) }
+    func handleInPlayer(_ command: RemoteCommand, service: Service) -> Bool {
+        guard let tv, service.id == Self.loginID else { return false }
+        if case .back = command { tv.returnToNetease(); return true }
+        return false
+    }
 
     /// 左上角的字标（Icons/netease-logo.png）。原图是白底黑字，放在深色页面上要处理一下：
     /// 白底变透明，黑字变白字，左边的红色图标原样保留。
@@ -145,8 +226,8 @@ final class NeteaseStore: ObservableObject {
             let inIcon = x >= left && x <= right && y >= top && y <= bottom
             var alpha: Double
             if inIcon {
-                // 图标里的白色笔画要留着；只有圆角外面那一点白要去掉
-                let radius = Double(right - left + 1) * 0.24
+                // 图标里的白色笔画要留着；只有红色圆形外面那一点白要去掉
+                let radius = Double(right - left + 1) * 0.5
                 let dx = max(Double(left) + radius - Double(x), Double(x) - (Double(right) - radius), 0)
                 let dy = max(Double(top) + radius - Double(y), Double(y) - (Double(bottom) - radius), 0)
                 alpha = max(0, min(1, radius - (dx * dx + dy * dy).squareRoot() + 0.5))
@@ -173,8 +254,16 @@ final class NeteaseStore: ObservableObject {
         account = nil
         home = []
         page = nil
+        // 网页那边的登录也一起清掉，不然下次打开登录页会直接又登上
         tv?.showToast("已退出登录")
-        startLogin()
+        let store = tv?.profile.websiteDataStore.httpCookieStore
+        Task { @MainActor [weak self] in
+            if let store {
+                for cookie in await store.allCookies() where cookie.domain.hasSuffix("163.com") { await store.deleteCookie(cookie) }
+            }
+            // 清干净了马上备新的二维码
+            if self?.open == true, self?.account == nil { self?.startLogin() }
+        }
     }
 
     // MARK: 内容
@@ -184,15 +273,29 @@ final class NeteaseStore: ObservableObject {
         loading = true
         async let daily = NeteaseAPI.daily()
         let lists = await NeteaseAPI.playlists(user: account.id)
+        var built: [Row] = []
+        // 每日推荐和歌单先到先摆出来，"我喜欢的音乐"要多问一次，随后补上
+        let recommended = await daily
+        if home.isEmpty, !recommended.isEmpty || !lists.isEmpty {
+            var quick: [Row] = []
+            if !recommended.isEmpty { quick.append(Row(id: "daily", title: "每日推荐", items: recommended.map(Item.song))) }
+            if !lists.isEmpty { quick.append(Row(id: "lists", title: "歌单", items: lists.map(Item.playlist))) }
+            withAnimation(Motion.navigate) { home = quick }
+        }
         var liked: [NeteaseSong] = []
         if let first = lists.first { liked = await NeteaseAPI.songs(playlist: first.id, limit: 60) }
-        var built: [Row] = []
-        let recommended = await daily
         if !recommended.isEmpty { built.append(Row(id: "daily", title: "每日推荐", items: recommended.map(Item.song))) }
         if !liked.isEmpty { built.append(Row(id: "liked", title: "我喜欢的音乐", items: liked.map(Item.song))) }
         if !lists.isEmpty { built.append(Row(id: "lists", title: "歌单", items: lists.map(Item.playlist))) }
         built.append(Row(id: "account", title: account.name, items: [.logout]))
-        withAnimation(Motion.navigate) { home = built; rowIndex = 0 }
+        guard self.account == account else { loading = false; return }
+        // 正停在某一排上时，更新内容不把焦点挪走（按这一排的名字找回去）
+        let focusedID = home.indices.contains(rowIndex) ? home[rowIndex].id : nil
+        withAnimation(Motion.navigate) {
+            home = built
+            rowIndex = focusedID.flatMap { id in built.firstIndex { $0.id == id } } ?? 0
+        }
+        loadedAt = Date()
         loading = false
     }
 
@@ -222,7 +325,11 @@ final class NeteaseStore: ObservableObject {
             }
             return
         }
-        guard account != nil else { return }
+        guard account != nil else {
+            // 二维码页上按确认不做任何事；只有二维码一直取不到时，才用确认键去官方网页登录
+            if case .select = command, checked, loginSlow, loginImage == nil { openLogin() }
+            return
+        }
         switch command {
         case .move(.left): setColumn(-1)
         case .move(.right): setColumn(1)
@@ -270,6 +377,12 @@ final class NeteaseStore: ObservableObject {
         duration = Double(song.duration)
         paused = false
         player.pause()
+        lyrics = []
+        lyricIndex = -1
+        Task { @MainActor in
+            let lines = await NeteaseAPI.lyrics(song: song.id)
+            if current == song { lyrics = lines }
+        }
         Task { @MainActor in
             let address = await NeteaseAPI.address(song: song.id)
             guard current == song else { return }
@@ -324,6 +437,16 @@ extension TVController {
         movies = nil
         neteaseOpen = true
         neteaseStore.opened()
+    }
+
+    /// 从登录页回到网易云音乐（而不是回主屏）
+    func returnToNetease() {
+        playbackCoordinator.closeWebPlayback()
+        setMode(.launcher)
+        playerFailure = nil
+        neteaseOpen = true
+        neteaseStore.opened()
+        bringToFront()
     }
 
     func closeNetease() {

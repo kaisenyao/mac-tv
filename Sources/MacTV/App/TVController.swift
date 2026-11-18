@@ -334,6 +334,7 @@ final class TVController: NSObject, ObservableObject {
 
     private var feedbackState: String {
         String(describing: (focus, sheets, movies, mode == .launcher)) + (bilibiliOpen ? bilibiliStore.focusKey : "")
+            + (neteaseOpen ? neteaseStore.focusKey : "")
     }
 
     // MARK: - Command Dispatch
@@ -458,7 +459,7 @@ final class TVController: NSObject, ObservableObject {
             default: break
             }
         case .player(let service):
-            if !bilibiliStore.handleInPlayer(command, service: service) {
+            if !bilibiliStore.handleInPlayer(command, service: service), !neteaseStore.handleInPlayer(command, service: service) {
                 playbackCoordinator.handleInPlayer(command, service: service)
             }
         case .movie: playbackCoordinator.handleInMovie(command)
