@@ -865,7 +865,18 @@ struct NeteaseProgress: View {
             HStack {
                 Text(neteaseClockText(clock.time))
                 Spacer()
-                if store.paused { Image(systemName: "pause.fill").onTapGesture { store.tapPlayPause() } }
+                // 中间：放着的时候是这首歌实际在放的音质，暂停时是暂停图标，两者交叉淡变
+                ZStack {
+                    if store.paused {
+                        Image(systemName: "pause.fill").transition(.opacity)
+                    } else if !store.actualLevel.isEmpty {
+                        Text(NeteaseStore.name(of: store.actualLevel)).transition(.opacity)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { store.tapPlayPause() }
+                .animation(.easeInOut(duration: 0.3), value: store.paused)
+                .animation(.easeInOut(duration: 0.3), value: store.actualLevel)
                 Spacer()
                 Text("-" + neteaseClockText(max(0, clock.duration - clock.time)))
             }
