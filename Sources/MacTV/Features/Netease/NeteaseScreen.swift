@@ -310,8 +310,9 @@ struct NeteaseScreen: View {
                     }
                 }
             }
+            .padding(.top, 44)   // 给顶上的淡出留出位置：第一首歌选中时，白色高亮不会被淡掉一截
             .offset(y: shift)
-            .frame(width: canvas.width - margin * 2 - 560, height: canvas.height - listTop, alignment: .topLeading)
+            .frame(width: canvas.width - margin * 2 - 560, height: canvas.height - listTop + 44, alignment: .topLeading)
             .clipped()
             // 上下两头渐渐淡出
             .mask {
@@ -319,7 +320,7 @@ struct NeteaseScreen: View {
                                        .init(color: .black, location: 0.86), .init(color: .clear, location: 1)],
                                startPoint: .top, endPoint: .bottom)
             }
-            .padding(.top, listTop)
+            .padding(.top, listTop - 44)
         }
         .padding(.horizontal, margin)
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
