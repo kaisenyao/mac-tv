@@ -483,6 +483,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 // 播放中、或菜单已经开着：新按下的这一次立刻生效（走下面的常规处理）
             }
+            // 网易云音乐里的空格：就在当前界面放 / 停，不进播放界面（回车才进）
+            if event.keyCode == 49, mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,
+               !tv.neteaseStore.typing, tv.neteaseStore.account != nil {
+                if !event.isARepeat { tv.neteaseStore.handle(.playPause) }
+                return nil
+            }
             // 网易云音乐里的确认键，规矩一样：按一下（松开时算数）= 确认；
             // 在歌曲、歌单卡片上或播放界面里按住半秒 = 菜单（喜欢、收藏到歌单、播放模式）。
             if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,

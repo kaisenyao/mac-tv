@@ -411,10 +411,10 @@ struct NeteaseScreen: View {
             VStack(alignment: .leading, spacing: 0) {
                 BiliImage(url: page.list.cover)
                     .frame(width: 400, height: 400)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: page.list.kind == .artist ? 200 : 22, style: .continuous))   // 歌手是圆的
                     .shadow(color: .black.opacity(0.5), radius: 40, y: 24)
                 Text(page.list.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(2).padding(.top, 30)
-                Text(page.loading ? "正在载入…" : "\(page.songs.count) 首")
+                Text(page.songs.isEmpty ? (page.list.count > 0 ? "\(page.list.count) 首" : " ") : "\(page.songs.count) 首")
                     .font(.tv(.body)).foregroundStyle(.white.opacity(0.6)).padding(.top, 8)
                 // 一横排圆形图标；选中哪个，哪个拉长、把字显示出来
                 HStack(spacing: 14) {
@@ -532,12 +532,15 @@ struct NeteaseScreen: View {
                         .shadow(color: .black.opacity(0.55), radius: 50, y: 30)
                         .scaleEffect(store.paused ? 0.9 : 1)
                         .animation(Self.slide, value: store.paused)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.tapPlayPause() }
                     HStack(alignment: .center, spacing: 16) {
                         // 切歌：旧歌名先淡出，新歌名随后淡入（不同时出现，不会重影）
                         ZStack(alignment: .leading) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(song.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(1)
-                                Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                                    .onTapGesture { store.openAlbum(of: song) }
+                                artistLine(song)
                             }
                             .id(song.id)
                             .transition(Self.swap)
@@ -559,13 +562,18 @@ struct NeteaseScreen: View {
                             Capsule().fill(.white)
                                 .frame(width: geo.size.width * (store.duration > 0 ? min(1, store.time / store.duration) : 0))
                         }
+                        .frame(height: 7)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())   // 点的范围比细细一条大一些
+                        .onTapGesture { location in store.seek(toFraction: location.x / max(1, geo.size.width)) }
                     }
                     .frame(height: 7)
+                    .padding(.vertical, -14)
                     .padding(.top, 34)
                     HStack {
                         Text(clock(store.time))
                         Spacer()
-                        if store.paused { Image(systemName: "pause.fill") }
+                        if store.paused { Image(systemName: "pause.fill").onTapGesture { store.tapPlayPause() } }
                         Spacer()
                         Text("-" + clock(max(0, store.duration - store.time)))
                     }
@@ -627,6 +635,8 @@ struct NeteaseScreen: View {
                             }
                             .frame(width: size, alignment: .leading)
                             .opacity(index < focus - 1 ? 0 : 1)
+                            .contentShape(Rectangle())
+                            .onTapGesture { store.tapQueue(index) }
                         } else {
                             Color.clear.frame(width: size, height: 1)
                         }
@@ -671,6 +681,8 @@ struct NeteaseScreen: View {
                         .background {
                             if focused { Capsule().fill(.white).matchedGeometryEffect(id: "quality", in: qualitySpace) }
                         }
+                        .contentShape(Capsule())
+                        .onTapGesture { store.tapQuality(index) }
                 }
             }
             .padding(.top, 54)
@@ -718,6 +730,8 @@ struct NeteaseScreen: View {
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .onTapGesture { store.seek(toTime: line.time) }
                                 .id(index)
                         }
                         Color.clear.frame(height: 360)
@@ -749,6 +763,25 @@ struct NeteaseScreen: View {
             let span = max(0.3, min(word.duration, 0.9))
             let progress = max(0, min(1, (store.time + 0.05 - word.time) / span))
             return text + Text(word.text).foregroundColor(.white.opacity(0.42 + 0.58 * progress))
+        }
+    }
+
+    /// 歌手名：每位都能点，点了去他的歌手页
+    @ViewBuilder private func artistLine(_ song: NeteaseSong) -> some View {
+        if song.artists.isEmpty {
+            Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(song.artists.prefix(4).enumerated()), id: \.offset) { index, artist in
+                    if index > 0 { Text(" / ") }
+                    Text(artist.name).onTapGesture { store.openArtist(artist) }
+                }
+            }
+            .font(.tv(.body))
+            .foregroundStyle(.white.opacity(0.65))
+            .lineLimit(1)
+            .frame(maxWidth: 520, alignment: .leading)
+            .clipped()
         }
     }
 

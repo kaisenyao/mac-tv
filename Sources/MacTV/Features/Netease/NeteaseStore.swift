@@ -60,6 +60,7 @@ final class NeteaseStore: ObservableObject {
     enum MenuAction: Hashable {
         case like(NeteaseSong), addTo(NeteaseSong), pick(NeteasePlaylist, NeteaseSong), create(NeteaseSong)
         case subscribe(NeteasePlaylist), cycleMode, logout
+        case artist(NeteaseSong), goArtist(NeteaseArtist), album(NeteaseSong)
     }
     enum MenuAnchor { case card, song, nowPlaying, account }
     struct MenuItem: Hashable { let symbol: String; let title: String; let action: MenuAction }
@@ -79,6 +80,8 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var liked: Set<Int> = []
     /// 我的歌单（自己建的和收藏的），第一个是"我喜欢的音乐"
     private(set) var myLists: [NeteasePlaylist] = []
+    /// 取过的歌单里的歌：再进同一个歌单不用再等（海外到网易云每次往返要一两秒）
+    private var songCache: [Int: [NeteaseSong]] = [:]
     @Published private(set) var rowIndex = 0
     @Published private(set) var columns: [String: Int] = [:]
 
@@ -411,20 +414,65 @@ final class NeteaseStore: ObservableObject {
         }
         loadedAt = Date()
         loading = false
+        // 先在后台把"我喜欢的音乐"和前面几个歌单的歌取好，点进去时直接就有
+        Task { @MainActor in
+            for list in lists.prefix(4) where songCache[list.id] == nil {
+                let songs = await NeteaseAPI.songs(playlist: list.id)
+                if !songs.isEmpty { songCache[list.id] = songs }
+            }
+        }
     }
 
+    /// 打开一个歌单（或歌手、专辑）。取过的直接摆出来，同时在后台更新一遍。
     private func openPlaylist(_ list: NeteasePlaylist) {
-        withAnimation(Motion.navigate) { page = Page(list: list) }
+        let cached = list.kind == .playlist ? songCache[list.id] : nil
+        var opened = Page(list: list, songs: cached ?? [], loading: cached == nil)
+        if let current, let index = opened.songs.firstIndex(of: current) { opened.index = index }
+        withAnimation(Motion.navigate) { page = opened }
         Task { @MainActor in
-            let songs = await NeteaseAPI.songs(playlist: list.id)
-            guard page?.list.id == list.id else { return }
-            if songs.isEmpty { tv?.showToast("歌单是空的") }
-            withAnimation(Motion.navigate) {
-                page?.songs = songs
-                page?.loading = false
-                // 正在放的歌就在这个歌单里的话，直接停在它上面
-                if let current, let index = songs.firstIndex(of: current) { page?.index = index }
+            var info: NeteasePlaylist?
+            var songs: [NeteaseSong] = []
+            switch list.kind {
+            case .playlist: songs = await NeteaseAPI.songs(playlist: list.id)
+            case .artist: if let found = await NeteaseAPI.artist(list.id) { info = found.info; songs = found.songs }
+            case .album: if let found = await NeteaseAPI.album(list.id) { info = found.info; songs = found.songs }
             }
+            guard let page, page.list.id == list.id, page.list.kind == list.kind else { return }
+            if list.kind == .playlist, !songs.isEmpty { songCache[list.id] = songs }
+            if songs.isEmpty, page.songs.isEmpty { tv?.showToast("没有歌") }
+            guard !songs.isEmpty || page.songs.isEmpty else { return }
+            // 更新时选中的那一首不跳走：按歌认回去
+            let keep = page.songs.indices.contains(page.index) ? page.songs[page.index] : nil
+            withAnimation(Motion.navigate) {
+                if let info { self.page?.list = info }
+                self.page?.songs = songs
+                self.page?.loading = false
+                if let index = (keep ?? current).flatMap({ songs.firstIndex(of: $0) }) { self.page?.index = index }
+            }
+        }
+    }
+
+    func openArtist(_ artist: NeteaseArtist) {
+        leaveOverlays()
+        openPlaylist(NeteasePlaylist(id: artist.id, name: artist.name, kind: .artist))
+    }
+
+    func openAlbum(of song: NeteaseSong) {
+        guard song.album > 0 else { return }
+        leaveOverlays()
+        openPlaylist(NeteasePlaylist(id: song.album, name: song.albumName, cover: song.cover, kind: .album))
+    }
+
+    /// 去歌手页、专辑页之前：菜单、播放界面这些盖在上面的都收起来
+    private func leaveOverlays() {
+        menuParents = []
+        endEditing()
+        withAnimation(Motion.navigate) {
+            menu = nil
+            nowPlayingVisible = false
+            qualityVisible = false
+            queueVisible = false
+            topFocus = nil
         }
     }
 
@@ -503,7 +551,7 @@ final class NeteaseStore: ObservableObject {
             else { withAnimation(Motion.focus) { topFocus = topItems.first } }   // 最上面一排再按上：到顶上那一排
         case .move(.down): if row < rows.count - 1 { withAnimation(Motion.navigate) { rowIndex = row + 1 } }
         case .select: activate()
-        case .playPause: if current != nil { togglePause() }
+        case .playPause: playPauseHere()
         case .back:
             // 在搜索结果里：Esc 回到首页
             if results != nil { withAnimation(Motion.navigate) { results = nil; query = ""; rowIndex = 0 } }
@@ -521,7 +569,7 @@ final class NeteaseStore: ObservableObject {
         case .move(.right): if index < items.count - 1 { withAnimation(Motion.focus) { topFocus = items[index + 1] } }
         case .move(.down), .back: withAnimation(Motion.focus) { topFocus = nil }
         case .select: activateTop(focus)
-        case .playPause: if current != nil { togglePause() }
+        case .playPause: playPauseHere()
         default: break
         }
     }
@@ -561,7 +609,7 @@ final class NeteaseStore: ObservableObject {
                 else if !page.songs.isEmpty { withAnimation(Motion.focus) { self.page?.button = nil } }
             case .move(.up): if current != nil { withAnimation(Motion.focus) { topFocus = .player } }
             case .select: pressPageButton(button)
-            case .playPause: if current != nil { togglePause() }
+            case .playPause: playPauseHere()
             case .back: withAnimation(Motion.navigate) { self.page = nil }
             default: break
             }
@@ -576,7 +624,7 @@ final class NeteaseStore: ObservableObject {
         case .select:
             guard page.songs.indices.contains(page.index) else { return }
             start(page.songs[page.index], in: page.songs)
-        case .playPause: if current != nil { togglePause() }
+        case .playPause: playPauseHere()
         case .back: withAnimation(Motion.navigate) { self.page = nil }
         default: break
         }
@@ -586,7 +634,8 @@ final class NeteaseStore: ObservableObject {
     /// 自己建的歌单没有"收藏"这个按钮
     var pageButtons: [PageButton] {
         guard let page else { return [] }
-        return page.list.creator != 0 && page.list.creator == account?.id ? [.play, .shuffle] : [.play, .shuffle, .subscribe]
+        let mine = page.list.creator != 0 && page.list.creator == account?.id
+        return page.list.kind != .playlist || mine ? [.play, .shuffle] : [.play, .shuffle, .subscribe]
     }
     func subscribed(_ list: NeteasePlaylist) -> Bool { myLists.contains { $0.id == list.id } }
 
@@ -604,6 +653,27 @@ final class NeteaseStore: ObservableObject {
             start(page.songs.randomElement() ?? page.songs[0], in: page.songs)
         case .subscribe: toggleSubscribed(page.list)
         }
+    }
+
+    /// 空格：就在当前界面放或停，不进播放界面（回车才进）。
+    /// 选中的是一首没在放的歌，就从它开始放；选中的是歌单而现在什么都没放，就放这个歌单；其余都是暂停 / 继续。
+    private func playPauseHere() {
+        if nowPlayingVisible || topFocus != nil { if current != nil { togglePause() }; return }
+        if let page, page.button == nil, page.songs.indices.contains(page.index) {
+            let song = page.songs[page.index]
+            if song != current { start(song, in: page.songs, show: false); return }
+        } else if page == nil, case .song(let song)? = focused, song != current {
+            start(song, in: rows[row].items.compactMap { item -> NeteaseSong? in if case .song(let s) = item { return s } else { return nil } }, show: false)
+            return
+        } else if page == nil, current == nil, case .playlist(let list)? = focused {
+            Task { @MainActor in
+                var songs = songCache[list.id] ?? []
+                if songs.isEmpty { songs = await NeteaseAPI.songs(playlist: list.id) }
+                if let first = songs.first, current == nil { start(first, in: songs, show: false) }
+            }
+            return
+        }
+        if current != nil { togglePause() }
     }
 
     private func handleNowPlaying(_ command: RemoteCommand) {
@@ -687,12 +757,40 @@ final class NeteaseStore: ObservableObject {
         }
     }
 
+    // MARK: 鼠标 / 触控板点击（播放界面）
+
+    func tapPlayPause() { if current != nil { togglePause() } }
+
+    func seek(toFraction fraction: Double) {
+        guard duration > 0 else { return }
+        seek(by: max(0, min(1, fraction)) * duration - time)
+    }
+
+    func seek(toTime target: Double) {
+        guard duration > 0 else { return }
+        seek(by: target - time)
+    }
+
+    func tapQuality(_ index: Int) {
+        guard qualityVisible, offered.indices.contains(index) else { return }
+        qualityIndex = index
+        handleNowPlaying(.select)
+    }
+
+    func tapQueue(_ index: Int) {
+        guard queueVisible, queue.indices.contains(index) else { return }
+        queueFocus = index
+        handleNowPlaying(.select)
+    }
+
     // MARK: 菜单
 
     private func songItems(_ song: NeteaseSong, withMode: Bool) -> [MenuItem] {
         let on = liked.contains(song.id)
         var items = [MenuItem(symbol: on ? "heart.fill" : "heart", title: on ? "取消喜欢" : "喜欢", action: .like(song)),
                      MenuItem(symbol: "text.badge.plus", title: "收藏到歌单", action: .addTo(song))]
+        if !song.artists.isEmpty { items.append(MenuItem(symbol: "person.crop.circle", title: "查看歌手", action: .artist(song))) }
+        if song.album > 0 { items.append(MenuItem(symbol: "square.stack", title: "查看专辑", action: .album(song))) }
         if withMode { items.append(MenuItem(symbol: mode.symbol, title: mode.title, action: .cycleMode)) }
         return items
     }
@@ -783,6 +881,19 @@ final class NeteaseStore: ObservableObject {
             if let current, let anchor = menu?.anchor, let index = menu?.index {
                 menu = Menu(anchor: anchor, items: songItems(current, withMode: true), index: index)
             }
+        case .artist(let song):
+            // 只有一位歌手直接去；几位合唱的先列出来挑
+            if song.artists.count == 1 {
+                openArtist(song.artists[0])
+            } else {
+                let anchor = menu?.anchor ?? .card
+                if let menu { menuParents.append(menu) }
+                withAnimation(Motion.focus) {
+                    menu = Menu(anchor: anchor, items: song.artists.prefix(8).map { MenuItem(symbol: "person.crop.circle", title: $0.name, action: .goArtist($0)) })
+                }
+            }
+        case .goArtist(let artist): openArtist(artist)
+        case .album(let song): openAlbum(of: song)
         case .logout:
             // 退出登录要按两次，免得误触
             if logoutArmed { logout() } else { withAnimation(Motion.focus) { logoutArmed = true } }
@@ -824,13 +935,16 @@ final class NeteaseStore: ObservableObject {
     }
 
     /// 放这首歌，songs 是接着往下放的队列。已经在放这一首的话，只是回到播放界面。
-    private func start(_ song: NeteaseSong, in songs: [NeteaseSong]) {
+    /// show：要不要打开播放界面（回车打开，空格不打开）
+    private func start(_ song: NeteaseSong, in songs: [NeteaseSong], show: Bool = true) {
         if current != song {
             queue = songs
             queueIndex = songs.firstIndex(of: song) ?? 0
             play(song)
+        } else if !show, paused {
+            togglePause()
         }
-        withAnimation(Motion.navigate) { nowPlayingVisible = true }
+        if show { withAnimation(Motion.navigate) { nowPlayingVisible = true } }
     }
 
     private func play(_ song: NeteaseSong, failures: Int = 0, resumeAt: Double? = nil) {
