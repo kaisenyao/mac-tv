@@ -637,9 +637,9 @@ final class NeteaseStore: ObservableObject {
         }
         switch command {
         case .move(.up):
-            if page.index > 0 { withAnimation(Motion.focus) { self.page?.index = page.index - 1 } }
+            if page.index > 0 { withAnimation(stepMotion()) { self.page?.index = page.index - 1 } }
             else if current != nil { withAnimation(Motion.focus) { topFocus = .player } }
-        case .move(.down): if page.index < page.songs.count - 1 { withAnimation(Motion.focus) { self.page?.index = page.index + 1 } }
+        case .move(.down): if page.index < page.songs.count - 1 { withAnimation(stepMotion()) { self.page?.index = page.index + 1 } }
         case .move(.left): withAnimation(Motion.focus) { self.page?.button = 0 }
         case .select:
             guard page.songs.indices.contains(page.index) else { return }
@@ -720,8 +720,8 @@ final class NeteaseStore: ObservableObject {
         }
         if queueVisible {
             switch command {
-            case .move(.left): withAnimation(Motion.focus) { queueFocus = max(0, queueFocus - 1) }
-            case .move(.right): withAnimation(Motion.focus) { queueFocus = min(queue.count - 1, queueFocus + 1) }
+            case .move(.left): withAnimation(stepMotion()) { queueFocus = max(0, queueFocus - 1) }
+            case .move(.right): withAnimation(stepMotion()) { queueFocus = min(queue.count - 1, queueFocus + 1) }
             case .select:
                 withAnimation(Motion.navigate) { queueVisible = false }
                 if queue.indices.contains(queueFocus), queueFocus != queueIndex {
@@ -753,11 +753,22 @@ final class NeteaseStore: ObservableObject {
         }
     }
 
+    private var lastStep = Date.distantPast
+
+    /// 单按一下用平常那条动画；按住方向键连续走时，换一条更短、更跟手的，
+    /// 不然每一下都重新起一段弹簧、上一段还没走完就被接上，速度忽快忽慢
+    private func stepMotion() -> Animation {
+        let now = Date()
+        defer { lastStep = now }
+        return now.timeIntervalSince(lastStep) < 0.2 ? .smooth(duration: 0.16) : Motion.focus
+    }
+
     private func setColumn(_ delta: Int) {
         guard rows.indices.contains(row) else { return }
         let line = rows[row]
         let next = max(0, min(line.items.count - 1, column(of: line) + delta))
-        withAnimation(Motion.focus) { columns[line.id] = next }
+        guard next != column(of: line) else { return }
+        withAnimation(stepMotion()) { columns[line.id] = next }
         prefetchCovers(line.items.dropFirst(next + 1).prefix(6).map(cover))
     }
 

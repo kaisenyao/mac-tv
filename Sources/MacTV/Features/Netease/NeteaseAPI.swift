@@ -49,8 +49,6 @@ struct NeteasePlaylist: Hashable, Sendable {
     var kind = Kind.playlist
     /// 卡片第二行：专辑是歌手名；歌手页是"多少首歌 · 多少张专辑"
     var subtitle = ""
-    /// 歌手简介
-    var intro = ""
 }
 
 struct NeteaseAccount: Hashable, Sendable {
@@ -402,9 +400,8 @@ enum NeteaseAPI {
         let songs = (data["hotSongs"] as? [[String: Any]] ?? []).compactMap(song)
         let counts = [(artist["musicSize"] as? Int).map { "\($0) 首歌" }, (artist["albumSize"] as? Int).map { "\($0) 张专辑" }]
             .compactMap { $0 }.joined(separator: " · ")
-        let intro = (artist["briefDesc"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return (NeteasePlaylist(id: id, name: name, cover: image(artist["picUrl"] ?? artist["img1v1Url"]), count: songs.count,
-                                kind: .artist, subtitle: counts, intro: intro), songs)
+                                kind: .artist, subtitle: counts), songs)
     }
 
     /// 专辑：名字、封面和里面的歌

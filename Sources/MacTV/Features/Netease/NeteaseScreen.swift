@@ -462,17 +462,6 @@ struct NeteaseScreen: View {
                     .shadow(color: .black.opacity(0.5), radius: 40, y: 24)
                 Text(page.list.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(2).padding(.top, 30)
                 Text(pageSubtitle(page)).font(.tv(.body)).foregroundStyle(.white.opacity(0.6)).lineLimit(1).padding(.top, 8)
-                // 歌手：几行简介（和哔哩哔哩 UP 主页上方的那块一样，只放一点信息）
-                if page.list.kind == .artist, !page.list.intro.isEmpty {
-                    Text(page.list.intro)
-                        .font(.system(size: 22))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .lineLimit(4)
-                        .lineSpacing(4)
-                        .frame(maxWidth: 440, alignment: .leading)
-                        .padding(.top, 16)
-                        .transition(.opacity)
-                }
                 // 一横排圆形图标；选中哪个，哪个拉长、把字显示出来
                 HStack(spacing: 14) {
                     ForEach(Array(store.pageButtons.enumerated()), id: \.offset) { index, button in
@@ -485,19 +474,26 @@ struct NeteaseScreen: View {
             .frame(width: 460, alignment: .leading)
             .padding(.top, pageTop)
 
+            let highlightY = CGFloat(page.index) * songHeight + 4
+            let showHighlight = listActive && !page.songs.isEmpty
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(.white)
                     .frame(height: songHeight - 8)
-                    .offset(y: CGFloat(page.index) * songHeight + 4)
-                    .opacity(listActive && !page.songs.isEmpty ? 1 : 0)
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(lo..<hi, id: \.self) { index in
-                        songRow(page.songs[index], number: index + 1, focused: listActive && index == page.index)
-                            .onTapGesture { store.tapSong(index) }
+                    .offset(y: highlightY)
+                    .opacity(showHighlight ? 1 : 0)
+                    .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { showHighlight ? ["song": $0] : [:] }
+                songRows(page, lo, hi, dark: false)
+                // 同一份列表再画一遍黑字，只在白色高亮那一块露出来：高亮滑到哪，黑字就在哪，
+                // 连按时也不会出现白底白字、暗底黑字一闪而过
+                songRows(page, lo, hi, dark: true)
+                    .mask(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .frame(height: songHeight - 8)
+                            .offset(y: highlightY)
                     }
-                }
-                .padding(.top, CGFloat(lo) * songHeight)
+                    .opacity(showHighlight ? 1 : 0)
+                    .allowsHitTesting(false)
             }
             .padding(.top, 44)   // 给顶上的淡出留出位置：第一首歌选中时，白色高亮不会被淡掉一截
             .offset(y: shift)
@@ -550,7 +546,22 @@ struct NeteaseScreen: View {
         .animation(Motion.focus, value: focused)
     }
 
-    private func songRow(_ song: NeteaseSong, number: Int, focused: Bool) -> some View {
+    /// 歌单里看得见的那几十行。dark = 高亮那一层用的黑字版本
+    private func songRows(_ page: NeteaseStore.Page, _ lo: Int, _ hi: Int, dark: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(lo..<hi, id: \.self) { index in
+                if dark {
+                    songRow(page.songs[index], number: index + 1, dark: true)
+                } else {
+                    songRow(page.songs[index], number: index + 1, dark: false)
+                        .onTapGesture { store.tapSong(index) }
+                }
+            }
+        }
+        .padding(.top, CGFloat(lo) * songHeight)
+    }
+
+    private func songRow(_ song: NeteaseSong, number: Int, dark: Bool) -> some View {
         let current = store.current == song
         return HStack(spacing: 24) {
             ZStack {
@@ -562,7 +573,7 @@ struct NeteaseScreen: View {
             }
             .frame(width: 60)
             VStack(alignment: .leading, spacing: 4) {
-                Text(song.name).font(.system(size: 30, weight: focused ? .semibold : .medium)).lineLimit(1)
+                Text(song.name).font(.system(size: 30, weight: .semibold)).lineLimit(1)
                 Text(song.artist).font(.system(size: 23, weight: .regular)).opacity(0.6).lineLimit(1)
             }
             Spacer(minLength: 20)
@@ -571,12 +582,11 @@ struct NeteaseScreen: View {
                 Text(neteaseClockText(Double(song.duration))).font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.55)
             }
         }
-        .foregroundStyle(focused ? .black : .white.opacity(current ? 1 : 0.85))
+        .foregroundStyle(dark ? .black : .white.opacity(current ? 1 : 0.85))
         .padding(.horizontal, 22)
         .frame(height: songHeight - 8)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
-        .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { focused ? ["song": $0] : [:] }
     }
 
     // MARK: 正在播放
@@ -711,7 +721,6 @@ struct NeteaseScreen: View {
         .opacity(open ? 1 : 0)
         .allowsHitTesting(open)
         .animation(Self.slide, value: open)
-        .animation(Motion.focus, value: focus)
     }
 
     /// 音质：从屏幕上方滑下来的一行，白色高亮左右滑。和哔哩哔哩的清晰度是同一种做法。
