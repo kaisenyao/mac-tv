@@ -628,6 +628,16 @@ struct NeteaseScreen: View {
                         .frame(width: 600, height: 600)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .shadow(color: .black.opacity(0.55), radius: 50, y: 30)
+                        // 暂停：封面轻轻缩小，正中间浮出一个暂停图标（和哔哩哔哩播放器暂停时同一种）
+                        .overlay {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 76, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 180, height: 180)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .scaleEffect(store.paused ? 1 : 0.8)
+                                .opacity(store.paused ? 1 : 0)
+                        }
                         .scaleEffect(store.paused ? 0.9 : 1)
                         .animation(Self.slide, value: store.paused)
                         .contentShape(Rectangle())
@@ -899,18 +909,10 @@ struct NeteaseProgress: View {
             HStack {
                 Text(neteaseClockText(clock.time))
                 Spacer()
-                // 中间：放着的时候是这首歌实际在放的音质，暂停时是暂停图标，两者交叉淡变
-                ZStack {
-                    if store.paused {
-                        Image(systemName: "pause.fill").transition(.opacity)
-                    } else if !store.actualLevel.isEmpty {
-                        Text(NeteaseStore.name(of: store.actualLevel)).transition(.opacity)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { store.tapPlayPause() }
-                .animation(.easeInOut(duration: 0.3), value: store.paused)
-                .animation(.easeInOut(duration: 0.3), value: store.actualLevel)
+                // 中间：一直是这首歌实际在放的音质（暂停图标在封面上）
+                Text(NeteaseStore.name(of: store.actualLevel))
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.3), value: store.actualLevel)
                 Spacer()
                 Text("-" + neteaseClockText(max(0, clock.duration - clock.time)))
             }
