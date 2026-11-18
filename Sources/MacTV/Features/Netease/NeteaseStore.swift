@@ -877,9 +877,9 @@ final class NeteaseStore: ObservableObject {
             }
             // 选的那一档这首歌（或这个账号）没有：服务器给了它能给的最高一档，说一声，免得像是没反应
             if resumeAt != nil, found.level != level {
-                // 分清是账号的会员等级不够，还是别的原因
-                let blocked = !accountTop.isEmpty && Self.rank(level) > Self.rank(accountTop)
-                tv?.showToast(blocked ? "你的会员最高能听「\(Self.name(of: accountTop))」" : "只拿到了「\(Self.name(of: found.level))」")
+                // 拿到的已经是这首歌自己的最高一档：是歌没有更高的；否则就是没拿到
+                let songMax = !songTop.isEmpty && Self.rank(found.level) >= Self.rank(songTop)
+                tv?.showToast(songMax ? "这首歌最高是「\(Self.name(of: found.level))」" : "只拿到了「\(Self.name(of: found.level))」")
             }
             let same = found.level == actualLevel && resumeAt != nil && player.currentItem != nil
             actualLevel = found.level

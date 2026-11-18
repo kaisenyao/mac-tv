@@ -261,8 +261,11 @@ enum NeteaseAPI {
         return status == kCCSuccess ? Data(output.prefix(length)) : nil
     }
 
+    /// 登录信息的名字里有下划线（MUSIC_U、__csrf）：下划线一编码，服务器就认不出登录，按未登录处理
+    private static let cookieSafe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+
     private static func escape(_ text: String) -> String {
-        text.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? text
+        text.addingPercentEncoding(withAllowedCharacters: cookieSafe) ?? text
     }
 
     private static func clientCall(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
