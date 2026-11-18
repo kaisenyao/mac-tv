@@ -450,7 +450,7 @@ final class NeteaseStore: ObservableObject {
         guard self.account == account else { loading = false; return }
         recentSongs = recent
         myLists = lists
-        liked = likedIDs
+        if let likedIDs { liked = likedIDs }   // 取失败就保留原来的红心，不清空
         // 正停在某一排上时，更新内容不把焦点挪走（按这一排的名字找回去）
         let built = build(suggested, charts)
         let focusedID = home.indices.contains(rowIndex) ? home[rowIndex].id : nil

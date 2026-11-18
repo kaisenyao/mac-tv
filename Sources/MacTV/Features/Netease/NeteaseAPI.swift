@@ -117,7 +117,16 @@ enum NeteaseAPI {
         UserDefaults.standard.removeObject(forKey: storeKey)
     }
 
+    /// 读取。登录以后走客户端接口：实测（复用连接，交替各测 16 轮）和网页版一样快，差距在 ±20 毫秒的波动以内；
+    /// 但只连一个地址，启动和闲置后的第一次只握手一次（一次握手 1.5 秒左右），而且不会被风控拦。
+    /// 客户端没给出结果时再试网页版；没登录时只能走网页版。
     private static func call(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
+        if hasLogin, let result = await clientCall(path, payload), (result["code"] as? Int) == 200 { return result }
+        return await webCall(path, payload)
+    }
+
+    /// 网页版接口（music.163.com 网页在用的那套）
+    private static func webCall(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
         var body = payload
         let token = csrf
         body["csrf_token"] = token
@@ -137,17 +146,9 @@ enum NeteaseAPI {
         if sent["MUSIC_U"] != nil { sent["os"] = "pc" } else { sent["os"] = nil }
         if !sent.isEmpty { request.setValue(sent.map { "\($0.key)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie") }
         request.httpBody = Data("params=\(params)&encSecKey=\(encryptedSecondKey)".utf8)
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else {
-            return hasLogin ? await clientCall(path, payload) : nil
-        }
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
         remember(response, for: url)
-        let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        // 读取平时走网页版（快一点）；一旦被风控拦下，登录了的话就改走客户端接口再试一次
-        if let code = result?["code"] as? Int, [-460, -462, 405, 406].contains(code), hasLogin,
-           let retry = await clientCall(path, payload), (retry["code"] as? Int) == 200 {
-            return retry
-        }
-        return result
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     private static func image(_ value: Any?, size: Int = 500) -> URL? {
@@ -325,7 +326,7 @@ enum NeteaseAPI {
         // 先走客户端那套接口（网页版最高只给到无损）；它不通再退回网页版
         var list = (await clientCall("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
         if list?.first?["url"] as? String == nil {
-            list = (await call("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
+            list = (await webCall("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
         }
         let item = list?.first
         guard let item, let text = item["url"] as? String, !text.isEmpty,
@@ -464,12 +465,17 @@ enum NeteaseAPI {
     private static func write(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
         let client = await clientCall(path, payload)
         if done(client) { return client }
-        return await call(path, payload) ?? client
+        return await webCall(path, payload) ?? client
     }
 
     /// 我喜欢的歌（只有编号）
-    static func likedSongs(user: Int) async -> Set<Int> {
-        Set((await call("song/like/get", ["uid": user]))?["ids"] as? [Int] ?? [])
+    /// 实测这个接口大约三次里失败一次（两套接口都一样）：失败就稍等再试，最多三次。全失败返回 nil（不当成"一首都没喜欢"）
+    static func likedSongs(user: Int) async -> Set<Int>? {
+        for attempt in 0..<3 {
+            if let ids = (await call("song/like/get", ["uid": user]))?["ids"] as? [Int] { return Set(ids) }
+            try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
+        }
+        return nil
     }
 
     static func setLiked(song: Int, _ on: Bool) async -> Bool {
