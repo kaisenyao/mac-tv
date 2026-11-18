@@ -77,6 +77,7 @@ final class NeteaseStore: ObservableObject {
         case like(NeteaseSong), addTo(NeteaseSong), pick(NeteasePlaylist, NeteaseSong), create(NeteaseSong)
         case subscribe(NeteasePlaylist), cycleMode, logout
         case artist(NeteaseSong), goArtist(NeteaseArtist), album(NeteaseSong)
+        case calibrate, lyricsEarlier, lyricsLater, lyricsReset
         case rename(NeteasePlaylist), delete(NeteasePlaylist), confirmDelete(NeteasePlaylist), cancel
         case confirmLogout, confirmUnsubscribe(NeteasePlaylist)
     }
@@ -129,6 +130,22 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var lyricsShown = true
     /// 现在这份歌词属于哪首歌（还没载入时为 0）：切歌时旧歌词先淡出，新歌词到了再淡入
     @Published private(set) var lyricsSong = 0
+    /// 这首歌的歌词手动校准了多少秒（负数 = 歌词提前，正数 = 推后）。按歌记在本机，下次放这首自动用上
+    @Published private(set) var lyricShift = 0.0
+    private static let shiftKey = "neteaseLyricShift"
+    private static func savedShift(_ song: Int) -> Double {
+        (UserDefaults.standard.dictionary(forKey: shiftKey) as? [String: Double])?[String(song)] ?? 0
+    }
+    private func setShift(_ value: Double) {
+        guard let current else { return }
+        lyricShift = (value * 4).rounded() / 4
+        var all = UserDefaults.standard.dictionary(forKey: Self.shiftKey) as? [String: Double] ?? [:]
+        all[String(current.id)] = lyricShift == 0 ? nil : lyricShift
+        UserDefaults.standard.set(all, forKey: Self.shiftKey)
+        // 换句的判断马上按新的校准重算一次
+        let line = (lyrics.lastIndex { $0.time + lyricShift <= time + 0.25 }) ?? -1
+        if line != lyricIndex { lyricIndex = line }
+    }
 
     /// 音质档位。选了账号或这首歌没有的档位，服务器会给它能给的最高一档，actualLevel 是实际拿到的。
     struct Quality: Hashable { let level: String; let name: String }
@@ -199,7 +216,7 @@ final class NeteaseStore: ObservableObject {
                 if abs(seconds - self.clock.time) >= step || seconds < self.clock.time { self.clock.time = seconds }
                 let position = seconds
                 if let total = self.player.currentItem?.duration.seconds, total.isFinite, total > 0, total != self.clock.duration { self.clock.duration = total }
-                let line = (self.lyrics.lastIndex { $0.time <= position + 0.25 }) ?? -1
+                let line = (self.lyrics.lastIndex { $0.time + self.lyricShift <= position + 0.25 }) ?? -1
                 if line != self.lyricIndex { self.lyricIndex = line }
             }
         }
@@ -838,9 +855,10 @@ final class NeteaseStore: ObservableObject {
         seek(by: max(0, min(1, fraction)) * duration - time)
     }
 
+    /// 点某句歌词跳到那句（算上这首歌的歌词校准）
     func seek(toTime target: Double) {
         guard duration > 0 else { return }
-        seek(by: target - time)
+        seek(by: target + lyricShift - time)
     }
 
     func tapQuality(_ index: Int) {
@@ -864,6 +882,8 @@ final class NeteaseStore: ObservableObject {
         if !song.artists.isEmpty { items.append(MenuItem(symbol: "person.crop.circle", title: "查看歌手", action: .artist(song))) }
         if song.album > 0 { items.append(MenuItem(symbol: "square.stack", title: "查看专辑", action: .album(song))) }
         if withMode { items.append(MenuItem(symbol: mode.symbol, title: mode.title, action: .cycleMode)) }
+        // 歌词和歌没对齐时手动校准（只在播放界面、有歌词的歌上）
+        if withMode, !lyrics.isEmpty { items.append(MenuItem(symbol: "text.alignleft", title: "校准歌词", action: .calibrate)) }
         return items
     }
 
@@ -977,6 +997,17 @@ final class NeteaseStore: ObservableObject {
                 withAnimation(Motion.focus) { menu = nil }
                 toggleSubscribed(list)
             }
+        case .calibrate:
+            if let menu { menuParents.append(menu) }
+            withAnimation(Motion.focus) { menu = calibrationMenu(index: 0) }
+        case .lyricsEarlier, .lyricsLater, .lyricsReset:
+            // 菜单不收起：一边看歌词一边按，按到对齐为止
+            switch action {
+            case .lyricsEarlier: setShift(lyricShift - 0.5)
+            case .lyricsLater: setShift(lyricShift + 0.5)
+            default: setShift(0)
+            }
+            withAnimation(Motion.focus) { menu = calibrationMenu(index: menu?.index ?? 0) }
         case .cycleMode:
             let all = PlayMode.allCases
             setMode(all[((all.firstIndex(of: mode) ?? 0) + 1) % all.count])
@@ -1011,6 +1042,15 @@ final class NeteaseStore: ObservableObject {
     }
 
     /// 新歌单的名字输好了：建歌单，把那首歌放进去
+    /// 校准歌词那一层：标题是现在校准了多少
+    private func calibrationMenu(index: Int) -> Menu {
+        let title = lyricShift == 0 ? "歌词没有校准" : String(format: lyricShift < 0 ? "歌词提前 %.1f 秒" : "歌词推后 %.1f 秒", abs(lyricShift))
+        var items = [MenuItem(symbol: "backward", title: "提前 0.5 秒", action: .lyricsEarlier),
+                     MenuItem(symbol: "forward", title: "推后 0.5 秒", action: .lyricsLater)]
+        if lyricShift != 0 { items.append(MenuItem(symbol: "arrow.uturn.backward", title: "恢复", action: .lyricsReset)) }
+        return Menu(anchor: .nowPlaying, items: items, index: min(index, items.count - 1), title: title)
+    }
+
     /// 喜欢 / 取消喜欢在界面上的样子：心形、"我喜欢的音乐"里的歌（缓存和开着的歌单页）、首页上它的歌数
     private func setLiked(_ song: NeteaseSong, _ on: Bool) {
         if on { liked.insert(song.id) } else { liked.remove(song.id) }
@@ -1149,6 +1189,7 @@ final class NeteaseStore: ObservableObject {
             player.pause()
             lyrics = []
             lyricsSong = 0
+            lyricShift = Self.savedShift(song.id)
             lyricIndex = -1
             Task { @MainActor in
                 // 下一首提前取好的歌词直接用

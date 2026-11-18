@@ -783,7 +783,7 @@ struct NeteaseScreen: View {
                         Group {
                             // 只有正在唱、又有逐字时间的那一句跟着播放进度刷新；其余的句子是静的
                             if current, !line.words.isEmpty {
-                                NeteaseKaraokeLine(line: line, clock: store.clock, playing: !store.paused && store.nowPlayingVisible)
+                                NeteaseKaraokeLine(line: line, clock: store.clock, playing: !store.paused && store.nowPlayingVisible, shift: store.lyricShift)
                             } else {
                                 Text(line.text).foregroundStyle(.white)
                             }
@@ -892,10 +892,12 @@ struct NeteaseKaraokeLine: View {
     let line: NeteaseLyricLine
     let clock: NeteaseClock
     let playing: Bool
+    /// 这首歌的歌词校准（秒）
+    var shift = 0.0
 
     var body: some View {
         TimelineView(.animation(minimumInterval: nil, paused: !playing)) { context in
-            let now = clock.estimate(at: context.date, playing: playing)
+            let now = clock.estimate(at: context.date, playing: playing) - shift
             line.words.reduce(Text("")) { text, word in
                 let span = max(0.3, min(word.duration, 0.9))
                 let linear = max(0, min(1, (now + 0.05 - word.time) / span))

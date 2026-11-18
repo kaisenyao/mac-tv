@@ -218,19 +218,31 @@ enum NeteaseAPI {
         if byWord.count > 2 { return byWord }
         let text = (data?["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
         var lines: [NeteaseLyricLine] = []
+        // 有的歌词文件开头写着 [offset:毫秒]：整份歌词要提前（正数）或推后（负数）这么多
+        var offset = 0.0
         for raw in text.split(separator: "\n") {
-            // 一行开头可以有一个或几个 [分:秒] 标记，后面是这句词
-            var rest = Substring(raw)
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("[offset:"), let close = trimmed.firstIndex(of: "]") {
+                offset = (Double(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 8)..<close].trimmingCharacters(in: .whitespaces)) ?? 0) / 1000
+                continue
+            }
+            // 一行开头可以有一个或几个时间标记，后面是这句词。时间有 [分:秒.百分秒] 和 [分:秒:百分秒] 两种写法
+            var rest = Substring(trimmed)
             var times: [Double] = []
             while rest.hasPrefix("["), let close = rest.firstIndex(of: "]") {
                 let parts = rest[rest.index(after: rest.startIndex)..<close].split(separator: ":")
-                if parts.count == 2, let minutes = Double(parts[0]), let seconds = Double(parts[1]) { times.append(minutes * 60 + seconds) }
+                if parts.count == 2, let minutes = Double(parts[0]), let seconds = Double(parts[1]) {
+                    times.append(minutes * 60 + seconds)
+                } else if parts.count == 3, let minutes = Double(parts[0]), let seconds = Double(parts[1]), let fraction = Double(parts[2]) {
+                    times.append(minutes * 60 + seconds + fraction / (parts[2].count >= 3 ? 1000 : 100))
+                }
                 rest = rest[rest.index(after: close)...]
             }
             let words = rest.trimmingCharacters(in: .whitespaces)
             guard !words.isEmpty else { continue }
             for time in times { lines.append(NeteaseLyricLine(time: time, text: words)) }
         }
+        if offset != 0 { lines = lines.map { NeteaseLyricLine(time: max(0, $0.time - offset), text: $0.text, words: $0.words) } }
         // 没有词的歌，网易云会给一句"纯音乐，请欣赏"之类的话：那不是歌词，当作没有
         let real = lines.filter { !$0.text.contains("纯音乐") }
         return real.count > 2 ? real.sorted { $0.time < $1.time } : []
