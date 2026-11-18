@@ -376,7 +376,7 @@ struct NeteaseScreen: View {
         switch list.kind {
         case .artist: "歌手"
         case .album: [list.subtitle, list.count > 0 ? "\(list.count) 首" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
-        case .playlist: list.count > 0 ? "\(list.count) 首" : nil
+        case .playlist, .recent: list.count > 0 ? "\(list.count) 首" : nil
         }
     }
 
@@ -537,7 +537,7 @@ struct NeteaseScreen: View {
         switch page.list.kind {
         case .artist: return page.list.subtitle.isEmpty ? "歌手" : page.list.subtitle
         case .album: return [page.list.subtitle, count > 0 ? "\(count) 首" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
-        case .playlist: return count > 0 ? "\(count) 首" : " "
+        case .playlist, .recent: return count > 0 ? "\(count) 首" : " "
         }
     }
 

@@ -100,6 +100,14 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var liked: Set<Int> = []
     /// 我的歌单（自己建的和收藏的），第一个是"我喜欢的音乐"
     private(set) var myLists: [NeteasePlaylist] = []
+    /// 最近播放的歌（"我的歌单"最前面那张卡片点进去就是它）
+    private var recentSongs: [NeteaseSong] = []
+    private var recentCard: NeteasePlaylist? {
+        guard let first = recentSongs.first else { return nil }
+        return NeteasePlaylist(id: 0, name: "最近播放", cover: first.cover, count: recentSongs.count, kind: .recent)
+    }
+    /// "我的歌单"那一排：最近播放在最前面，然后是我喜欢的音乐、自己建的、收藏的
+    private var listItems: [Item] { (recentCard.map { [$0] } ?? []).map(Item.playlist) + myLists.map(Item.playlist) }
     /// 取过的歌单里的歌：再进同一个歌单不用再等（海外到网易云每次往返要一两秒）
     private var songCache: [Int: [NeteaseSong]] = [:]
     @Published private(set) var rowIndex = 0
@@ -423,20 +431,24 @@ final class NeteaseStore: ObservableObject {
         async let picks = NeteaseAPI.recommendedPlaylists()
         async let tops = NeteaseAPI.charts()
         async let hearts = NeteaseAPI.likedSongs(user: account.id)
+        async let played = NeteaseAPI.recentSongs()
         let lists = await NeteaseAPI.playlists(user: account.id)
         let recommended = await daily
         func build(_ suggested: [NeteasePlaylist], _ charts: [NeteasePlaylist]) -> [Row] {
             var built: [Row] = []
             if !recommended.isEmpty { built.append(Row(id: "daily", title: "每日推荐", items: recommended.map(Item.song))) }
             if !suggested.isEmpty { built.append(Row(id: "picks", title: "推荐歌单", items: suggested.map(Item.playlist))) }
-            if !lists.isEmpty { built.append(Row(id: "lists", title: "我的歌单", items: lists.map(Item.playlist))) }
+            if !lists.isEmpty || !recentSongs.isEmpty {
+                built.append(Row(id: "lists", title: "我的歌单", items: (recentCard.map { [$0] } ?? []).map(Item.playlist) + lists.map(Item.playlist)))
+            }
             if !charts.isEmpty { built.append(Row(id: "charts", title: "排行榜", items: charts.map(Item.playlist))) }
             return built
         }
         // 先到的先摆出来，其余几排随后补上
         if home.isEmpty { withAnimation(Motion.navigate) { home = build([], []) } }
-        let (suggested, charts, likedIDs) = await (picks, tops, hearts)
+        let (suggested, charts, likedIDs, recent) = await (picks, tops, hearts, played)
         guard self.account == account else { loading = false; return }
+        recentSongs = recent
         myLists = lists
         liked = likedIDs
         // 正停在某一排上时，更新内容不把焦点挪走（按这一排的名字找回去）
@@ -461,7 +473,7 @@ final class NeteaseStore: ObservableObject {
 
     /// 打开一个歌单（或歌手、专辑）。取过的直接摆出来，同时在后台更新一遍。
     private func openPlaylist(_ list: NeteasePlaylist) {
-        let cached = list.kind == .playlist ? songCache[list.id] : nil
+        let cached = list.kind == .playlist ? songCache[list.id] : (list.kind == .recent ? recentSongs : nil)
         var opened = Page(list: list, songs: cached ?? [], loading: cached == nil)
         if let current, let index = opened.songs.firstIndex(of: current) { opened.index = index }
         withAnimation(Motion.navigate) { page = opened }
@@ -472,6 +484,9 @@ final class NeteaseStore: ObservableObject {
             case .playlist: songs = await NeteaseAPI.songs(playlist: list.id)
             case .artist: if let found = await NeteaseAPI.artist(list.id) { info = found.info; songs = found.songs }
             case .album: if let found = await NeteaseAPI.album(list.id) { info = found.info; songs = found.songs }
+            case .recent:
+                songs = await NeteaseAPI.recentSongs()
+                if !songs.isEmpty { recentSongs = songs }
             }
             guard let page, page.list.id == list.id, page.list.kind == list.kind else { return }
             if list.kind == .playlist, !songs.isEmpty { songCache[list.id] = songs }
@@ -916,6 +931,8 @@ final class NeteaseStore: ObservableObject {
         } else if case .song(let song)? = focused {
             opened = Menu(anchor: .card, items: songItems(song, withMode: false))
         } else if case .playlist(let list)? = focused {
+            // 收藏、改名、删除都只对歌单有用：专辑、歌手、最近播放没有这个菜单
+            guard list.kind == .playlist else { return false }
             if list.creator != 0, list.creator == account?.id {
                 // 自己建的歌单：改名、删除。"我喜欢的音乐"两样都不行
                 guard list.id != myLists.first?.id else { return false }
@@ -1115,7 +1132,7 @@ final class NeteaseStore: ObservableObject {
 
     /// 首页"我的歌单"那一排换成 myLists 现在的样子（自己建的在前，收藏的在后）
     private func replaceListsRow() {
-        let row = Row(id: "lists", title: "我的歌单", items: myLists.map(Item.playlist))
+        let row = Row(id: "lists", title: "我的歌单", items: listItems)
         withAnimation(Motion.navigate) {
             if let index = home.firstIndex(where: { $0.id == "lists" }) {
                 home[index] = row

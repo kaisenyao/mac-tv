@@ -39,7 +39,7 @@ struct NeteaseLyricLine: Hashable, Sendable {
 
 struct NeteasePlaylist: Hashable, Sendable {
     /// 歌单页也用来显示歌手的热门歌曲、专辑里的歌
-    enum Kind: Hashable, Sendable { case playlist, artist, album }
+    enum Kind: Hashable, Sendable { case playlist, artist, album, recent }
     let id: Int
     let name: String
     var cover: URL? = nil
@@ -427,6 +427,12 @@ enum NeteaseAPI {
     static func searchPlaylists(_ keyword: String) async -> [NeteasePlaylist] {
         let result = (await call("cloudsearch/pc", ["s": keyword, "type": 1000, "limit": 20, "offset": 0, "total": true]))?["result"] as? [String: Any]
         return (result?["playlists"] as? [[String: Any]] ?? []).compactMap(playlist)
+    }
+
+    /// 最近播放：按时间从新到旧，最多三百首。只有客户端接口给
+    static func recentSongs() async -> [NeteaseSong] {
+        let list = ((await clientCall("play-record/song/list", ["limit": 300]))?["data"] as? [String: Any])?["list"] as? [[String: Any]] ?? []
+        return list.compactMap { ($0["data"] as? [String: Any]).flatMap(song) }
     }
 
     // MARK: 歌手、专辑
