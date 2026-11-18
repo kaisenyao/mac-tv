@@ -513,7 +513,7 @@ struct BilibiliScreen: View {
                     // 只画焦点附近的卡片，一排几十张也不卡
                     if abs(column - focusedColumn) <= 6 {
                         card(item, focused: active && column == focusedColumn)
-                            .hoverLift()
+                            .pointerFocus { store.hoverCard(row: index, column: column) }
                             .onTapGesture {
                                 store.focus(row: index, column: column)
                                 store.activate()

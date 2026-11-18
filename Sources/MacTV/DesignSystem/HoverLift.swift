@@ -36,3 +36,25 @@ extension View {
     func hoverLift(scale: CGFloat = 1.04, brighten: Double = 0.06) -> some View { modifier(HoverLift(scale: scale, brighten: brighten)) }
     func hoverWash(radius: CGFloat = 18) -> some View { modifier(HoverWash(radius: radius)) }
 }
+
+/// 鼠标移到哪，焦点就到哪（和键盘移动是同一个焦点，屏幕上只有一个高亮）。
+/// 只有鼠标真的动了才算：焦点一移整排会跟着滑，滑过去的内容碰到静止的鼠标也会触发"移入"，那不算，不然会一直连锁滑下去。
+@MainActor
+enum PointerFocus {
+    private static var last = NSPoint(x: -1, y: -1)
+
+    static func moved() -> Bool {
+        let now = NSEvent.mouseLocation
+        defer { last = now }
+        return now != last
+    }
+}
+
+extension View {
+    /// 鼠标真的移进来时调用 action（用来把焦点挪过来）
+    func pointerFocus(_ action: @escaping @MainActor () -> Void) -> some View {
+        onHover { inside in
+            if inside, PointerFocus.moved() { action() }
+        }
+    }
+}

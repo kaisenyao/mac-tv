@@ -838,6 +838,35 @@ final class NeteaseStore: ObservableObject {
         jump(to: max(0, min(duration - 1, target)))
     }
 
+    // MARK: 鼠标移到哪，焦点就到哪（屏幕上只有一个高亮）
+
+    func hoverCard(row r: Int, column c: Int) {
+        guard menu == nil, !typing, page == nil, rows.indices.contains(r) else { return }
+        guard topFocus != nil || r != row || column(of: rows[r]) != c else { return }
+        withAnimation(Motion.focus) { topFocus = nil; rowIndex = r; columns[rows[r].id] = c }
+    }
+
+    func hoverSong(_ index: Int) {
+        guard menu == nil, !typing, let page, page.songs.indices.contains(index) else { return }
+        guard topFocus != nil || page.button != nil || page.index != index else { return }
+        withAnimation(Motion.focus) { topFocus = nil; self.page?.button = nil; self.page?.index = index }
+    }
+
+    func hoverPageButton(_ index: Int) {
+        guard menu == nil, !typing, page != nil, pageButtons.indices.contains(index), page?.button != index || topFocus != nil else { return }
+        withAnimation(Motion.focus) { topFocus = nil; page?.button = index }
+    }
+
+    func hoverQueue(_ index: Int) {
+        guard queueVisible, queue.indices.contains(index), queueFocus != index else { return }
+        withAnimation(Motion.focus) { queueFocus = index }
+    }
+
+    func hoverTop(_ item: TopItem) {
+        guard menu == nil, !typing, !nowPlayingVisible, topItems.contains(item), topFocus != item else { return }
+        withAnimation(Motion.focus) { topFocus = item }
+    }
+
     /// 鼠标移到菜单的某一项：白色高亮滑过去（菜单不会滚动，可以跟着鼠标走）
     func hoverMenu(_ index: Int) {
         guard let menu, menu.items.indices.contains(index), menu.index != index, naming == nil else { return }

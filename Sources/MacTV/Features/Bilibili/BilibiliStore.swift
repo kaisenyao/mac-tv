@@ -555,6 +555,20 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
+    /// 鼠标移到某张卡片上：焦点挪过去（和键盘是同一个焦点）
+    func hoverCard(row r: Int, column c: Int) {
+        guard !editing, cardMenu == nil, !accountMenuOpen, player.current == nil, rows.indices.contains(r) else { return }
+        guard headerFocused || accountFocused || r != row || column(of: rows[r]) != c else { return }
+        withAnimation(Motion.focus) {
+            headerFocused = false
+            accountFocused = false
+            upPage?.followFocused = false
+            setRow(r)
+            columns[rows[r].id] = c
+        }
+        warmFocused()
+    }
+
     func focus(row r: Int, column c: Int) {
         guard rows.indices.contains(r) else { return }
         withAnimation(Motion.focus) {

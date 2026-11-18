@@ -156,7 +156,7 @@ struct NeteaseScreen: View {
                     .background(focused ? Color.white : Color.white.opacity(0.12), in: Capsule())
                     .scaleEffect(focused ? 1.06 : 1)
                     .contentShape(Capsule())
-                    .hoverLift()
+                    .pointerFocus { store.hoverTop(.player) }
                     .onTapGesture { store.tapTop(.player) }
                 }
                 if store.page == nil {
@@ -168,7 +168,7 @@ struct NeteaseScreen: View {
                         .overlay(Circle().strokeBorder(.white.opacity(focused ? 1 : 0.2), lineWidth: focused ? 4 : 1.5))
                         .scaleEffect(focused ? 1.12 : 1)
                         .contentShape(Circle())
-                        .hoverLift(scale: 1.08)
+                        .pointerFocus { store.hoverTop(.account) }
                         .onTapGesture { store.tapTop(.account) }
                         .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { ["account": $0] }
                 }
@@ -203,7 +203,7 @@ struct NeteaseScreen: View {
         .scaleEffect(focused ? 1.06 : 1)
         .environment(\.colorScheme, store.editing ? .light : .dark)
         .contentShape(Capsule())
-        .hoverLift()
+        .pointerFocus { store.hoverTop(.search) }
         .onTapGesture { store.tapTop(.search) }
         .onChange(of: store.editing) { _, editing in typing = editing }
         .onChange(of: store.focusRequest) { _, _ in if store.editing { typing = true } }
@@ -408,7 +408,7 @@ struct NeteaseScreen: View {
                     if abs(column - focusedColumn) <= 8 {
                         // 滑出左边的那张淡掉：和整排滑动是同一个动画里一起发生的，步调一致
                         card(item, focused: active && column == focusedColumn)
-                            .hoverLift()
+                            .pointerFocus { store.hoverCard(row: index, column: column) }
                             .onTapGesture { store.focus(row: index, column: column); store.activate() }
                             .opacity(column < focusedColumn - 1 ? 0 : 1)
                     } else {
@@ -484,7 +484,7 @@ struct NeteaseScreen: View {
                 HStack(spacing: 14) {
                     ForEach(Array(store.pageButtons.enumerated()), id: \.offset) { index, button in
                         pageButton(button, list: page.list, focused: page.button == index && store.topFocus == nil)
-                            .hoverLift(scale: 1.08)
+                            .pointerFocus { store.hoverPageButton(index) }
                             .onTapGesture { store.pressPageButton(index) }
                     }
                 }
@@ -573,7 +573,7 @@ struct NeteaseScreen: View {
                     songRow(page.songs[index], number: index + 1, dark: true)
                 } else {
                     songRow(page.songs[index], number: index + 1, dark: false)
-                        .hoverWash()
+                        .pointerFocus { store.hoverSong(index) }
                         .onTapGesture { store.tapSong(index) }
                 }
             }
@@ -724,7 +724,7 @@ struct NeteaseScreen: View {
                         .frame(width: size, alignment: .leading)
                         .opacity(index < focus - 1 ? 0 : 1)
                         .contentShape(Rectangle())
-                        .hoverLift()
+                        .pointerFocus { store.hoverQueue(index) }
                         .onTapGesture { store.tapQueue(index) }
                     }
                 }
