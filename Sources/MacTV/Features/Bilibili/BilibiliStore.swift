@@ -304,8 +304,13 @@ final class BilibiliStore: ObservableObject {
         return key
     }
 
+    /// 读到的登录信息记一会儿：每个请求都去问网页那边要，既慢又要一直开着一个隐形网页
+    private var cookieCache: (value: String, at: Date)?
+
     /// 登录状态存在这个应用自己的网页数据里（和内置网页共用）；这里只把它带给请求。
-    private func cookieHeader() async -> String {
+    /// fresh = 不用记着的，现在去读（等登录、退出登录时用）
+    private func cookieHeader(fresh: Bool = false) async -> String {
+        if !fresh, let cached = cookieCache, Date().timeIntervalSince(cached.at) < 600 { return cached.value }
         guard let profile = tv?.profile else { return "" }
         let store = profile.websiteDataStore.httpCookieStore
         var cookies = await store.allCookies()
@@ -328,7 +333,12 @@ final class BilibiliStore: ObservableObject {
             // 默认数据仓库和系统的 cookie 存储是同一份文件，直接从那里读
             mine = (HTTPCookieStorage.shared.cookies ?? []).filter { $0.domain.hasSuffix("bilibili.com") }
         }
-        return mine.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        let value = mine.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        if !value.isEmpty {
+            cookieCache = (value, Date())
+            cookieWaker = nil   // 读到了就把隐形网页关掉，不让它一直占着一个网页进程
+        }
+        return value
     }
 
     /// 焦点落在哪个视频上，就提前把它准备好
@@ -597,6 +607,7 @@ final class BilibiliStore: ObservableObject {
                 }
                 tv.showToast("已退出登录")
                 self.account = nil
+                self.cookieCache = nil
                 self.content = [:]
                 self.reload()
             }
@@ -823,7 +834,8 @@ final class BilibiliStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled, let tv = self.tv else { return }
                 guard case .player(let service) = tv.mode, service.id == Self.loginID else { return }
-                if let account = await BiliAPI.account(cookie: await self.cookieHeader()) {
+                if let account = await BiliAPI.account(cookie: await self.cookieHeader(fresh: true)) {
+                    self.cookieCache = nil
                     tv.returnToBilibili()
                     tv.showToast("已登录：\(account.name)")
                     return

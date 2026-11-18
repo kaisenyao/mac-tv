@@ -61,10 +61,10 @@ final class BiliImageCache {
     private let cache = NSCache<NSURL, NSImage>()
     private var loading: [URL: Task<NSImage?, Never>] = [:]
 
-    /// 解码好的图很占内存（一张大封面两三兆）：按实际大小算，总共最多约 190 MB，超了先丢最久没用的
+    /// 解码好的图很占内存（一张大封面两三兆）：按实际大小算，总共最多 128 MB，超了先丢最久没用的
     private init() {
-        cache.countLimit = 400
-        cache.totalCostLimit = 190 * 1024 * 1024
+        cache.countLimit = 300
+        cache.totalCostLimit = 128 * 1024 * 1024
     }
 
     func image(for url: URL) -> NSImage? { cache.object(forKey: url as NSURL) }

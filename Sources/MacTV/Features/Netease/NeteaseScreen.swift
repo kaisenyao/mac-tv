@@ -34,6 +34,8 @@ struct NeteaseScreen: View {
     @FocusState private var typing: Bool
     @FocusState private var namingField: Bool
     @Namespace private var qualitySpace
+    /// 播放界面已经完全盖住了：下面的首页、歌单页先不画（看不见，不用跟着每次换歌、换句重算）
+    @State private var covered = false
 
     private let menuWidth: CGFloat = 360
     private let margin: CGFloat = 120
@@ -55,7 +57,7 @@ struct NeteaseScreen: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             backdrop
-            if store.account != nil {
+            if store.account != nil, !covered {
                 Group {
                     rows
                         .frame(width: canvas.width, height: canvas.height - rowsTop, alignment: .topLeading)
@@ -91,6 +93,17 @@ struct NeteaseScreen: View {
         }
         .animation(Self.slide, value: store.nowPlayingVisible)
         .animation(Self.slide, value: store.page?.list.id)
+        .onChange(of: store.nowPlayingVisible) { _, visible in
+            if visible {
+                // 等播放界面完全淡入（动画大约半秒）以后再收起下面
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(650))
+                    if store.nowPlayingVisible { covered = true }
+                }
+            } else {
+                covered = false
+            }
+        }
     }
 
     // MARK: 背景和顶栏
@@ -650,12 +663,13 @@ struct NeteaseScreen: View {
                 }
                 .frame(width: 600, alignment: .leading)
                 // 没有歌词的歌（纯音乐等）不留歌词那一栏，封面这一栏自己居中
-                if store.lyricsShown {
-                    lyricsColumn
-                        .frame(width: 800, height: 820, alignment: .leading)
-                        .transition(.opacity)
-                }
+                // 歌词那一栏一直占着位置：没有歌词时它淡出，整块往右平移半格，封面这一栏正好居中。
+                // 只是平移和淡入淡出（显卡直接搬），不重新排版，封面的大阴影不用一帧帧重画
+                lyricsColumn
+                    .frame(width: 800, height: 820, alignment: .leading)
+                    .opacity(store.lyricsShown ? 1 : 0)
             }
+            .offset(x: store.lyricsShown ? 0 : (800 + 130) / 2)
             // 音质栏、播放列表开着时，上面这些退到后面：轻微模糊、变暗
             .blur(radius: store.queueVisible ? 22 : 0)
             .opacity(store.queueVisible ? 0.75 : 1)
@@ -746,7 +760,7 @@ struct NeteaseScreen: View {
                     let focused = index == store.qualityIndex
                     Text(quality.name)
                         .font(.tv(.callout, emphasized: focused))
-                        .foregroundStyle(focused ? .black : .white.opacity(quality.level == store.preferredLevel ? 1 : 0.7))
+                        .foregroundStyle(focused ? .black : .white.opacity(quality.level == store.actualLevel ? 1 : 0.7))
                         .padding(.horizontal, 28)
                         .frame(height: 64)
                         .background {
@@ -933,7 +947,7 @@ func neteaseClockText(_ seconds: Double) -> String {
 }
 
 /// 正在播放的标记：在放的时候是几根上下起伏的竖条（像声波），暂停时是一个暂停图标。
-/// active = 现在看得见：被盖住、收起来的时候竖条停住不动，不白白每秒算三十次
+/// active = 现在看得见：被盖住、收起来的时候竖条停住不动，不白白每秒算二十次
 struct NeteaseWave: View {
     let playing: Bool
     var active = true
@@ -948,7 +962,7 @@ struct NeteaseWave: View {
             }
             .frame(width: size, height: size)
         } else if playing {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+            TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 HStack(alignment: .center, spacing: size * 0.09) {
                     ForEach(0..<5, id: \.self) { bar in
