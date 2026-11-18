@@ -62,12 +62,23 @@ final class BilibiliStore: ObservableObject {
 
     /// 正在看的某个 UP 主的主页（从搜索结果或卡片菜单进来）。它盖在当前这一页上，按 Esc 回去。
     /// 关注按钮在页面上方、名字旁边（第一排再按上才到），不放在视频那一排里，免得误触。
+    /// 进来时焦点在三个排序上（最新发布 / 最多播放 / 最多收藏），上面是头像和关注；
+    /// 往下到了视频（browsing），上半屏就和别的页一样换成视频的大标题。
     struct UpPage {
+        enum Sort: Int, CaseIterable {
+            case latest, plays, favorites
+            var title: String { ["最新发布", "最多播放", "最多收藏"][rawValue] }
+            var order: String { ["pubdate", "click", "stow"][rawValue] }
+        }
         var user: BiliUser
         var following = false
         var rows: [Row] = []
         var row = 0
         var loading = true
+        var sort = Sort.latest
+        var sortFocused = true
+        var browsing = false
+        var lists: [Sort: [BiliVideo]] = [:]
         /// 焦点在关注按钮上；armed = 已经按过一次"取消关注"，再按一次才真的取消
         var followFocused = false
         var armed = false
@@ -117,7 +128,7 @@ final class BilibiliStore: ObservableObject {
     /// 这一排选中的是第几个（内容被刷新变短时不会越界）
     func column(of row: Row) -> Int { max(0, min(columns[row.id] ?? 0, row.items.count - 1)) }
     var focused: Item? {
-        guard !headerFocused, !accountFocused, upPage?.followFocused != true,
+        guard !headerFocused, !accountFocused, upPage?.followFocused != true, upPage?.browsing != false,
               rows.indices.contains(row), rows[row].items.indices.contains(column) else { return nil }
         return rows[row].items[column]
     }
@@ -191,7 +202,21 @@ final class BilibiliStore: ObservableObject {
                 async let picks = BiliAPI.recommended(cookie: cookie)
                 async let hot = BiliAPI.popular(cookie: cookie)
                 let (history, recommended, popular) = await (recent, picks, hot)
-                add("continue", "继续观看", history.filter { $0.progress != -1 })
+                // 历史记录不带播放数：给"继续观看"最前面的几个补上（补不到就不显示，不影响别的）
+                var unfinished = history.filter { $0.progress != -1 }
+                if let key = await currentSigningKey(cookie: cookie) {
+                    let head = Array(unfinished.prefix(8))
+                    let counts = await withTaskGroup(of: (String, Int).self) { group in
+                        for video in head {
+                            group.addTask { (video.bvid, await BiliAPI.views(bvid: video.bvid, key: key, cookie: cookie)) }
+                        }
+                        var all: [String: Int] = [:]
+                        for await (bvid, count) in group { all[bvid] = count }
+                        return all
+                    }
+                    for index in unfinished.indices { if let count = counts[unfinished[index].bvid], count > 0 { unfinished[index].views = count } }
+                }
+                add("continue", "继续观看", unfinished)
                 add("recommended", "推荐", recommended)
                 add("popular", "热门", popular)
                 if built.isEmpty { self.failedTabs.insert(.home) }
@@ -367,9 +392,26 @@ final class BilibiliStore: ObservableObject {
         if upPage?.followFocused == true {
             switch command {
             case .select: toggleFollow()
-            case .move(.down): if !rows.isEmpty { withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false } }
+            case .move(.down): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; upPage?.sortFocused = true }
             case .move(.up): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; accountFocused = true }
             case .move(.left): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; headerFocused = true }
+            case .back: withAnimation(Motion.navigate) { upPage = nil }
+            default: break
+            }
+            return
+        }
+        if let page = upPage, page.sortFocused, !page.browsing, !headerFocused {
+            switch command {
+            case .move(.left):
+                if page.sort.rawValue > 0 { setSort(UpPage.Sort(rawValue: page.sort.rawValue - 1) ?? .latest) }
+                else { withAnimation(Motion.focus) { headerFocused = true } }
+            case .move(.right): if let next = UpPage.Sort(rawValue: page.sort.rawValue + 1) { setSort(next) }
+            case .move(.up): withAnimation(Motion.focus) { upPage?.sortFocused = false; upPage?.followFocused = true }
+            case .move(.down), .select:
+                if !rows.isEmpty {
+                    withAnimation(Motion.navigate) { upPage?.sortFocused = false; upPage?.browsing = true }
+                    warmFocused()
+                }
             case .back: withAnimation(Motion.navigate) { upPage = nil }
             default: break
             }
@@ -400,7 +442,10 @@ final class BilibiliStore: ObservableObject {
         case .move(.right): setColumn(column + 1)
         case .move(.up):
             if row > 0 { withAnimation(Motion.navigate) { setRow(row - 1) } }
-            else if upPage != nil { withAnimation(Motion.focus) { upPage?.followFocused = true } }   // UP 主页：第一排再按上到关注按钮
+            else if upPage != nil {   // UP 主页：第一排再按上，回到三个排序那里
+                player.warm(nil)
+                withAnimation(Motion.navigate) { upPage?.browsing = false; upPage?.sortFocused = true }
+            }
             else if tab == .search { withAnimation(Motion.focus) { editing = true } }   // 从结果往上回到输入框
             else { withAnimation(Motion.focus) { accountFocused = true } }               // 最上面一排再按上：到右上角的头像
         case .move(.down): if row < rows.count - 1 { withAnimation(Motion.navigate) { setRow(row + 1) } }
@@ -497,7 +542,11 @@ final class BilibiliStore: ObservableObject {
 
     func focus(row r: Int, column c: Int) {
         guard rows.indices.contains(r) else { return }
-        withAnimation(Motion.focus) { headerFocused = false; setRow(r); columns[rows[r].id] = c }
+        withAnimation(Motion.focus) {
+            headerFocused = false; accountFocused = false
+            if upPage != nil { upPage?.browsing = true; upPage?.sortFocused = false; upPage?.followFocused = false; upPage?.armed = false }
+            setRow(r); columns[rows[r].id] = c
+        }
     }
 
     func activate() {
@@ -572,17 +621,51 @@ final class BilibiliStore: ObservableObject {
             var uploads: [BiliVideo] = []
             if let key { uploads = await BiliAPI.uploads(mid: user.mid, name: full.name, key: key, cookie: cookie).videos }
             guard self.upPage?.user.mid == user.mid else { return }
-            // 视频都取到了才一次摆出来，焦点直接在第一个视频上，不会先落在别处再跳
             withAnimation(Motion.navigate) {
+                self.upPage?.lists[.latest] = uploads
                 self.upPage?.user = BiliUser(mid: user.mid, name: full.name, face: full.face ?? user.face,
                                              fans: max(full.fans, user.fans), videos: max(full.videos, user.videos))
                 self.upPage?.following = following
-                self.upPage?.rows = uploads.isEmpty ? [] : [Row(id: id, title: "投稿", items: uploads.map(Item.video))]
+                if self.upPage?.sort == .latest { self.showUploads(uploads, sort: .latest) }
                 self.upPage?.loading = false
-                if uploads.isEmpty { self.upPage?.followFocused = true }
             }
-            self.warmFocused()
         }
+    }
+
+    private func showUploads(_ videos: [BiliVideo], sort: UpPage.Sort) {
+        guard let mid = upPage?.user.mid else { return }
+        let id = "uppage-\(mid)-\(sort.rawValue)"
+        columns[id] = 0
+        upPage?.row = 0
+        upPage?.rows = videos.isEmpty ? [] : [Row(id: id, title: sort.title, items: videos.map(Item.video))]
+    }
+
+    /// 换排序：取过的直接换上，没取过的现取（取的时候先留着原来那排，不闪）
+    private func setSort(_ sort: UpPage.Sort) {
+        guard let page = upPage, page.sort != sort else { return }
+        withAnimation(Motion.focus) { upPage?.sort = sort }
+        if let cached = page.lists[sort] {
+            withAnimation(Motion.navigate) { showUploads(cached, sort: sort) }
+            return
+        }
+        let user = page.user
+        Task { @MainActor in
+            let cookie = await cookieHeader()
+            guard let key = await currentSigningKey(cookie: cookie) else { return }
+            let videos = await BiliAPI.uploads(mid: user.mid, name: user.name, key: key, cookie: cookie, order: sort.order).videos
+            guard self.upPage?.user.mid == user.mid else { return }
+            if !videos.isEmpty { self.upPage?.lists[sort] = videos }
+            if self.upPage?.sort == sort { withAnimation(Motion.navigate) { self.showUploads(videos, sort: sort) } }
+        }
+    }
+
+    func tapSort(_ index: Int) {
+        guard upPage != nil, let sort = UpPage.Sort(rawValue: index) else { return }
+        withAnimation(Motion.focus) {
+            headerFocused = false; accountFocused = false
+            upPage?.browsing = false; upPage?.followFocused = false; upPage?.armed = false; upPage?.sortFocused = true
+        }
+        setSort(sort)
     }
 
     /// 关注 / 取消关注。取消要再按一次确认。

@@ -73,6 +73,9 @@ enum Catalog {
         // 原生页面（Features/Bilibili），不是直接打开这个网址；见 TVController.open
         Service(id: "bilibili", name: "哔哩哔哩", kind: .web(URL(string: "https://www.bilibili.com")!),
                 icon: "bilibili.png", accent: "#FB7299", deep: "#3A0F1E"),
+        // 原生页面（Features/Netease）
+        Service(id: "netease", name: "网易云音乐", kind: .web(URL(string: "https://music.163.com")!),
+                icon: "netease.png", accent: "#E60026", deep: "#2B0206"),
         Service(id: "netflix", name: "Netflix", kind: .web(URL(string: "https://www.netflix.com/browse")!),
                 icon: "netflix.png", accent: "#E50914", deep: "#2B0204"),
         Service(id: "youtube", name: "YouTube", kind: .web(URL(string: "https://www.youtube.com/tv")!),

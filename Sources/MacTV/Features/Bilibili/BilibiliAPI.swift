@@ -8,7 +8,7 @@ struct BiliVideo: Identifiable, Hashable, Sendable {
     let cover: URL?
     let duration: Int
     let owner: String
-    let views: Int
+    var views: Int
     /// 分 P 的编号，取流要用；0 表示列表没给，播放前再查
     var cid: Int = 0
     /// 视频的数字编号（收藏要用）和 UP 主的编号（进他的主页、关注要用）；0 表示不知道
@@ -299,8 +299,9 @@ enum BiliAPI {
 
     /// 某个 UP 主最近的投稿，以及最新一条的发布时间（用来排谁在前面）。
     /// 这个接口要求带签名（见 signed），不带会被拒绝。
-    static func uploads(mid: Int, name: String, key: String, cookie: String) async -> (videos: [BiliVideo], latest: Int) {
-        let query = signed(["mid": "\(mid)", "ps": "30", "pn": "1", "order": "pubdate"], key: key)
+    /// order：pubdate 最新发布、click 最多播放、stow 最多收藏
+    static func uploads(mid: Int, name: String, key: String, cookie: String, order: String = "pubdate") async -> (videos: [BiliVideo], latest: Int) {
+        let query = signed(["mid": "\(mid)", "ps": "30", "pn": "1", "order": order], key: key)
         let data = await fetch("https://api.bilibili.com/x/space/wbi/arc/search?\(query)", cookie: cookie)
         let list = (data?["list"] as? [String: Any])?["vlist"] as? [[String: Any]] ?? []
         let videos = list.compactMap { item -> BiliVideo? in
@@ -309,6 +310,12 @@ enum BiliAPI {
                              owner: name, views: item["play"] as? Int ?? 0, aid: item["aid"] as? Int ?? 0, ownerMid: mid)
         }
         return (videos, list.first?["created"] as? Int ?? 0)
+    }
+
+    /// 一个视频的播放数（历史记录的接口不带这个数，要单独问）；问不到返回 0
+    static func views(bvid: String, key: String, cookie: String) async -> Int {
+        let data = await fetch("https://api.bilibili.com/x/web-interface/wbi/view?\(signed(["bvid": bvid], key: key))", cookie: cookie)
+        return (data?["stat"] as? [String: Any])?["view"] as? Int ?? 0
     }
 
     /// 签名用的密钥：从账号信息里给的两段字符串按固定顺序抽 32 个字符（哔哩哔哩网页自己的做法）

@@ -66,6 +66,8 @@ final class TVController: NSObject, ObservableObject {
     /// 哔哩哔哩的原生页面（自用分支）
     let bilibiliStore = BilibiliStore()
     @Published var bilibiliOpen = false
+    let neteaseStore = NeteaseStore()
+    @Published var neteaseOpen = false
     /// Who's watching: their apps and their sign-ins.
     @Published var profile: Profile
 
@@ -302,6 +304,10 @@ final class TVController: NSObject, ObservableObject {
             bilibiliStore.handle(command)
             return
         }
+        if neteaseOpen {
+            neteaseStore.handle(command)
+            return
+        }
         if movies != nil {
             handleMovies(command)
             return
@@ -462,8 +468,10 @@ final class TVController: NSObject, ObservableObject {
     // MARK: - Opening & Home
 
     func open(_ service: Service) {
-        if service.id == BilibiliStore.appID { openBilibili(); return }
+        if service.id == BilibiliStore.appID { closeNetease(); openBilibili(); return }
         if bilibiliOpen { closeBilibili() }   // 开别的应用时，哔哩哔哩不能还在后台放着
+        if service.id == NeteaseStore.appID { openNetease(); return }
+        closeNetease()
         playbackCoordinator.closeIINAPlayback()
         playbackCoordinator.closeExternalBrowser()
         var opened = ["app": analyticsAppName(service)]
@@ -500,6 +508,7 @@ final class TVController: NSObject, ObservableObject {
         playbackCoordinator.stopMoviePlayer()
         movies = nil
         closeBilibili()
+        closeNetease()
         playbackCoordinator.closeWebPlayback()
         mode = .launcher
         sheets.closeDismissible()

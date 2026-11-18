@@ -331,6 +331,24 @@ struct AppTile: View {
                     .frame(width: 126, height: 126)
                     .clipShape(RoundedRectangle(cornerRadius: 23, style: .continuous))
             }
+        } else if service.id == NeteaseStore.appID, let art = Icons.image(for: service) {
+            // 你给的红底白标图：铺满卡片，多出来的红边裁掉
+            Color(hex: "#E60012")
+                .overlay { Image(nsImage: art).resizable().interpolation(.high).aspectRatio(contentMode: .fill) }
+                .clipped()
+        } else if service.id == NeteaseStore.appID, let icon = NeteaseStore.appIcon {
+            // 本机网易云音乐的应用图标，四周用它的红色补满
+            ZStack {
+                Color(hex: "#E60012")
+                Image(nsImage: icon).resizable().interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 150, height: 150)
+            }
+        } else if service.id == NeteaseStore.appID {
+            ZStack {
+                LinearGradient(colors: [Color(hex: "#F5323C"), Color(hex: "#C20C0C")], startPoint: .top, endPoint: .bottom)
+                Image(systemName: "music.note").font(.system(size: 78, weight: .bold)).foregroundStyle(.white)
+            }
         } else if let tile = Icons.tile(for: service) {
             Image(nsImage: tile).resizable().interpolation(.high)
         } else {

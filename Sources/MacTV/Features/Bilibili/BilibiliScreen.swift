@@ -37,6 +37,7 @@ struct BilibiliScreen: View {
     private var rowsTop: CGFloat { searchPage ? 316 : 470 }
     private var searchPage: Bool { store.tab == .search && store.upPage == nil && focusedVideo == nil }
     private let pink = Color(hex: "#FB7299")
+    @Namespace private var sortSpace
     /// 粉色的 bilibili 字标（Icons/bilibili-logo.png，透明底）
     private static let logo: NSImage? = Bundle.main.url(forResource: "bilibili-logo.png", withExtension: nil, subdirectory: "Icons")
         .flatMap { NSImage(contentsOf: $0) }
@@ -266,8 +267,11 @@ struct BilibiliScreen: View {
                 Spacer()
             }
             Spacer().frame(height: searchPage ? 30 : 74)
-            if let page = store.upPage {
-                upHeader(page)
+            if let page = store.upPage, !page.browsing {
+                VStack(alignment: .leading, spacing: 36) {
+                    upHeader(page)
+                    sortBar(page)
+                }
             } else if searchPage {
                 searchField   // 搜索页的上方始终是搜索框（显示刚搜的词，按上可以接着改）
             } else if let video = focusedVideo {
@@ -294,7 +298,7 @@ struct BilibiliScreen: View {
                     .foregroundStyle(.white.opacity(0.85))
                     .frame(maxWidth: 1250, alignment: .leading)
             } else {
-                Text(store.tab.title)
+                Text(store.upPage?.user.name ?? store.tab.title)
                     .font(.tv(.title2, emphasized: true))
                     .foregroundStyle(.white.opacity(0.9))
             }
@@ -388,6 +392,32 @@ struct BilibiliScreen: View {
         }
     }
 
+    /// UP 主页的三个排序。焦点左右移到哪个，下面那排视频就换成哪个。
+    private func sortBar(_ page: BilibiliStore.UpPage) -> some View {
+        let active = page.sortFocused && !store.headerFocused && !store.accountFocused
+        return HStack(spacing: 14) {
+            ForEach(BilibiliStore.UpPage.Sort.allCases, id: \.rawValue) { sort in
+                let chosen = sort == page.sort
+                Text(sort.title)
+                    .font(.tv(.callout, emphasized: chosen))
+                    .foregroundStyle(chosen && active ? .black : .white.opacity(chosen ? 1 : 0.6))
+                    .padding(.horizontal, 30)
+                    .frame(height: 64)
+                    .background {
+                        if chosen {
+                            Capsule().fill(active ? Color.white : Color.white.opacity(0.16))
+                                .matchedGeometryEffect(id: "sort", in: sortSpace)
+                        }
+                    }
+                    .contentShape(Capsule())
+                    .onTapGesture { store.tapSort(sort.rawValue) }
+            }
+        }
+        .opacity(page.loading ? 0 : 1)
+        .animation(Motion.focus, value: page.sort)
+        .animation(Motion.focus, value: active)
+    }
+
     /// 长按确认后的小菜单：出现在选中的那张卡片上，和头像菜单同一种玻璃、同一条曲线
     private var cardMenu: some View {
         let actions = store.cardMenu ?? []
@@ -463,7 +493,9 @@ struct BilibiliScreen: View {
     private func rowView(_ row: BilibiliStore.Row, index: Int) -> some View {
         let focusedColumn = store.column(of: row)
         let active = index == store.row && !store.headerFocused && !store.editing && !store.accountFocused
-            && store.upPage?.followFocused != true
+            && store.upPage?.followFocused != true && store.upPage?.browsing != false
+        // UP 主页里焦点还在排序上时，这一排的标题就是选中的那个排序，不重复写
+        let titled = store.upPage?.browsing != false
         // 焦点卡片保持在第二个位置，前面露出一张，知道左边还有
         let shift = -CGFloat(max(0, focusedColumn - 1)) * (cardWidth + cardGap)
         return VStack(alignment: .leading, spacing: 26) {
@@ -471,6 +503,7 @@ struct BilibiliScreen: View {
                 .font(.tv(.headline, emphasized: true))
                 .foregroundStyle(.white.opacity(index == store.row ? 1 : 0.7))
                 .padding(.leading, margin)
+                .opacity(titled ? 1 : 0)
             HStack(alignment: .top, spacing: cardGap) {
                 ForEach(Array(row.items.enumerated()), id: \.offset) { column, item in
                     // 只画焦点附近的卡片，一排几十张也不卡
