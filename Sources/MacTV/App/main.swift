@@ -445,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 搜索框里输入法还有待选字时，Esc 是输入法的，不拦。
             if event.keyCode == 53, mods.isEmpty {
                 let composing = tv.mode == .launcher
-                    && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.editing))
+                    && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.typing))
                     && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
                 if composing { return event }
                 if !event.isARepeat {
@@ -483,6 +483,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 // 播放中、或菜单已经开着：新按下的这一次立刻生效（走下面的常规处理）
             }
+            // 网易云音乐里的确认键，规矩一样：按一下（松开时算数）= 确认；
+            // 在歌曲、歌单卡片上或播放界面里按住半秒 = 菜单（喜欢、收藏到歌单、播放模式）。
+            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,
+               !tv.neteaseStore.typing, tv.neteaseStore.account != nil {
+                if event.isARepeat { return nil }
+                if tv.neteaseStore.menu == nil {
+                    self?.selectDownAt = Date()
+                    self?.selectHeld = false
+                    self?.selectTimer?.invalidate()
+                    self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
+                            if self.tv.neteaseStore.openCardMenu() { self.selectHeld = true }
+                        }
+                    }
+                    return nil
+                }
+                // 菜单已经开着：新按下的这一次立刻生效
+            }
             // 哔哩哔哩的搜索框正在输入时，其余按键整个交给输入框（中文输入法要用到方向键、回车）
             if tv.mode == .launcher, tv.bilibiliOpen, tv.bilibiliStore.editing {
                 // 输入框确实拿着键盘时才交给它。万一它没拿到（比如应用刚切回来），
@@ -491,7 +510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 tv.bilibiliStore.stopEditing()
             }
             // 网易云音乐的搜索框同理
-            if tv.mode == .launcher, tv.neteaseOpen, tv.neteaseStore.editing {
+            if tv.mode == .launcher, tv.neteaseOpen, tv.neteaseStore.typing {
                 if self?.window.firstResponder is NSTextView { return event }
                 tv.neteaseStore.stopEditing()
             }

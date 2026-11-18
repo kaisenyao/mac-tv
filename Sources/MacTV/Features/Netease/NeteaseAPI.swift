@@ -15,6 +15,8 @@ struct NeteaseLyricLine: Hashable, Sendable {
     struct Word: Hashable, Sendable {
         let time: Double
         let text: String
+        /// 这个字唱多久
+        var duration = 0.3
     }
     let time: Double
     let text: String
@@ -27,6 +29,8 @@ struct NeteasePlaylist: Hashable, Sendable {
     let name: String
     var cover: URL? = nil
     var count = 0
+    /// 建这个歌单的人
+    var creator = 0
 }
 
 struct NeteaseAccount: Hashable, Sendable {
@@ -208,10 +212,11 @@ enum NeteaseAPI {
             var words: [NeteaseLyricLine.Word] = []
             var rest = raw[raw.index(after: close)...]
             while let open = rest.firstIndex(of: "("), let shut = rest[open...].firstIndex(of: ")") {
-                let time = Double(rest[rest.index(after: open)..<shut].split(separator: ",").first ?? "") ?? start
+                let numbers = rest[rest.index(after: open)..<shut].split(separator: ",").compactMap { Double($0) }
+                let time = numbers.first ?? start
                 let after = rest[rest.index(after: shut)...]
                 let end = after.firstIndex(of: "(") ?? after.endIndex
-                words.append(.init(time: time / 1000, text: String(after[..<end])))
+                words.append(.init(time: time / 1000, text: String(after[..<end]), duration: (numbers.count > 1 ? numbers[1] : 300) / 1000))
                 rest = after[end...]
             }
             let whole = words.map(\.text).joined().trimmingCharacters(in: .whitespaces)
@@ -235,7 +240,8 @@ enum NeteaseAPI {
 
     private static func playlist(_ item: [String: Any]) -> NeteasePlaylist? {
         guard let id = item["id"] as? Int, let name = item["name"] as? String else { return nil }
-        return NeteasePlaylist(id: id, name: name, cover: image(item["coverImgUrl"] ?? item["picUrl"]), count: item["trackCount"] as? Int ?? 0)
+        return NeteasePlaylist(id: id, name: name, cover: image(item["coverImgUrl"] ?? item["picUrl"]), count: item["trackCount"] as? Int ?? 0,
+                               creator: (item["creator"] as? [String: Any])?["userId"] as? Int ?? item["userId"] as? Int ?? 0)
     }
 
     /// 推荐歌单（登录后是按你的口味推荐的）
@@ -256,5 +262,33 @@ enum NeteaseAPI {
     static func searchPlaylists(_ keyword: String) async -> [NeteasePlaylist] {
         let result = (await call("cloudsearch/pc", ["s": keyword, "type": 1000, "limit": 20, "offset": 0, "total": true]))?["result"] as? [String: Any]
         return (result?["playlists"] as? [[String: Any]] ?? []).compactMap(playlist)
+    }
+
+    // MARK: 往账号里写东西：喜欢、收藏（和在手机上操作的效果一样）
+
+    private static func done(_ result: [String: Any]?) -> Bool { (result?["code"] as? Int) == 200 }
+
+    /// 我喜欢的歌（只有编号）
+    static func likedSongs(user: Int) async -> Set<Int> {
+        Set((await call("song/like/get", ["uid": user]))?["ids"] as? [Int] ?? [])
+    }
+
+    static func setLiked(song: Int, _ on: Bool) async -> Bool {
+        done(await call("radio/like", ["alg": "itembased", "trackId": song, "like": on, "time": "3"]))
+    }
+
+    /// 把一首歌加进歌单。已经在里面也算成功。
+    static func add(song: Int, to playlist: Int) async -> Bool {
+        let result = await call("playlist/manipulate/tracks", ["op": "add", "pid": playlist, "trackIds": "[\(song)]", "imme": "true"])
+        return done(result) || (result?["code"] as? Int) == 502
+    }
+
+    static func createPlaylist(_ name: String) async -> NeteasePlaylist? {
+        ((await call("playlist/create", ["name": name, "privacy": 0, "type": "NORMAL"]))?["playlist"] as? [String: Any]).flatMap(playlist)
+    }
+
+    /// 收藏 / 取消收藏别人的歌单
+    static func setSubscribed(playlist: Int, _ on: Bool) async -> Bool {
+        done(await call(on ? "playlist/subscribe" : "playlist/unsubscribe", ["id": playlist]))
     }
 }

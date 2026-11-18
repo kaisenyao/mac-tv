@@ -422,14 +422,14 @@ struct BilibiliPlayerScreen: View {
                   HStack(spacing: 34) {     // 标题和档位在同一行，整行居中
                     Text("清晰度").font(.system(size: 30, weight: .bold)).foregroundStyle(.white.opacity(0.75))
                         .shadow(color: .black.opacity(0.6), radius: 8, y: 2)
+                    // 一条竖线把"这一栏叫什么"和"能选的档位"分开（网易云的音质栏是同样的做法）
+                    Capsule().fill(.white.opacity(0.35)).frame(width: 3, height: 40)
                     HStack(spacing: 10) {
                         ForEach(Array(player.qualities.enumerated()), id: \.element) { index, id in
                             let focused = index == player.qualityIndex
-                            HStack(spacing: 12) {
-                                if id == player.qualityID { Image(systemName: "checkmark").font(.system(size: 22, weight: .bold)) }
-                                Text(BiliStream.name(of: id)).font(.system(size: 29, weight: focused ? .bold : .medium))
-                            }
-                            .foregroundStyle(focused ? .black : .white.opacity(0.85))
+                            // 现在用的那一档不打勾，只是比别的亮一点
+                            Text(BiliStream.name(of: id)).font(.system(size: 29, weight: focused || id == player.qualityID ? .bold : .medium))
+                            .foregroundStyle(focused ? .black : .white.opacity(id == player.qualityID ? 1 : 0.6))
                             .shadow(color: .black.opacity(focused ? 0 : 0.6), radius: 8, y: 2)   // 暗色少了，靠文字自己的投影保证看得清
                             .padding(.horizontal, 30)
                             .frame(height: 78)
