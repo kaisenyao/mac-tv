@@ -631,11 +631,12 @@ struct NeteaseScreen: View {
                         // 暂停：封面轻轻缩小，正中间浮出一个暂停图标（和哔哩哔哩播放器暂停时同一种）
                         .overlay {
                             Image(systemName: "pause.fill")
-                                .font(.system(size: 76, weight: .bold))
+                                .font(.system(size: 68, weight: .bold))
                                 .foregroundStyle(.white)
-                                .frame(width: 180, height: 180)
+                                .frame(width: 168, height: 168)
                                 .background(.ultraThinMaterial, in: Circle())
-                                .scaleEffect(store.paused ? 1 : 0.8)
+                                .shadow(color: .black.opacity(0.35), radius: 20, y: 8)
+                                .scaleEffect(store.paused ? 1 : 0.7)
                                 .opacity(store.paused ? 1 : 0)
                         }
                         .scaleEffect(store.paused ? 0.9 : 1)

@@ -244,8 +244,55 @@ enum NeteaseAPI {
         }
         if offset != 0 { lines = lines.map { NeteaseLyricLine(time: max(0, $0.time - offset), text: $0.text, words: $0.words) } }
         // 没有词的歌，网易云会给一句"纯音乐，请欣赏"之类的话：那不是歌词，当作没有
-        let real = lines.filter { !$0.text.contains("纯音乐") }
-        return real.count > 2 ? real.sorted { $0.time < $1.time } : []
+        let real = lines.filter { !$0.text.contains("纯音乐") }.sorted { $0.time < $1.time }
+        guard real.count > 2 else { return [] }
+        return simulateWords(real)
+    }
+
+    /// 网易云只给了整句时间的歌（没有逐字时间）：按这一句到下一句之间的时间，把字一个个分下去，
+    /// 也能一个字一个字亮起来（KTV 那样）。中文按字、英文按词，长的词多分一点；间奏很长时不会拖到下一句才唱完。
+    /// 这是估算的，节奏不会和真唱完全一样，但整体跟着走。
+    private static func simulateWords(_ lines: [NeteaseLyricLine]) -> [NeteaseLyricLine] {
+        lines.enumerated().map { index, line in
+            let next = index + 1 < lines.count ? lines[index + 1].time : line.time + 4
+            let pieces = pieces(of: line.text)
+            let letters = Double(max(1, pieces.reduce(0) { $0 + weight(of: $1) }))
+            let span = min(max(next - line.time - 0.15, 0.5), letters * 0.32 + 0.6)
+            var at = line.time
+            let words = pieces.map { piece -> NeteaseLyricLine.Word in
+                let length = span * Double(weight(of: piece)) / letters
+                defer { at += length }
+                return NeteaseLyricLine.Word(time: at, text: piece, duration: length)
+            }
+            return NeteaseLyricLine(time: line.time, text: line.text, words: words)
+        }
+    }
+
+    /// 一句拆成一个个"字"：中日韩文字一个字一块，英文、数字一个词一块（后面的空格、标点跟着它）
+    private static func pieces(of text: String) -> [String] {
+        var result: [String] = []
+        var word = ""
+        for character in text {
+            let latin = character.isASCII && (character.isLetter || character.isNumber || character == "'")
+            if latin {
+                word.append(character)
+            } else if character.isWhitespace || character.isPunctuation {
+                if !word.isEmpty { word.append(character) } else if let last = result.popLast() { result.append(last + String(character)) } else { result.append(String(character)) }
+                if !word.isEmpty, character.isWhitespace { result.append(word); word = "" }
+            } else {
+                if !word.isEmpty { result.append(word); word = "" }
+                result.append(String(character))
+            }
+        }
+        if !word.isEmpty { result.append(word) }
+        return result
+    }
+
+    /// 唱这一块要多久的比重：一个汉字算 1，英文按字母数（有上下限）
+    private static func weight(of piece: String) -> Int {
+        let letters = piece.filter { $0.isLetter || $0.isNumber }.count
+        if piece.unicodeScalars.contains(where: { $0.value > 0x2E80 }) { return 1 }
+        return max(1, min(4, (letters + 1) / 2))
     }
 
     /// 逐字歌词的格式：`[句子开始毫秒,时长](字开始毫秒,时长,0)字(…)字`
