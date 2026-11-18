@@ -143,6 +143,7 @@ struct NeteaseScreen: View {
                     .background(focused ? Color.white : Color.white.opacity(0.12), in: Capsule())
                     .scaleEffect(focused ? 1.06 : 1)
                     .contentShape(Capsule())
+                    .hoverLift()
                     .onTapGesture { store.tapTop(.player) }
                 }
                 if store.page == nil {
@@ -154,6 +155,7 @@ struct NeteaseScreen: View {
                         .overlay(Circle().strokeBorder(.white.opacity(focused ? 1 : 0.2), lineWidth: focused ? 4 : 1.5))
                         .scaleEffect(focused ? 1.12 : 1)
                         .contentShape(Circle())
+                        .hoverLift(scale: 1.08)
                         .onTapGesture { store.tapTop(.account) }
                         .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { ["account": $0] }
                 }
@@ -188,6 +190,7 @@ struct NeteaseScreen: View {
         .scaleEffect(focused ? 1.06 : 1)
         .environment(\.colorScheme, store.editing ? .light : .dark)
         .contentShape(Capsule())
+        .hoverLift()
         .onTapGesture { store.tapTop(.search) }
         .onChange(of: store.editing) { _, editing in typing = editing }
         .onChange(of: store.focusRequest) { _, _ in if store.editing { typing = true } }
@@ -261,6 +264,7 @@ struct NeteaseScreen: View {
                     .padding(.horizontal, 22)
                     .frame(width: menuWidth - 32, height: 74)
                     .contentShape(Rectangle())
+                    .onHover { inside in if inside { store.hoverMenu(row) } }
                     .onTapGesture { store.tapMenu(row) }
                 }
             }
@@ -391,6 +395,7 @@ struct NeteaseScreen: View {
                     if abs(column - focusedColumn) <= 8 {
                         // 滑出左边的那张淡掉：和整排滑动是同一个动画里一起发生的，步调一致
                         card(item, focused: active && column == focusedColumn)
+                            .hoverLift()
                             .onTapGesture { store.focus(row: index, column: column); store.activate() }
                             .opacity(column < focusedColumn - 1 ? 0 : 1)
                     } else {
@@ -466,6 +471,7 @@ struct NeteaseScreen: View {
                 HStack(spacing: 14) {
                     ForEach(Array(store.pageButtons.enumerated()), id: \.offset) { index, button in
                         pageButton(button, list: page.list, focused: page.button == index && store.topFocus == nil)
+                            .hoverLift(scale: 1.08)
                             .onTapGesture { store.pressPageButton(index) }
                     }
                 }
@@ -554,6 +560,7 @@ struct NeteaseScreen: View {
                     songRow(page.songs[index], number: index + 1, dark: true)
                 } else {
                     songRow(page.songs[index], number: index + 1, dark: false)
+                        .hoverWash()
                         .onTapGesture { store.tapSong(index) }
                 }
             }
@@ -611,12 +618,14 @@ struct NeteaseScreen: View {
                         .scaleEffect(store.paused ? 0.9 : 1)
                         .animation(Self.slide, value: store.paused)
                         .contentShape(Rectangle())
+                        .hoverLift(scale: 1.015, brighten: 0.03)
                         .onTapGesture { store.tapPlayPause() }
                     HStack(alignment: .center, spacing: 16) {
                         // 切歌：旧歌名先淡出，新歌名随后淡入（不同时出现，不会重影）
                         ZStack(alignment: .leading) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(song.name).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(1)
+                                    .hoverLift(scale: 1.02, brighten: 0.15)
                                     .onTapGesture { store.openAlbum(of: song) }
                                 artistLine(song)
                             }
@@ -631,6 +640,7 @@ struct NeteaseScreen: View {
                             .foregroundStyle(.white.opacity(store.menu?.anchor == .nowPlaying ? 1 : 0.7))
                             .frame(width: 58, height: 58)
                             .contentShape(Rectangle())
+                            .hoverLift(scale: 1.15, brighten: 0.2)
                             .onTapGesture { store.tapMore() }
                             .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { ["more": $0] }
                     }
@@ -700,6 +710,7 @@ struct NeteaseScreen: View {
                         .frame(width: size, alignment: .leading)
                         .opacity(index < focus - 1 ? 0 : 1)
                         .contentShape(Rectangle())
+                        .hoverLift()
                         .onTapGesture { store.tapQueue(index) }
                     }
                 }
@@ -742,6 +753,7 @@ struct NeteaseScreen: View {
                             if focused { Capsule().fill(.white).matchedGeometryEffect(id: "quality", in: qualitySpace) }
                         }
                         .contentShape(Capsule())
+                        .onHover { inside in if inside { store.hoverQuality(index) } }
                         .onTapGesture { store.tapQuality(index) }
                 }
             }
@@ -783,7 +795,7 @@ struct NeteaseScreen: View {
                         Group {
                             // 只有正在唱、又有逐字时间的那一句跟着播放进度刷新；其余的句子是静的
                             if current, !line.words.isEmpty {
-                                NeteaseKaraokeLine(line: line, clock: store.clock, playing: !store.paused && store.nowPlayingVisible, shift: store.lyricShift)
+                                NeteaseKaraokeLine(line: line, playing: !store.paused && store.nowPlayingVisible, time: store.playbackTime)
                             } else {
                                 Text(line.text).foregroundStyle(.white)
                             }
@@ -825,7 +837,7 @@ struct NeteaseScreen: View {
             HStack(spacing: 0) {
                 ForEach(Array(song.artists.prefix(4).enumerated()), id: \.offset) { index, artist in
                     if index > 0 { Text(" / ") }
-                    Text(artist.name).onTapGesture { store.openArtist(artist) }
+                    Text(artist.name).hoverLift(scale: 1.02, brighten: 0.25).onTapGesture { store.openArtist(artist) }
                 }
             }
             .font(.tv(.body))
@@ -842,24 +854,32 @@ struct NeteaseScreen: View {
 struct NeteaseProgress: View {
     @ObservedObject var store: NeteaseStore
     @ObservedObject var clock: NeteaseClock
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.22))
-                    // 进度条也按帧往前走，不跟着读数一跳一跳
-                    // 播放界面关着时不推算（看不见，不用每帧算）
-                    TimelineView(.animation(minimumInterval: nil, paused: store.paused || !store.nowPlayingVisible)) { context in
-                        let now = clock.estimate(at: context.date, playing: !store.paused)
-                        let fraction = clock.duration > 0 ? min(1, max(0, now / clock.duration)) : 0
+                    // 每一帧直接问播放器放到哪了（播放界面关着、暂停时不算）
+                    TimelineView(.animation(minimumInterval: nil, paused: store.paused || !store.nowPlayingVisible)) { _ in
+                        let fraction = clock.duration > 0 ? min(1, max(0, store.playbackTime() / clock.duration)) : 0
                         Capsule().fill(.white).frame(width: geo.size.width * fraction)
                     }
                 }
-                .frame(height: 7)
+                // 鼠标移上去、拖的时候变粗一点：提示能拖
+                .frame(height: store.scrubbing || hovering ? 12 : 7)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .onTapGesture { location in store.seek(toFraction: location.x / max(1, geo.size.width)) }
+                // 按住拖：声音先停，进度条和歌词跟着走，松手跳过去接着放；点一下就是跳到那里
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        store.beginScrub()
+                        store.scrub(to: Double(value.location.x / max(1, geo.size.width)) * clock.duration)
+                    }
+                    .onEnded { _ in store.endScrub() })
+                .onHover { inside in withAnimation(Motion.focus) { hovering = inside } }
+                .animation(Motion.focus, value: store.scrubbing)
             }
             .frame(height: 36)
             HStack {
@@ -890,14 +910,13 @@ struct NeteaseProgress: View {
 /// 按屏幕刷新率逐帧算（暂停时停住），亮起来的过程两头缓、中间快，看着是"晕开"而不是"跳亮"。
 struct NeteaseKaraokeLine: View {
     let line: NeteaseLyricLine
-    let clock: NeteaseClock
     let playing: Bool
-    /// 这首歌的歌词校准（秒）
-    var shift = 0.0
+    /// 现在放到哪了：每一帧直接问播放器，和声音严丝合缝
+    let time: () -> Double
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: !playing)) { context in
-            let now = clock.estimate(at: context.date, playing: playing) - shift
+        TimelineView(.animation(minimumInterval: nil, paused: !playing)) { _ in
+            let now = time()
             line.words.reduce(Text("")) { text, word in
                 let span = max(0.3, min(word.duration, 0.9))
                 let linear = max(0, min(1, (now + 0.05 - word.time) / span))

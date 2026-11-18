@@ -9,18 +9,9 @@ import SwiftUI
 /// 不会每次都带着整个页面（包括盖在下面看不见的首页）重画一遍。
 @MainActor
 final class NeteaseClock: ObservableObject {
+    /// 显示用的秒数（两头的时间、换句）：四分之一秒更新一次就够。逐字歌词和进度条每一帧直接问播放器，不看它
     @Published var time: Double = 0
     @Published var duration: Double = 0
-    /// 最近一次从播放器读到的时间，和读到它的那一刻。逐字歌词、进度条按屏幕刷新率在两次读数之间自己往前推，
-    /// 每一帧都在动，而不是等下一次读数才跳一下
-    private(set) var mark = (time: 0.0, at: Date.distantPast)
-
-    func note(_ seconds: Double) { mark = (seconds, Date()) }
-
-    func estimate(at date: Date, playing: Bool) -> Double {
-        guard playing else { return mark.time }
-        return mark.time + max(0, min(0.5, date.timeIntervalSince(mark.at)))   // 播放器卡住时最多往前推半秒，不会越推越远
-    }
 }
 
 /// 网易云音乐的原生页面：扫码登录；首页一排排封面（每日推荐、我喜欢的音乐、推荐歌单、我的歌单、排行榜）；
@@ -77,7 +68,6 @@ final class NeteaseStore: ObservableObject {
         case like(NeteaseSong), addTo(NeteaseSong), pick(NeteasePlaylist, NeteaseSong), create(NeteaseSong)
         case subscribe(NeteasePlaylist), cycleMode, logout
         case artist(NeteaseSong), goArtist(NeteaseArtist), album(NeteaseSong)
-        case calibrate, lyricsEarlier, lyricsLater, lyricsReset
         case rename(NeteasePlaylist), delete(NeteasePlaylist), confirmDelete(NeteasePlaylist), cancel
         case confirmLogout, confirmUnsubscribe(NeteasePlaylist)
     }
@@ -130,22 +120,6 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var lyricsShown = true
     /// 现在这份歌词属于哪首歌（还没载入时为 0）：切歌时旧歌词先淡出，新歌词到了再淡入
     @Published private(set) var lyricsSong = 0
-    /// 这首歌的歌词手动校准了多少秒（负数 = 歌词提前，正数 = 推后）。按歌记在本机，下次放这首自动用上
-    @Published private(set) var lyricShift = 0.0
-    private static let shiftKey = "neteaseLyricShift"
-    private static func savedShift(_ song: Int) -> Double {
-        (UserDefaults.standard.dictionary(forKey: shiftKey) as? [String: Double])?[String(song)] ?? 0
-    }
-    private func setShift(_ value: Double) {
-        guard let current else { return }
-        lyricShift = (value * 4).rounded() / 4
-        var all = UserDefaults.standard.dictionary(forKey: Self.shiftKey) as? [String: Double] ?? [:]
-        all[String(current.id)] = lyricShift == 0 ? nil : lyricShift
-        UserDefaults.standard.set(all, forKey: Self.shiftKey)
-        // 换句的判断马上按新的校准重算一次
-        let line = (lyrics.lastIndex { $0.time + lyricShift <= time + 0.25 }) ?? -1
-        if line != lyricIndex { lyricIndex = line }
-    }
 
     /// 音质档位。选了账号或这首歌没有的档位，服务器会给它能给的最高一档，actualLevel 是实际拿到的。
     struct Quality: Hashable { let level: String; let name: String }
@@ -207,17 +181,15 @@ final class NeteaseStore: ObservableObject {
     init() {
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] now in
             MainActor.assumeIsolated {
-                guard let self, self.current != nil else { return }
-                // 界面上的时间：歌词是逐字的并且正开着播放界面时才需要这么细，其余时候半秒更新一次就够
+                // 跳转、拖动的时候，播放器报上来的还是旧位置：这段时间不用它（不然进度条、歌词会先跳回去再跳过来）
+                guard let self, self.current != nil, !self.seeking, !self.scrubbing else { return }
                 let seconds = now.seconds.isFinite ? now.seconds : 0
-                // 每次都记下读数（逐字歌词、进度条拿它按帧往前推）；显示的秒数播放界面开着时四分之一秒更新一次，关着时半秒
-                self.clock.note(seconds)
+                // 显示的秒数：播放界面开着时四分之一秒更新一次，关着时半秒
                 let step = self.nowPlayingVisible ? 0.25 : 0.5
                 if abs(seconds - self.clock.time) >= step || seconds < self.clock.time { self.clock.time = seconds }
                 let position = seconds
                 if let total = self.player.currentItem?.duration.seconds, total.isFinite, total > 0, total != self.clock.duration { self.clock.duration = total }
-                let line = (self.lyrics.lastIndex { $0.time + self.lyricShift <= position + 0.25 }) ?? -1
-                if line != self.lyricIndex { self.lyricIndex = line }
+                self.updateLine(at: position)
             }
         }
         NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification).receive(on: RunLoop.main).sink { [weak self] note in
@@ -761,7 +733,7 @@ final class NeteaseStore: ObservableObject {
                 preferredLevel = chosen
                 if changed {
                     tv?.showToast("已切换至「\(Self.name(of: chosen))」")
-                    if let current { play(current, resumeAt: time) }   // 这首歌按新设置重新要一次，从现在的位置接着放
+                    if let current { play(current, resumeAt: playbackTime()) }   // 这首歌按新设置重新要一次，从现在的位置接着放
                 }
             case .back, .move(.down), .move(.up): withAnimation(Motion.navigate) { qualityVisible = false }
             default: break
@@ -855,10 +827,21 @@ final class NeteaseStore: ObservableObject {
         seek(by: max(0, min(1, fraction)) * duration - time)
     }
 
-    /// 点某句歌词跳到那句（算上这首歌的歌词校准）
+    /// 点某句歌词跳到那句
     func seek(toTime target: Double) {
         guard duration > 0 else { return }
-        seek(by: target + lyricShift - time)
+        jump(to: max(0, min(duration - 1, target)))
+    }
+
+    /// 鼠标移到菜单的某一项：白色高亮滑过去（菜单不会滚动，可以跟着鼠标走）
+    func hoverMenu(_ index: Int) {
+        guard let menu, menu.items.indices.contains(index), menu.index != index, naming == nil else { return }
+        withAnimation(Motion.focus) { self.menu?.index = index }
+    }
+
+    func hoverQuality(_ index: Int) {
+        guard qualityVisible, offered.indices.contains(index), qualityIndex != index else { return }
+        withAnimation(Motion.focus) { qualityIndex = index }
     }
 
     func tapQuality(_ index: Int) {
@@ -882,8 +865,6 @@ final class NeteaseStore: ObservableObject {
         if !song.artists.isEmpty { items.append(MenuItem(symbol: "person.crop.circle", title: "查看歌手", action: .artist(song))) }
         if song.album > 0 { items.append(MenuItem(symbol: "square.stack", title: "查看专辑", action: .album(song))) }
         if withMode { items.append(MenuItem(symbol: mode.symbol, title: mode.title, action: .cycleMode)) }
-        // 歌词和歌没对齐时手动校准（只在播放界面、有歌词的歌上）
-        if withMode, !lyrics.isEmpty { items.append(MenuItem(symbol: "text.alignleft", title: "校准歌词", action: .calibrate)) }
         return items
     }
 
@@ -997,17 +978,6 @@ final class NeteaseStore: ObservableObject {
                 withAnimation(Motion.focus) { menu = nil }
                 toggleSubscribed(list)
             }
-        case .calibrate:
-            if let menu { menuParents.append(menu) }
-            withAnimation(Motion.focus) { menu = calibrationMenu(index: 0) }
-        case .lyricsEarlier, .lyricsLater, .lyricsReset:
-            // 菜单不收起：一边看歌词一边按，按到对齐为止
-            switch action {
-            case .lyricsEarlier: setShift(lyricShift - 0.5)
-            case .lyricsLater: setShift(lyricShift + 0.5)
-            default: setShift(0)
-            }
-            withAnimation(Motion.focus) { menu = calibrationMenu(index: menu?.index ?? 0) }
         case .cycleMode:
             let all = PlayMode.allCases
             setMode(all[((all.firstIndex(of: mode) ?? 0) + 1) % all.count])
@@ -1042,15 +1012,6 @@ final class NeteaseStore: ObservableObject {
     }
 
     /// 新歌单的名字输好了：建歌单，把那首歌放进去
-    /// 校准歌词那一层：标题是现在校准了多少
-    private func calibrationMenu(index: Int) -> Menu {
-        let title = lyricShift == 0 ? "歌词没有校准" : String(format: lyricShift < 0 ? "歌词提前 %.1f 秒" : "歌词推后 %.1f 秒", abs(lyricShift))
-        var items = [MenuItem(symbol: "backward", title: "提前 0.5 秒", action: .lyricsEarlier),
-                     MenuItem(symbol: "forward", title: "推后 0.5 秒", action: .lyricsLater)]
-        if lyricShift != 0 { items.append(MenuItem(symbol: "arrow.uturn.backward", title: "恢复", action: .lyricsReset)) }
-        return Menu(anchor: .nowPlaying, items: items, index: min(index, items.count - 1), title: title)
-    }
-
     /// 喜欢 / 取消喜欢在界面上的样子：心形、"我喜欢的音乐"里的歌（缓存和开着的歌单页）、首页上它的歌数
     private func setLiked(_ song: NeteaseSong, _ on: Bool) {
         if on { liked.insert(song.id) } else { liked.remove(song.id) }
@@ -1184,12 +1145,10 @@ final class NeteaseStore: ObservableObject {
         paused = false
         if changed {
             clock.time = 0
-            clock.note(0)
             clock.duration = Double(song.duration)
             player.pause()
             lyrics = []
             lyricsSong = 0
-            lyricShift = Self.savedShift(song.id)
             lyricIndex = -1
             Task { @MainActor in
                 // 下一首提前取好的歌词直接用
@@ -1226,8 +1185,25 @@ final class NeteaseStore: ObservableObject {
             actualLevel = found.level
             noteReachable(found.level)
             if !same {
-                player.replaceCurrentItem(with: AVPlayerItem(url: found.url))
-                if let resumeAt, resumeAt > 1 { await player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600)) }
+                let item = AVPlayerItem(url: found.url)
+                if resumeAt != nil {
+                    // 换音质：从换的这一刻接上（取新地址那一两秒里旧的一直在放，不倒回去重复）。
+                    // 等新文件准备好再精确跳过去；跳完之前不理会播放器报上来的时间，歌词不会乱跳
+                    let position = playbackTime()
+                    seekCount += 1
+                    let count = seekCount
+                    seeking = true
+                    clock.time = position
+                    player.replaceCurrentItem(with: item)
+                    for _ in 0..<100 where item.status == .unknown { try? await Task.sleep(for: .milliseconds(50)) }
+                    if position > 0.5 {
+                        await player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                    }
+                    if count == seekCount { seeking = false }
+                    guard current == song else { return }
+                } else {
+                    player.replaceCurrentItem(with: item)
+                }
             }
             if !paused { player.play() }
             publishNowPlaying()
@@ -1278,13 +1254,8 @@ final class NeteaseStore: ObservableObject {
     /// delta：+1 下一首，-1 上一首。automatic = 这首放完了自己往下走（单曲循环只在这时候起作用）。
     private func skip(_ delta: Int, automatic: Bool = false) {
         guard !queue.isEmpty else { return }
-        if automatic, mode == .single, let current {
-            player.seek(to: .zero)
-            clock.time = 0
-            clock.note(0)
-            lyricIndex = -1
-            player.play()
-            _ = current
+        if automatic, mode == .single, current != nil {
+            jump(to: 0) { [weak self] in self?.player.play() }
             return
         }
         if mode == .shuffle, delta > 0, queue.count > 1 {
@@ -1307,16 +1278,104 @@ final class NeteaseStore: ObservableObject {
     private func togglePause() {
         paused.toggle()
         if paused { player.pause() } else { player.play() }
+        clock.time = playbackTime()
         publishNowPlaying()
     }
 
     private func seek(by seconds: Double) {
         guard duration > 0 else { return }
-        let target = max(0, min(duration - 1, time + seconds))
+        jump(to: max(0, min(duration - 1, playbackTime() + seconds)))
+    }
+
+    // MARK: 时间和跳转（保证歌词始终跟着声音）
+
+    /// 正在跳转：跳完之前播放器报上来的还是旧位置，这段时间不用它
+    private var seeking = false
+    private var seekCount = 0
+
+    /// 现在放到哪了（秒）。逐字歌词、进度条每一帧都直接问播放器，和声音严丝合缝——
+    /// 暂停、缓冲、继续都不会多推或少推；拖动、跳转的时候用目标位置
+    func playbackTime() -> Double {
+        if scrubbing || seeking { return clock.time }
+        let now = player.currentTime().seconds
+        return now.isFinite ? now : clock.time
+    }
+
+    /// 精确跳到某一刻。FLAC（无损、超清母带）"大概跳"会和实际差好几秒：声音在 A 处，播放器却说在 B 处，
+    /// 歌词就对不上了。所以一律精确跳，跳完之前不理会播放器报上来的旧位置。
+    private func jump(to target: Double, then: (@MainActor () -> Void)? = nil) {
+        seekCount += 1
+        let count = seekCount
+        seeking = true
         clock.time = target
-        clock.note(target)
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
-        publishNowPlaying()
+        updateLine(at: target)
+        Task { @MainActor in
+            await player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            guard count == seekCount else { return }   // 中途又跳了一次，以最后那次为准
+            seeking = false
+            then?()
+            publishNowPlaying()
+        }
+    }
+
+    /// 唱到第几句（换句提前四分之一秒，看着正好跟上声音）
+    private func updateLine(at seconds: Double) {
+        let line = (lyrics.lastIndex { $0.time <= seconds + 0.25 }) ?? -1
+        if line != lyricIndex { lyricIndex = line }
+    }
+
+    // MARK: 拖进度条、按住左右键快进快退
+
+    /// 正在拖 / 按住快进快退：声音先停，进度条和歌词跟着目标位置走，松手才真的跳过去，接着放
+    @Published private(set) var scrubbing = false
+    private var scrubTarget = 0.0
+    private var scrubWasPlaying = false
+    private var scrubTimer: Timer?
+    private var scrubStarted = Date()
+
+    /// 播放界面上没有别的东西开着的时候，左右键才是"切歌 / 快进快退"
+    var canHoldSeek: Bool { nowPlayingVisible && current != nil && !qualityVisible && !queueVisible && menu == nil && !typing }
+
+    func beginScrub() {
+        guard current != nil, !scrubbing else { return }
+        scrubWasPlaying = !paused
+        scrubTarget = playbackTime()
+        scrubbing = true
+        player.pause()
+    }
+
+    func scrub(to seconds: Double) {
+        guard scrubbing, duration > 0 else { return }
+        scrubTarget = max(0, min(duration - 0.5, seconds))
+        clock.time = scrubTarget
+        updateLine(at: scrubTarget)
+    }
+
+    func endScrub() {
+        guard scrubbing else { return }
+        scrubTimer?.invalidate()
+        scrubTimer = nil
+        let resume = scrubWasPlaying
+        jump(to: scrubTarget) { [weak self] in
+            if resume { self?.player.play() }
+        }
+        scrubbing = false
+    }
+
+    /// 按住左右键：快进 / 快退，按得越久越快
+    func beginHold(forward: Bool) {
+        guard canHoldSeek else { return }
+        beginScrub()
+        scrubStarted = Date()
+        scrubTimer?.invalidate()
+        scrubTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.scrubbing else { return }
+                let held = Date().timeIntervalSince(self.scrubStarted)
+                let speed = held < 1.5 ? 8.0 : (held < 4 ? 20.0 : 45.0)   // 每按住一秒，往前 / 往后走多少秒
+                self.scrub(to: self.scrubTarget + (forward ? 1 : -1) * speed * 0.05)
+            }
+        }
     }
 
     func stop() {

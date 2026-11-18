@@ -24,6 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 长按用计时器来认（不靠系统的"按键重复"，那个可以在系统设置里关掉或调慢）
     var escapeTimer: Timer?
     var selectTimer: Timer?
+    /// 网易云播放界面里的左右键：短按切歌，按住快进 / 快退
+    var arrowDownAt: Date?
+    var arrowHeld = false
+    var arrowForward = true
+    var arrowTimer: Timer?
     static let holdTime: TimeInterval = 0.5
     let tv = TVController()
     var window: NSWindow!
@@ -417,6 +422,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            // 网易云播放界面的左右键松开：没按到"按住"的程度就是切歌，按住过就是快进 / 快退结束、从那里接着放
+            if let self, event.keyCode == 123 || event.keyCode == 124, self.arrowDownAt != nil {
+                let held = self.arrowHeld
+                self.arrowDownAt = nil
+                self.arrowTimer?.invalidate()
+                if held { self.tv.neteaseStore.endScrub() } else { self.tv.handle(.move(self.arrowForward ? .right : .left)) }
+                return nil
+            }
             // 确认键松开：没按到"长按"的程度，才是一次"确认"
             if let self, event.keyCode == 36 || event.keyCode == 76, self.selectDownAt != nil {
                 let held = self.selectHeld
@@ -482,6 +495,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
                 // 播放中、或菜单已经开着：新按下的这一次立刻生效（走下面的常规处理）
+            }
+            // 网易云音乐的播放界面：短按左右 = 上一首 / 下一首（松开时算数）；按住 = 快退 / 快进，松手从那里接着放
+            if (event.keyCode == 123 || event.keyCode == 124), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen,
+               tv.activeSheet == nil, tv.neteaseStore.canHoldSeek {
+                if event.isARepeat { return nil }
+                let forward = event.keyCode == 124
+                self?.arrowDownAt = Date()
+                self?.arrowHeld = false
+                self?.arrowForward = forward
+                self?.arrowTimer?.invalidate()
+                self?.arrowTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.arrowDownAt != nil else { return }
+                        self.arrowHeld = true
+                        self.tv.neteaseStore.beginHold(forward: forward)
+                    }
+                }
+                return nil
             }
             // 网易云音乐里的空格：就在当前界面放 / 停，不进播放界面（回车才进）
             if event.keyCode == 49, mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,
