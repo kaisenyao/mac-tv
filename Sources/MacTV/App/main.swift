@@ -531,24 +531,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // 哔哩哔哩里的确认键：
             //   在列表里，按一下（松开时算数）= 确认；在视频卡片上按住半秒 = 这张卡片的菜单。
+            //   看视频时，按一下 = 暂停 / 继续；按住半秒 = 从右边拉出面板（UP 主、点赞、投币、收藏、倍速、字幕）。
             //   按住不放时系统重发的"确认"一律不当成新的一次——菜单弹出来以后，不管还按着多久都不会自己选中第一项。
             //   不是视频卡片的地方没有菜单，按多久都还是一次普通的确认。
             if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.bilibiliOpen, tv.activeSheet == nil,
                !tv.bilibiliStore.editing {
                 if event.isARepeat { return nil }
-                if tv.bilibiliStore.player.current == nil, tv.bilibiliStore.cardMenu == nil {
+                let store = tv.bilibiliStore, player = store.player
+                let inList = player.current == nil && store.cardMenu == nil && !store.settingsOpen
+                let watching = player.current != nil && !player.panelVisible && !player.qualityMenuVisible && !player.relatedVisible
+                if inList || watching {
                     self?.selectDownAt = Date()
                     self?.selectHeld = false
                     self?.selectTimer?.invalidate()
                     self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                         MainActor.assumeIsolated {
                             guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            if self.tv.bilibiliStore.openCardMenu() { self.selectHeld = true }
+                            let store = self.tv.bilibiliStore
+                            let opened = store.player.current != nil ? store.player.openPanel() : store.openCardMenu()
+                            if opened { self.selectHeld = true }
                         }
                     }
                     return nil
                 }
-                // 播放中、或菜单已经开着：新按下的这一次立刻生效（走下面的常规处理）
+                // 菜单、面板、设置已经开着：新按下的这一次立刻生效（走下面的常规处理）
             }
             // 网易云音乐的播放界面：短按左右 = 上一首 / 下一首（松开时算数）；按住 = 快退 / 快进，松手从那里接着放
             if (event.keyCode == 123 || event.keyCode == 124), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen,

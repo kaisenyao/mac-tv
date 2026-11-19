@@ -68,8 +68,10 @@ struct AppLibraryTests {
             #expect(!library.canMove("netflix", by: -1))
             #expect(!library.canMove("netflix", by: 1))
             #expect(!library.move("netflix", by: 1))
-            #expect(!library.canMove("youtube", by: -1))
-            #expect(!library.move("youtube", by: -1))
+            // 第一个没置顶的应用不能挪进置顶区（这个分支里排在最前面的是哔哩哔哩，不是 YouTube）
+            let firstUnpinned = try #require(before.dropFirst().first)
+            #expect(!library.canMove(firstUnpinned, by: -1))
+            #expect(!library.move(firstUnpinned, by: -1))
             #expect(library.services().map(\.id) == before)
             #expect(Array(before.suffix(2)) == ["add-app", "settings"])
         }
@@ -157,17 +159,19 @@ struct AppLibraryTests {
         try withFolder { folder in
             let tv = TVController(library: AppLibrary(folder: folder))
             tv.setFocus(.shelf(0))
-            for id in ["youtube", "prime", "hotstar", "appletv", "spotify", "ytmusic"] {
+            // 焦点停在排第一的应用上（原版是 Netflix，这个分支里是哔哩哔哩），之后按"是哪个应用"跟着它走
+            let first = try #require(tv.services.first?.id)
+            for id in ["youtube", "prime", "hotstar", "appletv", "spotify", "ytmusic"] where id != first {
                 #expect(tv.setPinned(id, true))
             }
-            let netflixIndex = try #require(tv.services.firstIndex { $0.id == "netflix" })
-            #expect(netflixIndex >= tv.columns)
-            #expect(tv.focus == .app(netflixIndex))
-            #expect(tv.setPinned("netflix", true))
-            let pinnedIndex = try #require(tv.services.firstIndex { $0.id == "netflix" })
+            let firstIndex = try #require(tv.services.firstIndex { $0.id == first })
+            #expect(firstIndex >= tv.columns)
+            #expect(tv.focus == .app(firstIndex))
+            #expect(tv.setPinned(first, true))
+            let pinnedIndex = try #require(tv.services.firstIndex { $0.id == first })
             #expect(tv.focus == .app(pinnedIndex))
-            #expect(tv.moveApp("netflix", by: 1))
-            let movedIndex = try #require(tv.services.firstIndex { $0.id == "netflix" })
+            #expect(tv.moveApp(first, by: 1))
+            let movedIndex = try #require(tv.services.firstIndex { $0.id == first })
             #expect(movedIndex == pinnedIndex + 1)
             #expect(tv.focus == .app(movedIndex))
         }
@@ -212,8 +216,10 @@ struct AppLibraryTests {
                 #expect(request(path, body)?.status == "400 Bad Request")
             }
             #expect(tv.services.map(\.id) == before)
-            #expect(request("/apps/move", #"{"id":"youtube","offset":-1}"#)?.status == "200 OK")
-            #expect(tv.services.first?.id == "youtube")
+            // 排第二的应用往前挪一格就到了最前面（原版是 YouTube，这个分支里是网易云）
+            let second = tv.services[1].id
+            #expect(request("/apps/move", #"{"id":"\#(second)","offset":-1}"#)?.status == "200 OK")
+            #expect(tv.services.first?.id == second)
             #expect(request("/apps/pin", #"{"id":"netflix","pinned":true}"#)?.status == "200 OK")
             #expect(tv.isPinned("netflix"))
         }

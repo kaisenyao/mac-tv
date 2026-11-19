@@ -130,20 +130,36 @@ extension NeteaseTests {
 }
 
 extension NeteaseTests {
-    /// 逐字歌词：字在开始唱的那一刻已经（几乎）全亮，不落后半个字；开始前 0.1 秒还没亮；
-    /// 很短的字也在下一个字开始前亮满，不会一路拖下去
+    /// 逐字涂亮：唱出来的那一刻刚开始涂（只提前一点点），在这个字自己的时长里涂满，
+    /// 下一个字开始唱时正好接上；拖长音的字涂得慢；一直往前涂，不回退
     @Test @MainActor
-    func karaokeWordIsLitWhenItIsSung() {
-        let start = 10.0
-        #expect(NeteaseKaraokeLine.brightness(at: start - 0.11, start: start, duration: 0.4) == 0)
-        #expect(NeteaseKaraokeLine.brightness(at: start, start: start, duration: 0.4) > 0.9)
-        #expect(NeteaseKaraokeLine.brightness(at: start + 0.03, start: start, duration: 0.4) == 1)
-        // 很短的字（0.08 秒）：在它自己的时长里亮满
-        #expect(NeteaseKaraokeLine.brightness(at: start + 0.08 - NeteaseKaraokeLine.lead, start: start, duration: 0.08) == 1)
-        // 一直在变亮、不会忽明忽暗
+    func karaokeWipeFollowsEachWord() {
+        let start = 10.0, lead = NeteaseKaraokeLine.lead
+        #expect(lead > 0 && lead < 0.15)
+        #expect(NeteaseKaraokeLine.progress(at: start - lead - 0.01, start: start, duration: 0.4) == 0)
+        #expect(abs(NeteaseKaraokeLine.progress(at: start + 0.2 - lead, start: start, duration: 0.4) - 0.5) < 1e-9)
+        #expect(NeteaseKaraokeLine.progress(at: start + 0.4 - lead, start: start, duration: 0.4) == 1)
+        // 一句里前一个字涂满的那一刻，后一个字开始涂
+        #expect(NeteaseKaraokeLine.progress(at: start + 0.4 - lead + 0.001, start: start + 0.4, duration: 0.3) > 0)
+        // 拖长音（1.5 秒）：0.75 秒时涂到一半
+        #expect(abs(NeteaseKaraokeLine.progress(at: start + 0.75 - lead, start: start, duration: 1.5) - 0.5) < 1e-9)
+        // 极短的字至少 0.08 秒涂完
+        #expect(abs(NeteaseKaraokeLine.progress(at: start + 0.04 - lead, start: start, duration: 0.01) - 0.5) < 1e-9)
+        // 一个词折成两段（前一段 60 宽、后一段 40 宽）：先涂完前一段，再涂后一段
+        if #available(macOS 15, *) {
+            #expect(KaraokeRenderer.share(of: 0.3, total: 100, before: 0, width: 60) == 0.5)
+            #expect(KaraokeRenderer.share(of: 0.3, total: 100, before: 60, width: 40) == 0)
+            #expect(KaraokeRenderer.share(of: 0.8, total: 100, before: 0, width: 60) == 1)
+            #expect(abs(KaraokeRenderer.share(of: 0.8, total: 100, before: 60, width: 40) - 0.5) < 1e-9)
+        }
+        // 字后面的空格、标点单独算，不占字的时间
+        #expect(NeteaseKaraokeLine.split("爱，") == ("爱", "，"))
+        #expect(NeteaseKaraokeLine.split("love ") == ("love", " "))
+        #expect(NeteaseKaraokeLine.split("你") == ("你", ""))
+        #expect(NeteaseKaraokeLine.split("…") == ("…", ""))
         var last = 0.0
-        for step in 0...40 {
-            let level = NeteaseKaraokeLine.brightness(at: start - 0.2 + Double(step) * 0.01, start: start, duration: 0.3)
+        for step in 0...60 {
+            let level = NeteaseKaraokeLine.progress(at: start - 0.2 + Double(step) * 0.01, start: start, duration: 0.3)
             #expect(level >= last)
             last = level
         }

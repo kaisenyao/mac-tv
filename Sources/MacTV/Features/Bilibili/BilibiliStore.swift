@@ -37,7 +37,7 @@ final class BilibiliStore: ObservableObject {
 
     enum Item: Hashable {
         case video(BiliVideo)
-        case login, refresh, logout
+        case login, refresh, settings, logout
         /// 退出登录的确认：先问一次，默认停在"取消"上
         case keepLogin, confirmLogout
         /// 一个 UP 主（搜索结果里），按确认进他的主页
@@ -60,7 +60,7 @@ final class BilibiliStore: ObservableObject {
     /// 头像下面的账号菜单开着，以及选中了第几项
     @Published private(set) var accountMenuOpen = false { didSet { if !accountMenuOpen { confirmingLogout = false } } }
     @Published private(set) var accountIndex = 0
-    var accountActions: [Item] { account == nil ? [.login] : (confirmingLogout ? [.keepLogin, .confirmLogout] : [.refresh, .logout]) }
+    var accountActions: [Item] { account == nil ? [.login] : (confirmingLogout ? [.keepLogin, .confirmLogout] : [.refresh, .settings, .logout]) }
     /// 头像菜单换成了"取消 / 退出登录"两项（菜单一收起就回到原样）
     @Published private(set) var confirmingLogout = false
 
@@ -86,6 +86,8 @@ final class BilibiliStore: ObservableObject {
         /// 焦点在关注按钮上；armed = 已经按过一次"取消关注"，再按一次才真的取消
         var followFocused = false
         var armed = false
+        /// 从看视频时右边的面板进来的：返回时回到这个视频（带着刚才看到的位置）接着放
+        var returnTo: BiliVideo?
     }
     @Published private(set) var upPage: UpPage?
 
@@ -112,6 +114,8 @@ final class BilibiliStore: ObservableObject {
 
     func module(horizontal: Bool) -> TVController.Module {
         if player.current != nil {
+            // 右边的面板（长按确认拉出来）：是从右边拉出来的抽屉，往右滑推回去；在里面上下挑一行
+            if player.panelVisible { return horizontal ? .drawer : .picker }
             // 播放中：上下拉出清晰度栏（往下）/ 相关视频（往上）。左右：相关视频是长条；
             // 清晰度栏是挑一个；平时左右是拖进度（进度条跟着手走，往右滑往前）
             guard horizontal else { return .drawer }
@@ -119,22 +123,27 @@ final class BilibiliStore: ObservableObject {
             return player.qualityMenuVisible ? .picker : .scrub
         }
         if editing { return horizontal ? .off : .drawer }
+        if settingsOpen { return horizontal ? .off : .picker }                  // 设置：固定的几行
         if cardMenu != nil || accountMenuOpen { return .picker }               // 菜单：固定的几项
         // 左边栏是从左边拉出来的抽屉（像 Mac 右边的通知中心）：往右滑拉出来，往左滑推回去，再往右滑不动；
         // 在里面上下是挑一项（光标）
         if headerFocused { return horizontal ? .drawer : .picker }
-        // 右上角头像、关注按钮：往右滑同样是把左边栏拉出来；上下按光标走（往下滑回到下面）
-        if accountFocused || upPage?.followFocused == true { return horizontal ? .drawer : .picker }
-        if let page = upPage, page.sortFocused, !page.browsing { return .picker }   // 三个排序：挑一个
+        // 右上角头像、UP 主页的关注按钮和三个排序：和下面的视频排在同一列里，上下跟视频排一样是"内容跟着手走"——
+        // 往下滑上到头像，往上滑回到视频（一去一回方向相反，和底下的视频排对称）。
+        // 头像、关注按钮往右滑是把左边栏拉出来；三个排序左右是挑一个
+        if accountFocused || upPage?.followFocused == true { return .drawer }
+        if let page = upPage, page.sortFocused, !page.browsing { return horizontal ? .picker : .drawer }
         return horizontal ? .strip : .drawer                                    // 视频排：横着是长条，上下换排
     }
 
     func flickCanMove(_ direction: RemoteCommand.Direction) -> Bool {
         if player.current != nil {
             guard player.relatedVisible else { return false }
+            let (index, count) = player.shelf == .episodes ? (player.episodeFocus, player.episodes.count)
+                : (player.relatedIndex, player.related.count)
             switch direction {
-            case .left: return player.relatedIndex > 0
-            case .right: return player.relatedIndex < player.related.count - 1
+            case .left: return index > 0
+            case .right: return index < count - 1
             default: return false
             }
         }
@@ -183,6 +192,9 @@ final class BilibiliStore: ObservableObject {
         "\(tab.rawValue)-\(headerFocused)-\(row)-\(column)-\(rows.count)-\(player.current?.bvid ?? "")"
             // 播放器里的清晰度栏、底下那排视频也算：在里面左右走才有按键声
             + "-\(player.qualityMenuVisible)-\(player.qualityIndex)-\(player.relatedVisible)-\(player.relatedIndex)"
+            + "-\(player.panelVisible)-\(player.panelIndex)-\(String(describing: player.panelList))-\(player.panelListIndex)"
+            + "-\(player.shelf)-\(player.episodeFocus)"
+            + "-\(settingsOpen)-\(settingIndex)-\(String(describing: settingList))-\(settingListIndex)"
             + "-\(accountFocused)-\(accountMenuOpen)-\(accountIndex)-\(confirmingLogout)-\(cardMenu?.count ?? 0)-\(cardMenuIndex)"
             // 左边栏的高亮（上下滑时先动它，停一下才换页）、UP 主页的排序和关注、搜索框
             + "-\(sidebarTab.rawValue)-\(editing)-\(upPage?.sort.rawValue ?? -1)-\(upPage?.sortFocused ?? false)"
@@ -199,6 +211,17 @@ final class BilibiliStore: ObservableObject {
             else { self?.tv?.displayCoordinator.releasePlaybackKeepAwake() }
         }
         player.noteActivity = { [weak self] in _ = self?.tv?.noteActivity() }
+        player.accountMid = { [weak self] in self?.account?.mid ?? 0 }
+        player.signingKey = { [weak self] in
+            guard let self else { return nil }
+            return await self.currentSigningKey(cookie: await self.cookieHeader())
+        }
+        // 面板里的"UP 主"、点标题下面的名字：关掉视频（记下看到哪了），进他的主页；在主页上返回，回到这个视频停在那一帧
+        player.openUp = { [weak self] user, video in
+            guard let self else { return }
+            self.player.stop()
+            self.openUp(user, returnTo: video)
+        }
         // 播放器开关时让页面跟着刷新；看完后"继续观看"和"历史记录"要更新
         playerChanges = player.$current.removeDuplicates().dropFirst().sink { [weak self] video in
             guard let self else { return }
@@ -391,7 +414,8 @@ final class BilibiliStore: ObservableObject {
     /// 焦点落在哪个视频上，就提前把它准备好
     private func warmFocused() {
         guard tv?.bilibiliOpen == true else { return }   // 还没进哔哩哔哩时只取列表，不准备视频
-        if !editing, case .video(let video) = focused { player.warm(video) } else { player.warm(nil) }
+        // 设置页盖在上面时不准备（不然改了清晰度，回去点开的还是按旧清晰度准备好的那个）
+        if !editing, !settingsOpen, case .video(let video) = focused { player.warm(video) } else { player.warm(nil) }
     }
 
     // MARK: 按键
@@ -411,6 +435,10 @@ final class BilibiliStore: ObservableObject {
             case .back: stopEditing()
             default: break
             }
+            return
+        }
+        if settingsOpen {
+            handleSettings(command)
             return
         }
         if let menu = cardMenu {
@@ -457,7 +485,7 @@ final class BilibiliStore: ObservableObject {
             case .move(.down): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; upPage?.sortFocused = true }
             case .move(.up): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; accountFocused = true }
             case .move(.left): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; headerFocused = true }
-            case .back: withAnimation(Motion.navigate) { upPage = nil }
+            case .back: leaveUpPage()
             default: break
             }
             return
@@ -474,7 +502,7 @@ final class BilibiliStore: ObservableObject {
                     withAnimation(Motion.navigate) { upPage?.sortFocused = false; upPage?.browsing = true }
                     warmFocused()
                 }
-            case .back: withAnimation(Motion.navigate) { upPage = nil }
+            case .back: leaveUpPage()
             default: break
             }
             return
@@ -519,7 +547,7 @@ final class BilibiliStore: ObservableObject {
             else { activate() }
         case .back:
             // 在某个 UP 主的主页里：Esc 回到进来之前的那一页。其他时候在内容里短按 Esc 不做任何事。
-            if upPage != nil { withAnimation(Motion.navigate) { upPage = nil } }
+            if upPage != nil { leaveUpPage() }
             // 搜索结果的上一级是搜索框：Esc 收起结果，回到搜索框（搜索词留着，按确认可以接着改）
             else if tab == .search, !rows.isEmpty {
                 player.warm(nil)
@@ -530,19 +558,15 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
-    /// 手机遥控器的转盘：播放中是快进快退（每格 5 秒），左边栏里是上下，卡片排里是左右
-    func wheel(_ step: Int) {
-        let forward = step > 0
-        if player.current != nil {
-            if player.relatedVisible { handle(.move(forward ? .right : .left)) } else { player.scrub(by: forward ? 5 : -5) }
-        } else if headerFocused {
-            handle(.move(forward ? .down : .up))
-        } else {
-            handle(.move(forward ? .right : .left))
-        }
+    /// 转盘沿着哪个方向走（见 TVController.wheelRunsHorizontally）
+    var wheelRunsHorizontally: Bool {
+        if player.current != nil { return !player.panelVisible }                // 相关视频、清晰度栏是横的；右边的面板是竖的
+        if settingsOpen { return false }                                        // 设置是竖的
+        if cardMenu != nil || accountMenuOpen || headerFocused { return false }  // 菜单、左边栏是竖的
+        if accountFocused || upPage?.followFocused == true { return false }     // 头像、关注按钮：往下回到内容
+        return true                                                             // 视频排、三个排序
     }
 
-    /// 在左边栏里上下移动；右边的内容跟着换（和 Apple TV 一样，不用再按确认）
     /// 左边栏里高亮停在哪一项。上下滑时先只移动它，停下来一会儿才换右边的内容——换一页要重画好几排卡片、
     /// 给选中的视频预热、有时还要联网，每走一格都换的话前几下会卡
     @Published private(set) var sidebarTab: Tab = .home
@@ -571,6 +595,7 @@ final class BilibiliStore: ObservableObject {
         cardMenu = nil
         accountMenuOpen = false
         accountFocused = false
+        if settingsOpen { withAnimation(Motion.navigate) { settingsOpen = false; settingList = nil } }
         if editing, target != .search { stopEditing() }
         sidebarCommit?.cancel()
         sidebarCommit = nil
@@ -670,6 +695,8 @@ final class BilibiliStore: ObservableObject {
             openUp(user)
         case .refresh:
             reload()
+        case .settings:
+            openSettings()
         case .logout:
             // 退出登录之前先问一次；默认停在"取消"上，误按确认不会退出
             withAnimation(Motion.focus) {
@@ -679,7 +706,7 @@ final class BilibiliStore: ObservableObject {
                 accountIndex = 0
             }
         case .keepLogin:
-            withAnimation(Motion.focus) { confirmingLogout = false; accountIndex = 1 }
+            withAnimation(Motion.focus) { confirmingLogout = false; accountIndex = 2 }
         case .confirmLogout:
             withAnimation(Motion.focus) { accountMenuOpen = false; accountFocused = false }
             Task { @MainActor in
@@ -711,17 +738,19 @@ final class BilibiliStore: ObservableObject {
         headerFocused = false
         upPage?.followFocused = false
         upPage?.armed = false
+        settingsOpen = false
+        settingList = nil
     }
 
     // MARK: UP 主的主页
 
-    func openUp(_ user: BiliUser) {
+    func openUp(_ user: BiliUser, returnTo video: BiliVideo? = nil) {
         let id = "uppage-\(user.mid)"
         columns[id] = 0
         withAnimation(Motion.navigate) {
             headerFocused = false
             accountFocused = false
-            upPage = UpPage(user: user)
+            upPage = UpPage(user: user, returnTo: video)
         }
         Task { @MainActor in
             let cookie = await cookieHeader()
@@ -742,6 +771,14 @@ final class BilibiliStore: ObservableObject {
                 self.upPage?.loading = false
             }
         }
+    }
+
+    /// 返回离开 UP 主的主页：回到进来之前的那一页。是从视频里进来的（面板里的"UP 主"、点标题下面的名字），
+    /// 就回到那个视频，停在刚才那一帧，按播放接着放
+    private func leaveUpPage() {
+        let back = upPage?.returnTo
+        withAnimation(Motion.navigate) { upPage = nil }
+        if let back { player.play(back, startPaused: true) }
     }
 
     private func showUploads(_ videos: [BiliVideo], sort: UpPage.Sort) {
@@ -802,6 +839,104 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
+    // MARK: 设置页（头像菜单里的"设置"）
+
+    /// 设置项：清晰度、倍速（和看视频时右边面板里的是同一个值）、字幕（有字幕时自动打开）、弹幕
+    enum Setting: Int, CaseIterable { case quality, speed, subtitles, danmaku }
+    /// 清晰度、倍速选了以后，右边换成一列档位；弹幕选了以后换成弹幕的几项设置（按确认换下一个值）
+    enum SettingList: Hashable { case quality, speed, danmaku }
+    /// 设置里能选的清晰度（从高到低；账号或视频没有那一档时自动用能给的最高一档）
+    static let settableQualities = [120, 116, 112, 80, 64, 32]
+
+    @Published private(set) var settingsOpen = false
+    @Published private(set) var settingIndex = 0
+    @Published private(set) var settingList: SettingList?
+    @Published private(set) var settingListIndex = 0
+
+    private func openSettings() {
+        withAnimation(Motion.focus) { accountMenuOpen = false; accountFocused = false; headerFocused = false }
+        settingIndex = 0
+        settingList = nil
+        player.warm(nil)
+        withAnimation(Motion.navigate) { settingsOpen = true }
+    }
+
+    /// 设置页：上下选一行，确认改（清晰度、倍速换成一列档位，字幕直接开 / 关）；返回回到头像上
+    private func handleSettings(_ command: RemoteCommand) {
+        if let list = settingList {
+            let count = switch list {
+            case .quality: Self.settableQualities.count
+            case .speed: BilibiliNativePlayer.speeds.count
+            case .danmaku: player.danmakuOptions.count
+            }
+            switch command {
+            case .move(.up): withAnimation(Motion.focus) { settingListIndex = max(0, settingListIndex - 1) }
+            case .move(.down): withAnimation(Motion.focus) { settingListIndex = min(count - 1, settingListIndex + 1) }
+            case .select: chooseSetting(list, settingListIndex)
+            case .back: withAnimation(Motion.focus) { settingList = nil }
+            default: break
+            }
+            return
+        }
+        switch command {
+        case .move(.up): withAnimation(Motion.focus) { settingIndex = max(0, settingIndex - 1) }
+        case .move(.down): withAnimation(Motion.focus) { settingIndex = min(Setting.allCases.count - 1, settingIndex + 1) }
+        case .select: activateSetting(settingIndex)
+        case .back:
+            withAnimation(Motion.navigate) { settingsOpen = false }
+            withAnimation(Motion.focus) { accountFocused = true }   // 从头像进来的，回到头像上
+        default: break
+        }
+    }
+
+    func activateSetting(_ index: Int) {
+        guard settingsOpen, let setting = Setting(rawValue: index) else { return }
+        settingIndex = index
+        switch setting {
+        case .quality:
+            let chosen = player.preferredQuality
+            settingListIndex = Self.settableQualities.firstIndex { $0 <= chosen } ?? 0
+            withAnimation(Motion.focus) { settingList = .quality }
+        case .speed:
+            settingListIndex = BilibiliNativePlayer.speeds.firstIndex(of: player.speed) ?? 3
+            withAnimation(Motion.focus) { settingList = .speed }
+        case .subtitles:
+            withAnimation(Motion.focus) { player.subtitlesOn.toggle() }
+        case .danmaku:
+            settingListIndex = 0
+            withAnimation(Motion.focus) { settingList = .danmaku }
+        }
+    }
+
+    func chooseSetting(_ list: SettingList, _ index: Int) {
+        switch list {
+        case .quality:
+            if Self.settableQualities.indices.contains(index) {
+                player.preferredQuality = Self.settableQualities[index]
+                player.warm(nil)   // 按旧清晰度准备好的作废
+            }
+        case .speed: if BilibiliNativePlayer.speeds.indices.contains(index) { player.speed = BilibiliNativePlayer.speeds[index] }
+        case .danmaku:
+            withAnimation(Motion.focus) { player.cycleDanmakuOption(index) }
+            objectWillChange.send()
+            return   // 这一列留着，可以接着改别的
+        }
+        withAnimation(Motion.focus) { settingList = nil }
+    }
+
+    /// 鼠标点设置页里的一行 / 档位列表里的一项
+    func tapSetting(_ index: Int) {
+        guard settingsOpen else { return }
+        if settingList != nil { withAnimation(Motion.focus) { settingList = nil } }
+        activateSetting(index)
+    }
+
+    func tapSettingOption(_ index: Int) {
+        guard settingsOpen, let list = settingList else { return }
+        settingListIndex = index
+        chooseSetting(list, index)
+    }
+
     // MARK: 卡片菜单（在视频卡片上长按确认）
 
     /// 返回是否真的打开了菜单（不在视频卡片上就不会打开）
@@ -850,6 +985,7 @@ final class BilibiliStore: ObservableObject {
     /// 用触控板点头像：焦点过去并打开 / 收起菜单（不管刚才焦点在哪）
     func tapAccount() {
         guard player.current == nil, !editing else { return }
+        if settingsOpen { withAnimation(Motion.navigate) { settingsOpen = false; settingList = nil } }
         withAnimation(Motion.focus) {
             headerFocused = false
             accountFocused = true

@@ -85,6 +85,99 @@ struct BiliStream: Sendable {
     }
 }
 
+/// 看视频时右边面板要的：UP 主、是不是原创、点赞投币收藏的数
+struct BiliVideoInfo: Hashable, Sendable {
+    var aid: Int
+    var original: Bool
+    var owner: BiliUser
+    var likes: Int
+    var coins: Int
+    var favorites: Int
+    /// 选集：一个视频分了好几 P（同一个视频、不同的分段），或者它在 UP 主的某个合集里（不同的视频）。
+    /// 两样都有时按分 P 来；只有一集时为空
+    var episodes: [BiliEpisode] = []
+}
+
+/// 选集里的一集：放它就是放这个视频（分 P 时是同一个视频的另一段，带着那一段的编号）
+struct BiliEpisode: Hashable, Sendable {
+    let video: BiliVideo
+    /// 卡片上写的：分 P 是"P2"，合集是"第 2 集"
+    let label: String
+    /// 这一集的名字（分 P 的小标题，或者合集里这个视频的标题）
+    let title: String
+
+    /// 正在放的是这一集吗：同一个视频，分 P 时还要是同一段
+    func matches(_ other: BiliVideo) -> Bool {
+        video.bvid == other.bvid && (other.cid == 0 || video.cid == other.cid)
+    }
+
+    /// 从视频信息里读出选集
+    static func list(from data: [String: Any], cover: URL?, owner: BiliUser, image: (Any?) -> URL?) -> [BiliEpisode] {
+        let bvid = data["bvid"] as? String ?? ""
+        let title = data["title"] as? String ?? ""
+        let aid = data["aid"] as? Int ?? 0
+        let pages = data["pages"] as? [[String: Any]] ?? []
+        if pages.count > 1 {
+            return pages.compactMap { page in
+                guard let cid = page["cid"] as? Int else { return nil }
+                let number = page["page"] as? Int ?? 0
+                let video = BiliVideo(bvid: bvid, title: title, cover: image(page["first_frame"]) ?? cover,
+                                      duration: page["duration"] as? Int ?? 0, owner: owner.name, views: 0,
+                                      cid: cid, aid: aid, ownerMid: owner.mid)
+                return BiliEpisode(video: video, label: "P\(number)", title: page["part"] as? String ?? "")
+            }
+        }
+        let sections = (data["ugc_season"] as? [String: Any])?["sections"] as? [[String: Any]] ?? []
+        let episodes = sections.flatMap { $0["episodes"] as? [[String: Any]] ?? [] }
+        guard episodes.count > 1 else { return [] }
+        return episodes.enumerated().compactMap { index, episode in
+            guard let id = episode["bvid"] as? String, !id.isEmpty else { return nil }
+            let arc = episode["arc"] as? [String: Any] ?? [:]
+            let name = episode["title"] as? String ?? arc["title"] as? String ?? ""
+            let video = BiliVideo(bvid: id, title: name, cover: image(arc["pic"]), duration: arc["duration"] as? Int ?? 0,
+                                  owner: owner.name, views: (arc["stat"] as? [String: Any])?["view"] as? Int ?? 0,
+                                  cid: episode["cid"] as? Int ?? 0, aid: episode["aid"] as? Int ?? 0, ownerMid: owner.mid)
+            return BiliEpisode(video: video, label: "第 \(index + 1) 集", title: name)
+        }
+    }
+}
+
+/// 我和正在看的视频：点过赞没有、投了几个币、收藏了没有
+struct BiliRelation: Hashable, Sendable {
+    var liked = false
+    var coins = 0
+    var favorited = false
+}
+
+/// 一条字幕（某种语言）和它的句子
+struct BiliSubtitleTrack: Hashable, Sendable {
+    let language: String
+    let name: String
+    let url: URL
+}
+
+struct BiliSubtitleCue: Hashable, Sendable {
+    let from: Double
+    let to: Double
+    let text: String
+
+    /// 这一刻该显示哪一句（没有就是 nil）
+    static func line(at time: Double, in cues: [BiliSubtitleCue]) -> String? {
+        var low = 0, high = cues.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            if cues[mid].to <= time { low = mid + 1 } else if cues[mid].from > time { high = mid - 1 } else { return cues[mid].text }
+        }
+        return nil
+    }
+}
+
+/// 数字写成"1.2万"这样
+func biliCount(_ value: Int) -> String {
+    value >= 100_000_000 ? String(format: "%.1f亿", Double(value) / 100_000_000)
+        : value >= 10000 ? String(format: "%.1f万", Double(value) / 10000) : "\(value)"
+}
+
 struct BiliAccount: Hashable, Sendable {
     let name: String
     var mid: Int = 0
@@ -252,8 +345,13 @@ enum BiliAPI {
 
     /// 这些操作都要带账号的防伪标记（在登录信息里）
     private static func post(_ address: String, form: [String: String], cookie: String) async -> Bool {
+        await postReply(address, form: form, cookie: cookie).ok
+    }
+
+    /// 同上，失败时带回哔哩哔哩给的那句话（比如"硬币不足"），好原样告诉人
+    private static func postReply(_ address: String, form: [String: String], cookie: String) async -> (ok: Bool, message: String?) {
         guard let csrf = cookie.components(separatedBy: "; ").first(where: { $0.hasPrefix("bili_jct=") })?.dropFirst(9),
-              let url = URL(string: address) else { return false }
+              let url = URL(string: address) else { return (false, nil) }
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.httpMethod = "POST"
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -265,8 +363,9 @@ enum BiliAPI {
         all["csrf"] = String(csrf)
         request.httpBody = Data(all.map { "\($0.key)=\($0.value)" }.joined(separator: "&").utf8)
         guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return (json["code"] as? Int) == 0
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (false, nil) }
+        let ok = (json["code"] as? Int) == 0
+        return (ok, ok ? nil : json["message"] as? String)
     }
 
     static func setFollowing(mid: Int, follow: Bool, cookie: String) async -> Bool {
@@ -283,6 +382,99 @@ enum BiliAPI {
         guard let folder = (folders?["list"] as? [[String: Any]])?.first?["id"] as? Int else { return false }
         return await post("https://api.bilibili.com/x/v3/fav/resource/deal",
                           form: ["rid": "\(aid)", "type": "2", "add_media_ids": "\(folder)", "del_media_ids": ""], cookie: cookie)
+    }
+
+    // MARK: 看视频时右边的面板：UP 主、点赞、投币、收藏、字幕
+
+    /// 视频本身的信息：UP 主是谁、是不是原创（原创最多投两个币，转载一个）、点赞投币收藏各多少
+    static func info(bvid: String, key: String?, cookie: String) async -> BiliVideoInfo? {
+        var data: [String: Any]?
+        if let key { data = await fetch("https://api.bilibili.com/x/web-interface/wbi/view?\(signed(["bvid": bvid], key: key))", cookie: cookie) }
+        if data == nil { data = await fetch("https://api.bilibili.com/x/web-interface/view?bvid=\(bvid)", cookie: cookie) }
+        guard let data else { return nil }
+        let owner = data["owner"] as? [String: Any] ?? [:]
+        let stat = data["stat"] as? [String: Any] ?? [:]
+        var face = owner["face"] as? String ?? ""
+        if face.hasPrefix("//") { face = "https:" + face }
+        let uploader = BiliUser(mid: owner["mid"] as? Int ?? 0, name: owner["name"] as? String ?? "",
+                                face: face.isEmpty ? nil : URL(string: face.replacingOccurrences(of: "http://", with: "https://") + "@120w_120h_1c.webp"))
+        return BiliVideoInfo(aid: data["aid"] as? Int ?? 0, original: (data["copyright"] as? Int ?? 1) == 1, owner: uploader,
+                             likes: stat["like"] as? Int ?? 0, coins: stat["coin"] as? Int ?? 0, favorites: stat["favorite"] as? Int ?? 0,
+                             episodes: BiliEpisode.list(from: data, cover: image(data["pic"]), owner: uploader, image: image))
+    }
+
+    /// 我和这个视频的关系：点过赞没有、投了几个币、收藏了没有（需要登录）
+    static func relation(bvid: String, cookie: String) async -> BiliRelation? {
+        guard !cookie.isEmpty, let data = await fetch("https://api.bilibili.com/x/web-interface/archive/relation?bvid=\(bvid)", cookie: cookie) else { return nil }
+        return BiliRelation(liked: data["like"] as? Bool ?? false, coins: data["coin"] as? Int ?? 0, favorited: data["favorite"] as? Bool ?? false)
+    }
+
+    /// 点赞 / 取消点赞
+    static func setLiked(aid: Int, _ on: Bool, cookie: String) async -> Bool {
+        await post("https://api.bilibili.com/x/web-interface/archive/like", form: ["aid": "\(aid)", "like": on ? "1" : "2"], cookie: cookie)
+    }
+
+    /// 投币（1 或 2 个）。硬币不够、已经投满时，带回哔哩哔哩的原话
+    static func addCoins(aid: Int, count: Int, cookie: String) async -> (ok: Bool, message: String?) {
+        await postReply("https://api.bilibili.com/x/web-interface/coin/add",
+                        form: ["aid": "\(aid)", "multiply": "\(count)", "select_like": "0"], cookie: cookie)
+    }
+
+    /// 取消收藏：从所有收着它的收藏夹里拿掉
+    static func removeFavorite(aid: Int, mid: Int, cookie: String) async -> Bool {
+        let folders = await fetch("https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=\(mid)&type=2&rid=\(aid)", cookie: cookie)
+        let holding = (folders?["list"] as? [[String: Any]] ?? []).filter { ($0["fav_state"] as? Int) == 1 }.compactMap { $0["id"] as? Int }
+        guard !holding.isEmpty else { return false }
+        return await post("https://api.bilibili.com/x/v3/fav/resource/deal",
+                          form: ["rid": "\(aid)", "type": "2", "add_media_ids": "",
+                                 "del_media_ids": holding.map(String.init).joined(separator: "%2C")], cookie: cookie)
+    }
+
+    /// 这个视频有哪些字幕（UP 主上传的、自动生成的）。key 是签名用的密钥，没有时换不带签名的老接口
+    static func subtitleTracks(bvid: String, cid: Int, key: String?, cookie: String) async -> [BiliSubtitleTrack] {
+        let address = key.map { "https://api.bilibili.com/x/player/wbi/v2?\(signed(["bvid": bvid, "cid": "\(cid)"], key: $0))" }
+            ?? "https://api.bilibili.com/x/player/v2?bvid=\(bvid)&cid=\(cid)"
+        guard let data = await fetch(address, cookie: cookie) else { return [] }
+        let list = (data["subtitle"] as? [String: Any])?["subtitles"] as? [[String: Any]] ?? []
+        return list.compactMap { item in
+            guard var link = item["subtitle_url"] as? String, !link.isEmpty else { return nil }   // 没登录时自动生成的没有地址
+            if link.hasPrefix("//") { link = "https:" + link }
+            guard let url = URL(string: link.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
+            let language = item["lan"] as? String ?? ""
+            return BiliSubtitleTrack(language: language, name: item["lan_doc"] as? String ?? language, url: url)
+        }
+    }
+
+    /// 一条字幕的全部句子
+    static func subtitleCues(_ track: BiliSubtitleTrack) async -> [BiliSubtitleCue] {
+        var request = URLRequest(url: track.url, timeoutInterval: 10)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://www.bilibili.com/", forHTTPHeaderField: "Referer")
+        request.httpShouldHandleCookies = false
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        return (json["body"] as? [[String: Any]] ?? []).compactMap { line in
+            guard let from = (line["from"] as? NSNumber)?.doubleValue, let to = (line["to"] as? NSNumber)?.doubleValue,
+                  let text = line["content"] as? String, !text.isEmpty else { return nil }
+            return BiliSubtitleCue(from: from, to: to, text: text)
+        }
+    }
+
+    /// 弹幕：这个视频（这一 P）的弹幕。哔哩哔哩给的是压缩过的 XML（系统没自动解开时自己解）
+    static func danmaku(cid: Int, cookie: String) async -> [BiliDanmaku] {
+        guard cid > 0, let url = URL(string: "https://api.bilibili.com/x/v1/dm/list.so?oid=\(cid)") else { return [] }
+        var request = URLRequest(url: url, timeoutInterval: 12)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://www.bilibili.com/", forHTTPHeaderField: "Referer")
+        if !cookie.isEmpty { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        request.httpShouldHandleCookies = false
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return [] }
+        var text = String(data: data, encoding: .utf8) ?? ""
+        if !text.contains("<d p=") {
+            let opened = try? (data as NSData).decompressed(using: .zlib) as Data
+            text = opened.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        }
+        return BiliDanmaku.parse(text)
     }
 
     // MARK: 关注的 UP 主

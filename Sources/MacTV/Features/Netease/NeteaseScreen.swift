@@ -1063,17 +1063,31 @@ struct NeteaseProgress: View {
     }
 }
 
-/// 正在唱的那一句（有逐字时间时）：唱到哪个字，哪个字在它该唱的那一小段时间里慢慢亮起来。
-/// 按屏幕刷新率逐帧算（暂停时停住），亮起来的过程两头缓、中间快，看着是"晕开"而不是"跳亮"。
+/// 正在唱的那一句（有逐字时间时）：KTV 那样从左往右涂亮。每个字（英文是每个词）在它自己唱的那段时间里，
+/// 从灰色一点点涂成白色，分界线带一段柔和的过渡；拖长音的字涂得慢，快的字涂得快。
+/// 和网易云、Apple Music 的逐字歌词是同一个做法：涂到哪 = (现在 − 这个字开始唱) ÷ 这个字唱多久，
+/// "现在"每一帧直接问播放器（声音实际放到的位置），所以不会越走越偏。
+/// macOS 15 起用系统的逐字绘制来涂；更老的系统整个字慢慢变亮（同一套时间）。
 struct NeteaseKaraokeLine: View {
-    /// 一个字（或一个英文词）亮起来：开始唱之前 0.1 秒开始变亮，0.12 秒内亮满（短的字在它自己的时长内亮满）。
-    /// 字在唱出来的那一刻已经全亮，不会落后，也不会拖到下一个字。
-    /// 以前是开始唱才慢慢亮、要 0.3–0.9 秒才亮满，亮到一半时歌手已经唱过去半个到一个字
-    static let lead = 0.1
-    static func brightness(at now: Double, start: Double, duration: Double) -> Double {
-        let fade = max(0.05, min(0.12, duration))
-        let linear = max(0, min(1, (now + lead - start) / fade))
-        return linear * linear * (3 - 2 * linear)
+    /// 提前一点点：画面从算出来到真正显示在电视上要两三帧，再加上"涂到一半才看得出在唱这个字"，
+    /// 所以整体提前 0.08 秒，字被唱出来的那一刻正好开始涂。以前是开始唱才亮、半秒左右才亮到一半，看着慢半个字
+    static let lead = 0.08
+    /// 涂到第几成（0 还没开始，1 涂满）。极短的字至少给 0.08 秒涂，不会一闪而过
+    static func progress(at now: Double, start: Double, duration: Double) -> Double {
+        max(0, min(1, (now + lead - start) / max(0.08, duration)))
+    }
+    static let dim = 0.42
+
+    /// 一个字（词）后面带着的空格、标点不占它唱的时间：字在自己的时长里涂满，后面的标点在它唱完时一下亮起。
+    /// 不然"字，"整个按一个字的宽度涂，字涂到一半就唱完了，看着跑在声音前面
+    static func split(_ text: String) -> (core: String, tail: String) {
+        var core = Substring(text)
+        var tail = ""
+        while let last = core.last, last.isWhitespace || last.isPunctuation {
+            tail.insert(last, at: tail.startIndex)
+            core.removeLast()
+        }
+        return core.isEmpty ? (text, "") : (String(core), tail)
     }
 
     let line: NeteaseLyricLine
@@ -1084,9 +1098,80 @@ struct NeteaseKaraokeLine: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: nil, paused: !playing)) { _ in
             let now = time()
-            line.words.reduce(Text("")) { text, word in
-                let level = NeteaseKaraokeLine.brightness(at: now, start: word.time, duration: word.duration)
-                return text + Text(word.text).foregroundColor(.white.opacity(0.42 + 0.58 * level))
+            if #available(macOS 15, *) {
+                line.words.reduce(Text("")) { text, word in
+                    let (core, tail) = Self.split(word.text)
+                    let sung = text + Text(core).customAttribute(KaraokeTiming(start: word.time, duration: word.duration))
+                    return tail.isEmpty ? sung : sung + Text(tail).customAttribute(KaraokeTiming(start: word.time + word.duration, duration: 0))
+                }
+                .foregroundStyle(.white)
+                .textRenderer(KaraokeRenderer(now: now))
+            } else {
+                line.words.reduce(Text("")) { text, word in
+                    let level = NeteaseKaraokeLine.progress(at: now, start: word.time, duration: word.duration)
+                    return text + Text(word.text).foregroundColor(.white.opacity(Self.dim + (1 - Self.dim) * level))
+                }
+            }
+        }
+    }
+}
+
+/// 每个字什么时候开始唱、唱多久，跟着字走，画的时候拿出来算涂到哪
+@available(macOS 15, *)
+struct KaraokeTiming: TextAttribute {
+    let start: Double
+    let duration: Double
+}
+
+/// 逐字涂亮：每个字先画一层灰的，再画一层白的，白的那层只露出左边涂过的部分，分界处渐变过渡
+@available(macOS 15, *)
+struct KaraokeRenderer: TextRenderer {
+    let now: Double
+
+    /// 一个字（词）被折到两行、或者中英文混排被拆成几段时，它就成了好几段（run）。这几段要当成一个整体
+    /// 从左到右接着涂：先涂第一段，涂满了再涂下一段，而不是几段同时涂
+    static func share(of done: Double, total: Double, before: Double, width: Double) -> Double {
+        guard width > 0 else { return done >= 1 ? 1 : 0 }
+        return max(0, min(1, (done * total - before) / width))
+    }
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        // 先量一遍：每个字一共多宽、它的每一段前面已经有多宽
+        var totals: [KaraokeTiming: Double] = [:]
+        var befores: [Double] = []
+        for line in layout {
+            for run in line {
+                guard let timing = run[KaraokeTiming.self] else { befores.append(0); continue }
+                let width = run.typographicBounds.rect.width
+                befores.append(totals[timing, default: 0])
+                totals[timing, default: 0] += width
+            }
+        }
+        var position = 0
+        for line in layout {
+            for run in line {
+                defer { position += 1 }
+                guard let timing = run[KaraokeTiming.self] else { context.draw(run); continue }
+                let box = run.typographicBounds.rect
+                let whole = NeteaseKaraokeLine.progress(at: now, start: timing.start, duration: timing.duration)
+                let done = Self.share(of: whole, total: totals[timing] ?? box.width, before: befores[position], width: box.width)
+                if done >= 1 { context.draw(run); continue }
+                var dim = context
+                dim.opacity = NeteaseKaraokeLine.dim
+                dim.draw(run)
+                guard done > 0 else { continue }
+                // 过渡带：字宽的一半（至少 8 点），随涂的进度从字左边外面走到右边外面
+                let soft = max(8, box.width * 0.5)
+                let edge = box.minX - soft + (box.width + soft) * done
+                let tall = CGRect(x: box.minX - 4, y: box.minY - box.height, width: 0, height: box.height * 3)
+                var lit = context
+                lit.clipToLayer { mask in
+                    mask.fill(Path(CGRect(x: tall.minX, y: tall.minY, width: max(0, edge - tall.minX), height: tall.height)), with: .color(.white))
+                    mask.fill(Path(CGRect(x: edge, y: tall.minY, width: soft, height: tall.height)),
+                              with: .linearGradient(Gradient(colors: [.white, .white.opacity(0)]),
+                                                    startPoint: CGPoint(x: edge, y: 0), endPoint: CGPoint(x: edge + soft, y: 0)))
+                }
+                lit.draw(run)
             }
         }
     }

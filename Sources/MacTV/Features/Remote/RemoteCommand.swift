@@ -26,7 +26,11 @@ enum RemoteCommand {
         case "back": self = .back
         case "home": self = .home
         case "playpause": self = .playPause
-        case "wheel": self = .wheel((json["d"] as? Int ?? 1) < 0 ? -1 : 1)
+        // 转盘：手机那边把还没送到的格数攒在一起送（转得快也不丢格），这里收到几格就走几格
+        case "wheel":
+            let steps = max(-16, min(16, json["d"] as? Int ?? 1))
+            guard steps != 0 else { return nil }
+            self = .wheel(steps)
         case "rewind": self = .seek(forward: false)
         case "forward": self = .seek(forward: true)
         case "volup": self = .volume(6)

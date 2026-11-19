@@ -128,9 +128,11 @@ function pumpCommands() {
   if (activeCommand || !commandQueue.length) return;
   const item = commandQueue.shift();
   if (!key) { item.done(); pumpCommands(); return; }
+  const body = typeof item.body === 'function' ? item.body() : item.body;
+  if (!body) { item.done(); pumpCommands(); return; }
   const controller = new AbortController();
   activeCommand = controller;
-  api('/cmd', item.body, controller.signal).catch(e => {
+  api('/cmd', body, controller.signal).catch(e => {
     if (e.message !== 'unpaired' && e.message !== 'cancelled') { online(false); haptic('error'); }
   }).finally(() => { activeCommand = null; item.done(); pumpCommands(); });
 }
@@ -139,6 +141,7 @@ function send(a, extra, kind = 'tick') {
   return new Promise(resolve => {
     const urgent = a === 'home' || a === 'screenoff';
     if (urgent) {
+      wheelPending = 0;   // 转盘攒着还没送的格数作废，不会跑到主屏上去
       while (commandQueue.length) commandQueue.shift().done();
       if (activeCommand) activeCommand.abort();
       commandQueue.unshift({ body: { a, ...extra }, done: resolve });
@@ -149,6 +152,36 @@ function send(a, extra, kind = 'tick') {
     }
     pumpCommands();
   });
+}
+
+// 转盘：每过一格手机上马上"嗒"一下（手感不等网络），格数先攒着；上一条指令一回来，就把攒下的格数一次送过去。
+// 转得再快也不排长队、不丢格，Mac 那边收到几格就走几格（一条最多 16 格，多的接着下一条送）
+let wheelPending = 0, wheelQueued = false;
+const WHEEL_MAX = 16;
+function queueWheel() {
+  if (wheelQueued) return;
+  wheelQueued = true;
+  let sent = false;
+  commandQueue.push({
+    body: () => {
+      wheelQueued = false;
+      const d = Math.max(-WHEEL_MAX, Math.min(WHEEL_MAX, wheelPending));
+      wheelPending -= d;
+      sent = d !== 0;
+      return sent ? { a: 'wheel', d } : null;
+    },
+    done: () => {
+      wheelQueued = false;
+      if (!sent) { wheelPending = 0; return; }   // 没送出去就被丢掉了（比如按了主屏、断开了）：攒下的作废
+      if (wheelPending) queueWheel();            // 超过 16 格剩下的：接着送
+    },
+  });
+  pumpCommands();
+}
+function sendWheel(step) {
+  haptic('tick');
+  wheelPending += step;
+  queueWheel();
 }
 
 // State: connection, the app list, settings.
@@ -892,9 +925,11 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
   let start = null, timer = null, repeated = false;
   // 转盘（和 iPod 的点按转盘一个做法）：手指绕着圆心转，累计转过的角度，每转过一小段算一格。
   // 顺时针 = 往后 / 往下 / 快进，逆时针相反。中间的 OK 区域不算；一旦转起来，这次就不再当成按键或滑动。
-  const WHEEL_UNIT = 0.24;      // 每格的弧度（约 14 度）
+  const WHEEL_UNIT = 0.384;     // 每格的弧度（22 度，一圈 16 格：不会一碰就走好几格）
   const WHEEL_STARTS = 0.15;    // 转过这么多才算"在转"
   let wheel = null;
+  // 转起来时圆环稍微亮一点；松手恢复
+  const endTurn = () => { pad.classList.remove('turning'); };
   const angleAt = (x, y) => {
     const r = pad.getBoundingClientRect();
     const cx = x - (r.left + r.width / 2), cy = y - (r.top + r.height / 2);
@@ -942,12 +977,13 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
           wheel.turning = true;
           wheel.sum = 0;
           stop();
+          pad.classList.add('turning');
         }
         if (wheel.turning) {
           const steps = Math.trunc(wheel.sum / WHEEL_UNIT);
           if (steps) {
             wheel.sum -= steps * WHEEL_UNIT;
-            for (let i = 0; i < Math.abs(steps); i++) send('wheel', { d: Math.sign(steps) }, 'tick');
+            for (let i = 0; i < Math.abs(steps); i++) sendWheel(Math.sign(steps));
           }
           return;
         }
@@ -958,7 +994,7 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
   pad.addEventListener('pointerup', e => {
     if (!start) return;
     stop();
-    if (wheel && wheel.turning) { start = null; wheel = null; return; }   // 刚才是在转盘，不是按键也不是滑动
+    if (wheel && wheel.turning) { start = null; wheel = null; endTurn(); return; }   // 刚才是在转盘，不是按键也不是滑动
     wheel = null;
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
     let zone = start.zone;
@@ -968,7 +1004,7 @@ try { if (localStorage.getItem('mactvTab') === 'touch') tab('touch'); } catch {}
     flash(zone);
     send(zone, {}, zone === 'ok' ? 'tap' : 'tick');
   });
-  const cancelHold = () => { stop(); start = null; wheel = null; };
+  const cancelHold = () => { stop(); start = null; wheel = null; endTurn(); };
   pad.addEventListener('pointercancel', cancelHold);
   pad.addEventListener('lostpointercapture', cancelHold);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') cancelHold(); });

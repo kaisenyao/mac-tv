@@ -65,6 +65,9 @@ final class TVController: NSObject, ObservableObject {
     // - off：这里不响应。
     //
     // 从一个区域到另一个区域（进左边栏、上顶栏）只能是一次新的滑动的第一格：甩出去的惯性不会冲过去。
+    // 一去一回方向相反：上到顶栏 / 头像是什么手势，回去就是反过来的手势。所以顶栏、头像的上下跟着它下面那一块走——
+    // 下面是内容跟着手走的（视频排、首页那几排、歌单里的歌），往下滑上去、往上滑回来；
+    // 下面是光标（设置项、歌单页左边的按钮），往上滑上去、往下滑回来。
     // 鼠标：点一下选中并打开，按住弹出菜单；停在上面只是轻轻浮起、不改选中，一按键或一滑动就收起（PointerActivity）。
     // 键盘：方向键就是光标方向；回车确认、长按回车菜单；Esc 返回、长按 Esc 回主屏。
     // 核对用的现象（不是依据）：长条里选中是加框；挑选里选中是变白。
@@ -87,6 +90,14 @@ final class TVController: NSObject, ObservableObject {
     }
     func endScrub() {
         if bilibiliOpen { bilibiliStore.player.endScrub() } else if neteaseOpen { neteaseStore.endScrub() }
+    }
+
+    /// 转盘沿着哪个方向走：焦点所在的这一排是横的（首页那几排、顶栏、音质栏、播放列表、排序）还是竖的（菜单、左边栏、设置、歌单里的歌）
+    func wheelRunsHorizontally() -> Bool {
+        if activeSheet != nil { return false }   // 弹出的面板都是竖着一列
+        if bilibiliOpen { return bilibiliStore.wheelRunsHorizontally }
+        if neteaseOpen { return neteaseStore.wheelRunsHorizontally }
+        return true                               // 主屏：一排图标
     }
 
     /// 长条里朝这个方向还有没有下一个。没有就停：一次滑动接着走的（第二格起、甩出去的惯性）不离开这一条
@@ -414,11 +425,18 @@ final class TVController: NSObject, ObservableObject {
 
         switch command {
         case .wheel(let step):
-            // 转盘 = 沿着当前这一列东西往前 / 往后：哔哩哔哩里由它自己决定（播放中是快进快退）；
-            // 其他地方，弹出的面板是竖着排的，主屏和别的页是横着排的。
-            if bilibiliOpen, mode == .launcher, sheets.top == nil { bilibiliStore.wheel(step); return }
-            let forward = step > 0
-            handle(sheets.top != nil ? .move(forward ? .down : .up) : .move(forward ? .right : .left), from: source)
+            // 转盘（手机遥控器上那一圈）= 沿着焦点所在的这一排 / 一列走，顺时针是下一个（规则见 Module）。
+            // 视频、音乐播放中是快进 / 快退，一格 5 秒
+            let forward = step > 0, count = min(abs(step), 16)
+            if mode == .launcher, module(horizontal: true) == .scrub {
+                for _ in 0..<count {
+                    if bilibiliOpen { bilibiliStore.player.scrub(by: forward ? 5 : -5) } else if neteaseOpen { neteaseStore.nudge(forward ? 5 : -5) }
+                }
+                feedback.play(.move, from: source)
+                return
+            }
+            let horizontal = wheelRunsHorizontally()
+            for _ in 0..<count { handle(.move(horizontal ? (forward ? .right : .left) : (forward ? .down : .up)), from: source) }
             return
         case .home: goHome(); return
         case .activateBrowser:

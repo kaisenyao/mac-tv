@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import AppKit
+import MediaPlayer
 import Combine
 import SwiftUI
 
@@ -19,8 +20,20 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published private(set) var failed = false
     /// 和正在播的视频相关的视频：播放时按下键拉出来，播完自动出现
     @Published private(set) var related: [BiliVideo] = []
+    /// 下面拉出来的那一块开着（里面是"选集"和"相关视频"两排，见 shelves）
     @Published private(set) var relatedVisible = false
     @Published private(set) var relatedIndex = 0
+
+    /// 选集（一个视频分了好几 P，或者它在某个合集里）：下面拉出来的那一块里，在"相关视频"上面一排。
+    /// 放完一集自动接着放下一集。换集时这一排留着，不跟着清空
+    @Published private(set) var episodes: [BiliEpisode] = []
+    @Published private(set) var episodeFocus = 0
+    /// 下面拉出来的那一块里的两排；焦点在哪一排
+    enum Shelf: Hashable { case episodes, related }
+    @Published private(set) var shelf: Shelf = .related
+    var shelves: [Shelf] { (episodes.isEmpty ? [] : [.episodes]) + (related.isEmpty ? [] : [.related]) }
+    /// 正在放的是第几集
+    var episodeIndex: Int? { current.flatMap { video in episodes.firstIndex { $0.matches(video) } } }
 
     /// 清晰度菜单：播放时按上键打开
     @Published private(set) var qualities: [Int] = []
@@ -28,15 +41,82 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published private(set) var qualityIndex = 0
     @Published private(set) var qualityID = 0
     /// 想要的清晰度上限，记住上次的选择；默认 1080P 高码率
-    private var preferredQuality: Int {
+    var preferredQuality: Int {
         get { UserDefaults.standard.object(forKey: "bilibiliQuality") as? Int ?? 112 }
         set { UserDefaults.standard.set(newValue, forKey: "bilibiliQuality") }
     }
 
     enum Outcome { case stay, close }
 
+    // MARK: 右边的面板（播放时长按确认拉出来）
+
+    /// 面板里一行一行：UP 主、点赞、投币、收藏、选集（有的话）、倍速、字幕、弹幕
+    enum PanelRow: Hashable { case up, like, coin, favorite, episodes, speed, subtitles, danmaku }
+    /// 选了某一行以后在面板里展开的小列表：投几个币、倍速档位、字幕语言、确认取消收藏
+    enum PanelList: Hashable { case coins, speed, subtitles, unfavorite, danmaku }
+    @Published private(set) var panelVisible = false
+    @Published private(set) var panelList: PanelList?
+    /// 面板里选中的是哪一行（按行记，不按第几个：取到 UP 主、选集以后行会多出来，选中的不会跳到别的行上）
+    @Published private(set) var panelRow: PanelRow = .speed
+    var panelIndex: Int { panelRows.firstIndex(of: panelRow) ?? 0 }
+    @Published private(set) var panelListIndex = 0
+    /// UP 主是谁、点赞投币收藏的数；我点过赞没有、投了几个币、收藏了没有
+    @Published private(set) var info: BiliVideoInfo?
+    @Published private(set) var relation = BiliRelation()
+    /// 在面板里点赞、投币、收藏过几次：之前发出去的"我和这个视频的关系"查询回来得晚，就不拿它盖掉刚做的
+    private var relationEdits = 0
+
+    /// 哔哩哔哩网页上的几档倍速（从快到慢，和网页上的排法一样）
+    static let speeds: [Double] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
+    /// 2.0× 1.5× 1.25× 1.0× 0.75× 0.5×
+    static func speedName(_ value: Double) -> String {
+        String(format: (value * 10).rounded() == value * 10 ? "%.1f×" : "%.2f×", value)
+    }
+    /// 倍速：记住上次选的，下一个视频也按它放（设置页里也能改）
+    @Published var speed = UserDefaults.standard.object(forKey: "bilibiliSpeed") as? Double ?? 1.0 {
+        didSet {
+            UserDefaults.standard.set(speed, forKey: "bilibiliSpeed")
+            player.defaultRate = Float(speed)
+            if player.timeControlStatus != .paused, player.rate > 0 { player.rate = Float(speed) }
+        }
+    }
+    /// 有字幕时自动打开（在面板里选了"关闭"或某种语言，这个也跟着变）
+    @Published var subtitlesOn = UserDefaults.standard.object(forKey: "bilibiliSubtitles") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(subtitlesOn, forKey: "bilibiliSubtitles") }
+    }
+    /// 弹幕开关：记住上次的选择（面板里、设置页里都能改）。打开时这个视频还没取过弹幕就现取
+    @Published var danmakuOn = UserDefaults.standard.object(forKey: "bilibiliDanmaku") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(danmakuOn, forKey: "bilibiliDanmaku")
+            if danmakuOn, danmakuAll.isEmpty, let video = current, let cid = stream?.cid { loadDanmaku(video, cid: cid) }
+        }
+    }
+    /// 这个视频的弹幕，已经按弹幕设置排好了行（见 BiliDanmakuLayout）
+    @Published private(set) var danmaku: [BiliDanmakuLayout.Placed] = []
+    /// 取回来的全部弹幕（改弹幕设置时从它重新排）
+    private var danmakuAll: [BiliDanmaku] = []
+    /// 弹幕设置：显示区域、字号、速度、不透明度、固定弹幕、彩色弹幕。改了马上重新排
+    @Published var danmakuStyle = BiliDanmakuStyle.load() {
+        didSet {
+            guard danmakuStyle != oldValue else { return }
+            danmakuStyle.save()
+            danmakuLayout = BiliDanmakuLayout(style: danmakuStyle)
+            relayoutDanmaku()
+        }
+    }
+    @Published private(set) var danmakuLayout = BiliDanmakuLayout(style: BiliDanmakuStyle.load())
+    @Published private(set) var subtitleTracks: [BiliSubtitleTrack] = []
+    @Published private(set) var subtitleTrack: BiliSubtitleTrack?
+    @Published private(set) var subtitleCues: [BiliSubtitleCue] = []
+
     let player = AVPlayer()
     var cookie: () async -> String = { "" }
+    /// 签名用的密钥（取字幕要用），由外面接上
+    var signingKey: () async -> String? = { nil }
+    /// 登录的账号编号（0 = 没登录）：没登录时面板里不放点赞、投币、收藏；收藏要用它找收藏夹
+    var accountMid: () -> Int = { 0 }
+    /// 去 UP 主的主页（由外面接上：关掉播放器、打开主页）。带上正在看的视频和看到的位置，返回时回来接着放
+    var openUp: ((BiliUser, BiliVideo) -> Void)?
     var keepAwake: (Bool) -> Void = { _ in }
     /// 显示一句提示（由外面接到应用的提示条上）
     var toast: ((String) -> Void)?
@@ -51,32 +131,42 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published private(set) var scrubbing = false
     private var scrubTarget = 0.0
     private var scrubWasPlaying = false
+    private var lastReveal = Date.distantPast
+    /// 这次打开是不是停在那一帧（见 play）
+    private var startPaused = false
+    /// 这一集放完的事（接下一集 / 摆出相关视频）已经做过了：放完时系统的通知和"停在了最后"都会来，只做一次
+    private var endHandled = false
     private var stream: BiliStream?
     private var loaders: [ObjectIdentifier: BiliHLS.Loader] = [:]
     private let loaderQueue = DispatchQueue(label: "bilibili.playlists")
 
     init() {
         player.automaticallyWaitsToMinimizeStalling = true
+        player.defaultRate = Float(speed)   // 按播放就是这个倍速
         player.publisher(for: \.timeControlStatus).receive(on: RunLoop.main).sink { [weak self] status in
             MainActor.assumeIsolated {
                 guard let self, self.current != nil else { return }
                 self.paused = status == .paused
+                self.publishNowPlaying()
+                // 停在了最后（有的视频放完不发通知，只是停住）：和放完一样处理
+                if status == .paused, !self.scrubbing, self.duration > 1, self.displayTime() >= self.duration - 0.6 { self.reachedEnd() }
             }
         }.store(in: &observers)
+        wireMediaKeys()
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] now in
             MainActor.assumeIsolated {
                 guard let self, self.current != nil, !self.scrubbing else { return }
                 self.time = now.seconds.isFinite ? now.seconds : 0
                 if let total = self.player.currentItem?.duration.seconds, total.isFinite { self.duration = total }
-                if !self.showing, self.time > 0.05 { self.showing = true }
+                if self.time < self.duration - 2 { self.endHandled = false }   // 放完后又往回拖了：再放完还要接着处理
+                if !self.showing, self.time > 0.05 { self.showing = true; self.publishNowPlaying() }
                 if Int(self.time) % 20 == 0 { self.noteActivity() }   // 别让屏保在看视频时跳出来
             }
         }
         NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification).receive(on: RunLoop.main).sink { [weak self] note in
             MainActor.assumeIsolated {
                 guard let self, self.current != nil, (note.object as? AVPlayerItem) === self.player.currentItem else { return }
-                // 播完了：有相关视频就摆出来接着挑，没有就回列表
-                if self.related.isEmpty { self.stop() } else { self.showRelated() }
+                self.reachedEnd()
             }
         }.store(in: &observers)
     }
@@ -139,6 +229,7 @@ final class BilibiliNativePlayer: ObservableObject {
         asset.resourceLoader.setDelegate(loader, queue: loaderQueue)
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 10
+        item.audioTimePitchAlgorithm = .spectral   // 倍速时声音不变调，听着最自然
         loaders[ObjectIdentifier(item)] = loader   // 播放期间要一直留着它
         if loaders.count > 4, let stale = loaders.keys.first(where: { $0 != ObjectIdentifier(item) && $0 != player.currentItem.map(ObjectIdentifier.init) }) {
             loaders[stale] = nil
@@ -148,11 +239,28 @@ final class BilibiliNativePlayer: ObservableObject {
 
     // MARK: 播放
 
-    func play(_ video: BiliVideo) {
+    /// startPaused：打开后停在那一帧不放（从 UP 主主页返回到刚才那个视频时），按播放才接着放
+    func play(_ video: BiliVideo, startPaused: Bool = false) {
         if current != nil { report() }   // 从相关视频里直接换片：先把上一个的进度记下
+        stream = nil                      // 上一个视频的流（分 P 编号、清晰度）不能留给这个用
+        qualityMenuVisible = false
+        self.startPaused = startPaused
+        endHandled = false
+        // 换到同一个选集里的另一集：选集那一排留着；换到别的视频就清掉，等新视频的信息来了再说
+        if !episodes.contains(where: { $0.matches(video) }) { episodes = [] }
         related = []
         relatedVisible = false
         relatedIndex = 0
+        panelVisible = false
+        panelList = nil
+        info = nil
+        relation = BiliRelation()
+        subtitleTracks = []
+        subtitleTrack = nil
+        subtitleCues = []
+        danmaku = []
+        danmakuAll = []
+        loadInfo(video)
         Task { @MainActor [weak self] in
             guard let self else { return }
             let list = await BiliAPI.related(to: video.bvid, cookie: await self.cookie())
@@ -166,7 +274,7 @@ final class BilibiliNativePlayer: ObservableObject {
         current = video
         failed = false
         showing = false
-        paused = false
+        paused = startPaused
         time = 0
         duration = Double(video.duration)
         keepAwake(true)
@@ -195,11 +303,32 @@ final class BilibiliNativePlayer: ObservableObject {
         quality = stream.quality
         qualityID = stream.qualityID
         qualities = stream.available
-        // 继续观看：从上次的位置接着放（快看完的就从头）
-        if let progress = video.progress, progress > 5, video.duration - progress > 15 {
-            player.seek(to: CMTime(seconds: Double(progress), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        loadSubtitles(video, cid: stream.cid)
+        if danmakuOn { loadDanmaku(video, cid: stream.cid) }
+        // 继续观看：从上次的位置接着放（快看完的就从头）。
+        // 从 UP 主主页回来（startPaused）不一样：回到离开时的那一帧，哪怕快到结尾了（离结尾留一点，免得当成放完了）
+        if let progress = video.progress {
+            let total = Double(video.duration > 0 ? video.duration : Int(duration))
+            let resumeAt: Double? = startPaused
+                ? (progress > 0 ? (total > 2 ? min(Double(progress), total - 2) : Double(progress)) : nil)
+                : (progress > 5 && video.duration - progress > 15 ? Double(progress) : nil)
+            if let resumeAt {
+                player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            }
         }
-        player.play()
+        if startPaused {
+            // 停在那一帧：画面准备好就把封面换成画面，控制条一直露着（暂停时本来就一直显示）
+            player.pause()
+            Task { @MainActor [weak self] in
+                for _ in 0..<60 {
+                    guard let self, self.current == video else { return }
+                    if self.player.currentItem?.status == .readyToPlay { self.showing = true; self.publishNowPlaying(); return }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+        } else {
+            player.play()
+        }
         flashControls(seconds: 4)
     }
 
@@ -215,12 +344,42 @@ final class BilibiliNativePlayer: ObservableObject {
         }
     }
 
-    private func showRelated() {
-        guard !related.isEmpty else { return }
-        relatedIndex = min(relatedIndex, related.count - 1)
+    /// 拉出下面那一块，焦点放在想要的那一排上（没有那一排就放在有的那一排）。选集停在正在放的那一集上
+    private func showShelf(_ which: Shelf) {
+        let available = shelves
+        guard let first = available.first else { return }
+        qualityMenuVisible = false
+        closePanel()
+        shelf = available.contains(which) ? which : first
+        episodeFocus = episodeIndex ?? 0
+        relatedIndex = min(relatedIndex, max(0, related.count - 1))
         controlsVisible = false
         hideControls?.cancel()
         relatedVisible = true
+    }
+
+    /// 这一集放完了：选集里还有下一集就接着放；没有的话，有相关视频就摆出来接着挑，没有就回列表
+    private func reachedEnd() {
+        guard !endHandled, current != nil else { return }
+        endHandled = true
+        closePanel()               // 放完时面板、清晰度栏开着：先收起来，再接下一集或摆出相关视频
+        qualityMenuVisible = false
+        if let index = episodeIndex, episodes.indices.contains(index + 1) {
+            let next = episodes[index + 1]
+            toast?("接着放 \(next.label)" + (next.title.isEmpty || next.title == next.label ? "" : " · \(next.title)"))
+            play(next.video)
+        } else if related.isEmpty {
+            stop()
+        } else {
+            showShelf(.related)
+        }
+    }
+
+    /// 在选集里选了一集：选的就是正在放的那一集，只收起来接着看
+    private func playEpisode(_ index: Int) {
+        guard episodes.indices.contains(index) else { return }
+        if index == episodeIndex { relatedVisible = false; return }
+        play(episodes[index].video)
     }
 
     func stop() {
@@ -228,6 +387,12 @@ final class BilibiliNativePlayer: ObservableObject {
         report()
         relatedVisible = false
         qualityMenuVisible = false
+        panelVisible = false
+        panelList = nil
+        subtitleCues = []
+        danmaku = []
+        danmakuAll = []
+        episodes = []
         related = []
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -237,6 +402,48 @@ final class BilibiliNativePlayer: ObservableObject {
         controlsVisible = false
         hideControls?.cancel()
         keepAwake(false)
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
+    }
+
+    // MARK: 键盘上的媒体键（播放 / 暂停、上一首 / 下一首）
+
+    /// 正在看的视频告诉系统：键盘上的媒体键、控制中心都会找到这里
+    private func publishNowPlaying() {
+        guard let current else { return }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+            MPMediaItemPropertyTitle: current.title,
+            MPMediaItemPropertyArtist: current.owner,
+            MPMediaItemPropertyPlaybackDuration: duration > 0 ? duration : Double(current.duration),
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: displayTime(),
+            MPNowPlayingInfoPropertyPlaybackRate: paused ? 0.0 : speed,
+        ]
+        MPNowPlayingInfoCenter.default().playbackState = paused ? .paused : .playing
+    }
+
+    /// 播放 / 暂停键：暂停或接着放；下一首 / 上一首：快进 / 快退 10 秒（和 Apple TV 看视频时一样）
+    private func wireMediaKeys() {
+        let center = MPRemoteCommandCenter.shared()
+        func on(_ command: MPRemoteCommand, _ action: @escaping @MainActor (BilibiliNativePlayer) -> Void) {
+            command.addTarget { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.current != nil else { return }
+                    action(self)
+                }
+                return .success
+            }
+        }
+        on(center.togglePlayPauseCommand) { $0.mediaToggle() }
+        on(center.playCommand) { if $0.player.timeControlStatus == .paused { $0.mediaToggle() } }
+        on(center.pauseCommand) { if $0.player.timeControlStatus != .paused { $0.mediaToggle() } }
+        on(center.nextTrackCommand) { $0.seek(by: 10) }
+        on(center.previousTrackCommand) { $0.seek(by: -10) }
+    }
+
+    private func mediaToggle() {
+        if failed { return }
+        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+        flashControls()
     }
 
     // MARK: 按键
@@ -251,6 +458,10 @@ final class BilibiliNativePlayer: ObservableObject {
 
     func handle(_ command: RemoteCommand) -> Outcome {
         if scrubbing { endScrub() }   // 拖进度时按了别的键：先在拖到的地方落下
+        if panelVisible {
+            handlePanel(command)
+            return .stay
+        }
         if qualityMenuVisible {
             switch command {
             // 清晰度是从上面下来的一横排（和下面的相关视频对称）：左右选，确认切换，按下或返回收起
@@ -266,11 +477,21 @@ final class BilibiliNativePlayer: ObservableObject {
             return .stay
         }
         if relatedVisible {
+            // 两排：上面"选集"、下面"相关视频"。左右在这一排里走；往上滑（键盘上是下）到下一排，
+            // 往下滑（键盘上是上）回到上一排，在最上面那排再往下滑就收起来
+            let rows = shelves, row = rows.firstIndex(of: shelf) ?? 0
             switch command {
-            case .move(.left): withAnimation(stepMotion()) { relatedIndex = max(0, relatedIndex - 1) }
-            case .move(.right): withAnimation(stepMotion()) { relatedIndex = min(related.count - 1, relatedIndex + 1) }
-            case .select: if related.indices.contains(relatedIndex) { play(related[relatedIndex]) }
-            case .move(.up): relatedVisible = false
+            case .move(.left):
+                if shelf == .episodes { withAnimation(stepMotion()) { episodeFocus = max(0, episodeFocus - 1) } }
+                else { withAnimation(stepMotion()) { relatedIndex = max(0, relatedIndex - 1) } }
+            case .move(.right):
+                if shelf == .episodes { withAnimation(stepMotion()) { episodeFocus = min(episodes.count - 1, episodeFocus + 1) } }
+                else { withAnimation(stepMotion()) { relatedIndex = min(related.count - 1, relatedIndex + 1) } }
+            case .select:
+                if shelf == .episodes { playEpisode(episodeFocus) }
+                else if related.indices.contains(relatedIndex) { play(related[relatedIndex]) }
+            case .move(.down): if row + 1 < rows.count { shelf = rows[row + 1] }
+            case .move(.up): if row > 0 { shelf = rows[row - 1] } else { relatedVisible = false }
             case .back:
                 // 播完后摆出来的：返回就是回列表；播放中拉出来的：返回只是收起
                 if duration > 0, duration - time < 2 { return .close }
@@ -289,7 +510,7 @@ final class BilibiliNativePlayer: ObservableObject {
             flashControls()
         case .move(.left), .seek(forward: false): seek(by: -10)
         case .move(.right), .seek(forward: true): seek(by: 10)
-        case .move(.down): if related.isEmpty { flashControls() } else { showRelated() }
+        case .move(.down): if shelves.isEmpty { flashControls() } else { showShelf(.episodes) }   // 有选集先停在选集上
         case .move(.up):
             if qualities.count > 1 {
                 qualityIndex = qualities.firstIndex(of: qualityID) ?? 0
@@ -340,6 +561,23 @@ final class BilibiliNativePlayer: ObservableObject {
     /// 返回这一下有没有跨过一个档位（每一段响一声"嗒"）
     @discardableResult
     func scrubMove(points: Double) -> Bool {
+        guard startScrubbing() else { return false }
+        let perPoint = max(0.05, min(1.0, duration / 1500))
+        let before = scrubTarget
+        scrubTarget = max(0, min(duration - 1, scrubTarget + points * perPoint))
+        time = scrubTarget
+        return ScrubDetent.crossed(from: before, to: scrubTarget, duration: duration)
+    }
+
+    /// 鼠标在进度条上按住拖（或点一下）：进度跟着鼠标走，松开才跳过去接着放——和网易云的进度条一样
+    func scrub(toFraction fraction: Double) {
+        guard startScrubbing() else { return }
+        scrubTarget = max(0, min(duration - 1, fraction * duration))
+        time = scrubTarget
+    }
+
+    /// 开始拖：画面先停住，控制条一直露着。还没准备好的视频不能拖
+    private func startScrubbing() -> Bool {
         guard let item = player.currentItem, item.status == .readyToPlay, duration > 0 else { return false }
         if !scrubbing {
             scrubWasPlaying = player.timeControlStatus != .paused
@@ -349,11 +587,17 @@ final class BilibiliNativePlayer: ObservableObject {
             hideControls?.cancel()
             controlsVisible = true
         }
-        let perPoint = max(0.05, min(1.0, duration / 1500))
-        let before = scrubTarget
-        scrubTarget = max(0, min(duration - 1, scrubTarget + points * perPoint))
-        time = scrubTarget
-        return ScrubDetent.crossed(from: before, to: scrubTarget, duration: duration)
+        return true
+    }
+
+    /// 鼠标在画面上动了：露出控制条（标题、进度条），几秒不动再收起——和平常看视频的网页一样。
+    /// 面板、清晰度栏、相关视频开着时不出来
+    func pointerMoved() {
+        guard current != nil, !panelVisible, !qualityMenuVisible, !relatedVisible, !scrubbing else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastReveal) > 0.4 else { return }   // 鼠标一直在动时不用每一下都重新计时
+        lastReveal = now
+        flashControls()
     }
 
     /// 手指抬起：精确跳到拖到的那一秒，原来在放就接着放
@@ -367,15 +611,17 @@ final class BilibiliNativePlayer: ObservableObject {
                 self.scrubbing = false
                 if resume { self.player.play() }
                 self.flashControls()
+                self.publishNowPlaying()
             }
         }
     }
 
-    /// 点一下画面：清晰度栏、相关视频开着就先收起；不然暂停 / 继续（和网易云点封面一样）
+    /// 点一下画面：清晰度栏、相关视频、右边的面板开着就先收起；不然暂停 / 继续（和网易云点封面一样）
     func tapVideo() {
-        if qualityMenuVisible || relatedVisible {
+        if qualityMenuVisible || relatedVisible || panelVisible {
             qualityMenuVisible = false
             relatedVisible = false
+            closePanel()
             return
         }
         if failed || current == nil { return }
@@ -391,6 +637,7 @@ final class BilibiliNativePlayer: ObservableObject {
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: CMTime(seconds: 1, preferredTimescale: 600),
                     toleranceAfter: CMTime(seconds: 1, preferredTimescale: 600))
         flashControls()
+        publishNowPlaying()
     }
 
     private func flashControls(seconds: Double = 3.5) {
@@ -401,6 +648,337 @@ final class BilibiliNativePlayer: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             if self.player.timeControlStatus == .paused, self.current != nil { return }   // 暂停时一直显示
             self.controlsVisible = false
+        }
+    }
+}
+
+// MARK: - 右边的面板：长按确认拉出来
+
+extension BilibiliNativePlayer {
+    /// 面板里现在有哪几行：知道 UP 主是谁就有"UP 主"；登录了才有点赞、投币、收藏；倍速、字幕、弹幕一直有
+    var panelRows: [PanelRow] {
+        var rows: [PanelRow] = []
+        if (info?.owner.mid ?? current?.ownerMid ?? 0) > 0 { rows.append(.up) }
+        if accountMid() > 0 { rows += [.like, .coin, .favorite] }
+        if !episodes.isEmpty { rows.append(.episodes) }   // 分 P、合集才有
+        rows += [.speed, .subtitles, .danmaku]   // 字幕一直在（这个视频没有时写着"无"），弹幕开关一直在
+        return rows
+    }
+
+    /// 还能投几个：原创最多两个、转载一个，减去已经投了的
+    var coinChoices: [Int] {
+        let limit = (info?.original ?? true) ? 2 : 1
+        return (1...2).filter { $0 <= limit - relation.coins }
+    }
+
+    /// 展开的小列表里有几项
+    var panelListCount: Int {
+        switch panelList {
+        case .coins: coinChoices.count
+        case .speed: Self.speeds.count
+        case .subtitles: subtitleTracks.count + 1
+        case .unfavorite: 2
+        case .danmaku: danmakuOptions.count
+        case nil: 0
+        }
+    }
+
+    /// 长按确认（或用鼠标在画面上按住）：从右边拉出面板。视频接着放
+    @discardableResult
+    func openPanel() -> Bool {
+        guard current != nil, !failed, !panelVisible else { return false }
+        if scrubbing { endScrub() }
+        qualityMenuVisible = false
+        relatedVisible = false
+        controlsVisible = false
+        hideControls?.cancel()
+        panelList = nil
+        panelRow = panelRows.first ?? .speed
+        panelVisible = true
+        refreshRelation()
+        return true
+    }
+
+    func closePanel() {
+        panelVisible = false
+        panelList = nil
+    }
+
+    /// 面板是从右边拉出来的抽屉：上下挑一行，确认；往右滑（键盘上是左）推回去，返回也收起。
+    /// 展开的小列表里返回是回到上一层
+    func handlePanel(_ command: RemoteCommand) {
+        if let list = panelList {
+            switch command {
+            case .move(.up): panelListIndex = max(0, panelListIndex - 1)
+            case .move(.down): panelListIndex = max(0, min(panelListCount - 1, panelListIndex + 1))
+            case .select: choose(in: list, panelListIndex)
+            case .back: panelList = nil
+            case .move(.left): closePanel()
+            case .playPause: togglePlayback()
+            default: break
+            }
+            return
+        }
+        let rows = panelRows, index = panelIndex
+        switch command {
+        case .move(.up): panelRow = rows[max(0, index - 1)]
+        case .move(.down): panelRow = rows[min(rows.count - 1, index + 1)]
+        case .select: if rows.indices.contains(index) { activate(rows[index]) }
+        case .back, .move(.left): closePanel()
+        case .playPause: togglePlayback()
+        default: break
+        }
+    }
+
+    /// 鼠标点面板里的某一行 / 小列表里的某一项
+    func tapPanelRow(_ index: Int) {
+        guard panelVisible else { return }
+        if panelList != nil { panelList = nil }
+        let rows = panelRows
+        guard rows.indices.contains(index) else { return }
+        panelRow = rows[index]
+        handlePanel(.select)
+    }
+
+    func tapPanelList(_ index: Int) {
+        guard panelVisible, panelList != nil else { return }
+        panelListIndex = index
+        handlePanel(.select)
+    }
+
+    /// 去这个视频 UP 主的主页（面板里的"UP 主"，或者用鼠标点标题下面的名字）。
+    /// 带上看到的位置：在主页上返回，回到这个视频的这一帧停着，按播放接着放
+    func goToUploader() {
+        guard var video = current else { return }
+        let owner = info?.owner ?? BiliUser(mid: video.ownerMid, name: video.owner)
+        guard owner.mid > 0 else { return }
+        if scrubbing { endScrub() }
+        video.progress = Int(displayTime())
+        if video.cid == 0, let cid = stream?.cid { video.cid = cid }
+        openUp?(owner, video)
+    }
+
+    private func togglePlayback() {
+        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+    }
+
+    private var aid: Int { info?.aid ?? current?.aid ?? 0 }
+
+    private func activate(_ row: PanelRow) {
+        switch row {
+        case .up:
+            goToUploader()
+        case .like:
+            toggleLike()
+        case .coin:
+            guard !coinChoices.isEmpty else { toast?("这个视频已经投过 \(relation.coins) 个硬币了"); return }
+            panelListIndex = 0
+            panelList = .coins
+        case .favorite:
+            // 取消收藏要再确认一次，默认停在"取消"上
+            if relation.favorited { panelListIndex = 0; panelList = .unfavorite } else { setFavorite(true) }
+        case .speed:
+            panelListIndex = Self.speeds.firstIndex(of: speed) ?? 3
+            panelList = .speed
+        case .subtitles:
+            guard !subtitleTracks.isEmpty else { toast?("这个视频没有字幕"); return }
+            panelListIndex = subtitleTrack.flatMap { subtitleTracks.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
+            panelList = .subtitles
+        case .danmaku:
+            // 弹幕的开关和样式：在面板里换成一列，每一项按确认换到下一个值，改了马上看得到
+            panelListIndex = 0
+            panelList = .danmaku
+        case .episodes:
+            // 收起面板，拉出下面那一块，停在选集那一排正在放的这一集上
+            closePanel()
+            showShelf(.episodes)
+        }
+    }
+
+    private func choose(in list: PanelList, _ index: Int) {
+        switch list {
+        case .coins:
+            if coinChoices.indices.contains(index) { addCoins(coinChoices[index]) }
+        case .speed:
+            if Self.speeds.indices.contains(index) { speed = Self.speeds[index] }
+        case .subtitles:
+            if index == 0 {
+                subtitlesOn = false
+                showSubtitles(nil)
+            } else if subtitleTracks.indices.contains(index - 1) {
+                subtitlesOn = true
+                showSubtitles(subtitleTracks[index - 1])
+            }
+        case .unfavorite:
+            if index == 1 { setFavorite(false) }
+        case .danmaku:
+            cycleDanmakuOption(index)
+            return   // 这一列留着，可以接着改别的
+        }
+        panelList = nil
+    }
+
+    // MARK: 取信息、点赞、投币、收藏
+
+    func loadInfo(_ video: BiliVideo) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cookie = await self.cookie()
+            let key = await self.signingKey()
+            let edits = self.relationEdits
+            async let details = BiliAPI.info(bvid: video.bvid, key: key, cookie: cookie)
+            async let mine = BiliAPI.relation(bvid: video.bvid, cookie: cookie)
+            let (found, relation) = await (details, mine)
+            guard self.current == video else { return }
+            if let found {
+                self.info = found
+                if !found.episodes.isEmpty { self.episodes = found.episodes }
+            }
+            if let relation, self.relationEdits == edits { self.relation = relation }
+        }
+    }
+
+    /// 打开面板时再问一次（可能刚在手机上点过赞）
+    private func refreshRelation() {
+        guard let video = current, accountMid() > 0 else { return }
+        let edits = relationEdits
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let mine = await BiliAPI.relation(bvid: video.bvid, cookie: await self.cookie())
+            if self.current == video, self.relationEdits == edits, let mine { self.relation = mine }
+        }
+    }
+
+    private func toggleLike() {
+        guard let video = current, aid > 0 else { return }
+        let on = !relation.liked, id = aid
+        relationEdits += 1
+        relation.liked = on            // 先在面板上变过来，失败再变回去
+        info?.likes += on ? 1 : -1
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let ok = await BiliAPI.setLiked(aid: id, on, cookie: await self.cookie())
+            guard self.current == video else { return }
+            if !ok {
+                self.relation.liked = !on
+                self.info?.likes -= on ? 1 : -1
+            }
+            self.toast?(ok ? (on ? "已点赞" : "已取消点赞") : "操作失败")
+        }
+    }
+
+    private func addCoins(_ count: Int) {
+        guard let video = current, aid > 0 else { return }
+        let id = aid
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let reply = await BiliAPI.addCoins(aid: id, count: count, cookie: await self.cookie())
+            guard self.current == video else { return }
+            if reply.ok {
+                self.relationEdits += 1
+                self.relation.coins += count
+                self.info?.coins += count
+            }
+            self.toast?(reply.ok ? "已投 \(count) 个硬币" : (reply.message ?? "投币失败"))
+        }
+    }
+
+    private func setFavorite(_ on: Bool) {
+        guard let video = current, aid > 0 else { return }
+        let id = aid, mid = accountMid()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cookie = await self.cookie()
+            let ok: Bool
+            if on { ok = await BiliAPI.addFavorite(aid: id, mid: mid, cookie: cookie) }
+            else { ok = await BiliAPI.removeFavorite(aid: id, mid: mid, cookie: cookie) }
+            guard self.current == video else { return }
+            if ok {
+                self.relationEdits += 1
+                self.relation.favorited = on
+                self.info?.favorites += on ? 1 : -1
+            }
+            self.toast?(ok ? (on ? "已收藏" : "已取消收藏") : "操作失败")
+        }
+    }
+
+    // MARK: 弹幕
+
+    func loadDanmaku(_ video: BiliVideo, cid: Int) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cookie = await self.cookie()
+            let all = await BiliAPI.danmaku(cid: cid, cookie: cookie)
+            guard self.current == video, self.danmakuOn else { return }
+            self.danmakuAll = all
+            self.relayoutDanmaku()
+            Log.playback.info("bilibili danmaku: \(all.count, privacy: .public) loaded, \(self.danmaku.count, privacy: .public) placed")
+        }
+    }
+
+    /// 按现在的弹幕设置把取回来的弹幕重新排一遍（几千条也只要一眨眼）
+    private func relayoutDanmaku() {
+        let style = danmakuStyle
+        danmaku = danmakuLayout.place(danmakuAll.filter { style.keeps($0) })
+    }
+
+    /// 弹幕设置的几项和现在的值（设置页、右边面板里的"弹幕"列表都用它）。按确认换到下一个值
+    var danmakuOptions: [(title: String, value: String)] {
+        let style = danmakuStyle
+        return [("弹幕", danmakuOn ? "开" : "关"),
+                ("显示区域", style.area.title),
+                ("字号", style.size.title),
+                ("速度", style.speed.title),
+                ("不透明度", style.opacity.title),
+                ("固定弹幕（顶部、底部）", style.fixed ? "显示" : "不显示"),
+                ("彩色弹幕", style.colored ? "显示" : "不显示")]
+    }
+
+    func cycleDanmakuOption(_ index: Int) {
+        func next<T: CaseIterable & Equatable>(_ value: T) -> T {
+            let all = Array(T.allCases)
+            return all[((all.firstIndex(of: value) ?? 0) + 1) % all.count]
+        }
+        switch index {
+        case 0: danmakuOn.toggle()
+        case 1: danmakuStyle.area = next(danmakuStyle.area)
+        case 2: danmakuStyle.size = next(danmakuStyle.size)
+        case 3: danmakuStyle.speed = next(danmakuStyle.speed)
+        case 4: danmakuStyle.opacity = next(danmakuStyle.opacity)
+        case 5: danmakuStyle.fixed.toggle()
+        case 6: danmakuStyle.colored.toggle()
+        default: break
+        }
+    }
+
+    // MARK: 字幕
+
+    func loadSubtitles(_ video: BiliVideo, cid: Int) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cookie = await self.cookie()
+            let key = await self.signingKey()
+            let tracks = await BiliAPI.subtitleTracks(bvid: video.bvid, cid: cid, key: key, cookie: cookie)
+            Log.playback.info("bilibili subtitles: \(tracks.count, privacy: .public) tracks, signed \(key != nil, privacy: .public)")
+            guard self.current == video else { return }
+            self.subtitleTracks = tracks
+            if self.subtitlesOn, let pick = Self.preferredTrack(tracks) { self.showSubtitles(pick) }
+        }
+    }
+
+    /// 自动打开时挑哪一条：UP 主上传的中文优先，其次自动生成的中文，都没有就第一条
+    static func preferredTrack(_ tracks: [BiliSubtitleTrack]) -> BiliSubtitleTrack? {
+        tracks.first { $0.language.hasPrefix("zh") } ?? tracks.first { $0.language.hasPrefix("ai-zh") } ?? tracks.first
+    }
+
+    private func showSubtitles(_ track: BiliSubtitleTrack?) {
+        subtitleTrack = track
+        subtitleCues = []
+        guard let track, let video = current else { return }
+        Task { @MainActor [weak self] in
+            let cues = await BiliAPI.subtitleCues(track)
+            guard let self, self.current == video, self.subtitleTrack == track else { return }
+            self.subtitleCues = cues
         }
     }
 }
@@ -426,11 +1004,18 @@ private struct PlayerSurface: NSViewRepresentable {
 struct BilibiliPlayerScreen: View {
     @ObservedObject var player: BilibiliNativePlayer
     let video: BiliVideo
+    /// 鼠标停在进度条上（变粗一点）；按键、滑动时收起
+    @State private var barHovered = false
+    /// 下面那一块的卡片现在要不要建：拉出来时建，收起来滑出屏幕后拆掉（合集几百集也不在后面白白排着、下封面）
+    @State private var shelfAlive = false
+    @ObservedObject private var pointer = PointerActivity.shared
 
     var body: some View {
         ZStack {
             Color.black
             PlayerSurface(player: player.player)
+            // 弹幕：盖在画面上、在字幕和控制条下面；只占屏幕上半部分（见 BiliDanmakuView）
+            BilibiliDanmakuSurface(player: player)
             TVCanvas { overlay }
         }
         .ignoresSafeArea()
@@ -449,6 +1034,111 @@ struct BilibiliPlayerScreen: View {
                                          (0.982, 0.002), (1, 0)]
         return LinearGradient(stops: curve.map { .init(color: .black.opacity(strength * $0.1), location: $0.0) },
                               startPoint: edge, endPoint: edge == .top ? .bottom : .top)
+    }
+
+    private static let shelfHeight: CGFloat = 380
+    private static let shelfGap: CGFloat = 40
+
+    /// 下面那一块里的一张卡片要显示的东西
+    private struct ShelfCard {
+        let cover: URL?
+        let duration: String?
+        let title: String
+        /// 左上角的小标签（选集里的"P2""第 2 集"）；正在放的那一集是粉色的
+        let badge: String?
+        let playing: Bool
+    }
+
+    /// 下面那一块里的一排：选集，或者相关视频
+    @ViewBuilder private func shelfRow(_ shelf: BilibiliNativePlayer.Shelf, w: CGFloat) -> some View {
+        let active = player.shelf == shelf
+        switch shelf {
+        case .episodes:
+            let playing = player.episodeIndex
+            let count = player.episodes.count
+            cardRow(title: "选集", note: playing.map { "\($0 + 1)/\(count)" } ?? "\(count) 集",
+                    count: count, focus: player.episodeFocus, active: active, w: w) { index in
+                let episode = player.episodes[index]
+                return ShelfCard(cover: episode.video.cover, duration: episode.video.duration > 0 ? episode.video.durationText : nil,
+                                 title: episode.title.isEmpty ? episode.label : episode.title, badge: episode.label, playing: index == playing)
+            }
+        case .related:
+            cardRow(title: "相关视频", note: nil, count: player.related.count, focus: player.relatedIndex, active: active, w: w) { index in
+                let item = player.related[index]
+                return ShelfCard(cover: item.cover, duration: item.duration > 0 ? item.durationText : nil, title: item.title, badge: nil, playing: false)
+            }
+        }
+    }
+
+    /// 一排卡片，靠左排（和列表页的卡片排一个摆法：选中的在第二个位置，前面露出一张）。
+    /// 选中的卡片和列表页是同一种感觉：放大、白边、投影，标题变亮并往下让一点
+    private func cardRow(title: String, note: String?, count: Int, focus: Int, active: Bool, w: CGFloat,
+                         card: @escaping (Int) -> ShelfCard) -> some View {
+        let cardWidth: CGFloat = 340, gap: CGFloat = 34
+        return VStack(alignment: .leading, spacing: 24) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                Text(title).font(.system(size: 34, weight: .bold))
+                if let note { Text(note).font(.system(size: 26, weight: .semibold).monospacedDigit()).opacity(0.55) }
+            }
+            .padding(.leading, w * 0.05)
+            HStack(alignment: .top, spacing: gap) {
+                ForEach(0..<count, id: \.self) { index in
+                    if abs(index - focus) <= 6 {
+                        let item = card(index)
+                        let focused = active && index == focus
+                        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        VStack(alignment: .leading, spacing: 16) {
+                            ZStack {
+                                BiliImage(url: item.cover)
+                                    .frame(width: cardWidth, height: cardWidth * 9 / 16)
+                                if let duration = item.duration {
+                                    Text(duration)
+                                        .font(.system(size: 21, weight: .semibold).monospacedDigit())
+                                        .padding(.horizontal, 10).padding(.vertical, 4)
+                                        .background(.black.opacity(0.66), in: Capsule())
+                                        .padding(10)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                                }
+                                if let badge = item.badge {
+                                    HStack(spacing: 6) {
+                                        if item.playing { Image(systemName: "play.fill").font(.system(size: 15, weight: .bold)) }
+                                        Text(badge).font(.system(size: 21, weight: .bold).monospacedDigit())
+                                    }
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(item.playing ? Color(hex: "#FB7299") : .black.opacity(0.66), in: Capsule())
+                                    .padding(10)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                }
+                            }
+                            .frame(width: cardWidth, height: cardWidth * 9 / 16)
+                            .clipShape(shape)
+                            .overlay(shape.strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
+                            .shadow(color: .black.opacity(focused ? 0.65 : 0), radius: 28, y: 20)
+                            .scaleEffect(focused ? 1.09 : 1)
+                            Text(item.title)
+                                .font(.system(size: 24, weight: focused ? .semibold : .medium))
+                                .foregroundStyle(.white.opacity(focused ? 1 : 0.7))
+                                .lineLimit(2)
+                                .frame(width: cardWidth, alignment: .leading)
+                                .offset(y: focused ? 10 : 0)
+                        }
+                        .zIndex(focused ? 1 : 0)
+                        .opacity(index < focus - 1 ? 0 : 1)   // 再往左的隐去，不堆在屏幕边上
+                    } else {
+                        Color.clear.frame(width: cardWidth, height: 1)
+                    }
+                }
+            }
+            .padding(.leading, w * 0.05)
+            .offset(x: -CGFloat(max(0, focus - 1)) * (cardWidth + gap))
+            .animation(Motion.focus, value: focus)
+        }
+    }
+
+    /// 底下的标题和进度条现在露着（字幕要往上让开）
+    private var barsShown: Bool {
+        !player.relatedVisible && !player.qualityMenuVisible && !player.panelVisible
+            && (player.controlsVisible || player.paused) && player.showing
     }
 
     private func clock(_ seconds: Double) -> String {
@@ -482,7 +1172,12 @@ struct BilibiliPlayerScreen: View {
                     .transition(.opacity)
                 }
 
-                if player.paused, player.showing, !player.scrubbing, !player.relatedVisible, !player.qualityMenuVisible {
+                // 字幕：在控制条、面板下面一层；控制条出来时往上让开
+                if !player.subtitleCues.isEmpty, player.showing {
+                    BilibiliSubtitleView(player: player, lifted: barsShown)
+                }
+
+                if player.paused, player.showing, !player.scrubbing, !player.relatedVisible, !player.qualityMenuVisible, !player.panelVisible {
                     Image(systemName: "pause.fill")
                         .font(.system(size: 76, weight: .bold))
                         .frame(width: 180, height: 180)
@@ -533,54 +1228,24 @@ struct BilibiliPlayerScreen: View {
                 .animation(Self.slide, value: player.qualityMenuVisible)
                 .animation(Self.slide, value: player.qualityIndex)
 
-                // 相关视频：从屏幕下方滑上来，靠左排（和列表页的卡片排一个摆法：选中的在第二个位置，前面露出一张）。
-                // 选中的卡片和列表页是同一种感觉：放大、白边、投影，标题变亮并往下让一点。
-                VStack(alignment: .leading, spacing: 24) {
-                    Spacer()
-                    Text("相关视频").font(.system(size: 34, weight: .bold)).padding(.leading, w * 0.05)
-                    let cardWidth: CGFloat = 340, gap: CGFloat = 34
-                    HStack(alignment: .top, spacing: gap) {
-                        ForEach(Array(player.related.enumerated()), id: \.element.id) { index, item in
-                            if abs(index - player.relatedIndex) <= 6 {
-                                let focused = index == player.relatedIndex
-                                let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                VStack(alignment: .leading, spacing: 16) {
-                                    ZStack(alignment: .bottomTrailing) {
-                                        BiliImage(url: item.cover)
-                                        .frame(width: cardWidth, height: cardWidth * 9 / 16)
-                                        if item.duration > 0 {
-                                            Text(item.durationText)
-                                                .font(.system(size: 21, weight: .semibold).monospacedDigit())
-                                                .padding(.horizontal, 10).padding(.vertical, 4)
-                                                .background(.black.opacity(0.66), in: Capsule())
-                                                .padding(10)
-                                        }
-                                    }
-                                    .frame(width: cardWidth, height: cardWidth * 9 / 16)
-                                    .clipShape(shape)
-                                    .overlay(shape.strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
-                                    .shadow(color: .black.opacity(focused ? 0.65 : 0), radius: 28, y: 20)
-                                    .scaleEffect(focused ? 1.09 : 1)
-                                    Text(item.title)
-                                        .font(.system(size: 24, weight: focused ? .semibold : .medium))
-                                        .foregroundStyle(.white.opacity(focused ? 1 : 0.7))
-                                        .lineLimit(2)
-                                        .frame(width: cardWidth, alignment: .leading)
-                                        .offset(y: focused ? 10 : 0)
-                                }
-                                .zIndex(focused ? 1 : 0)
-                                .opacity(index < player.relatedIndex - 1 ? 0 : 1)   // 再往左的隐去，不堆在屏幕边上
-                            } else {
-                                Color.clear.frame(width: cardWidth, height: 1)
-                            }
+                // 下面拉出来的一块（从屏幕下方滑上来）：上面一排"选集"（分 P、合集才有），下面一排"相关视频"。
+                // 一次露一排：焦点所在的那一排停在屏幕下方，在两排之间换时整块上下滑，上面那排淡出、下面那排在屏幕外
+                let shelves = player.shelves
+                let focusRow = shelves.firstIndex(of: player.shelf) ?? 0
+                VStack(alignment: .leading, spacing: Self.shelfGap) {
+                    Spacer(minLength: 0)
+                    if shelfAlive || player.relatedVisible {
+                        ForEach(Array(shelves.enumerated()), id: \.element) { position, shelf in
+                            shelfRow(shelf, w: w)
+                                .frame(height: Self.shelfHeight, alignment: .top)
+                                .opacity(position < focusRow ? 0 : 1)
                         }
                     }
-                    .padding(.leading, w * 0.05)
-                    .offset(x: -CGFloat(max(0, player.relatedIndex - 1)) * (cardWidth + gap))
-                    .animation(Motion.focus, value: player.relatedIndex)
                 }
+                .offset(y: CGFloat(max(0, shelves.count - 1 - focusRow)) * (Self.shelfHeight + Self.shelfGap))
                 .padding(.bottom, 50)
                 .frame(width: w, height: h, alignment: .bottomLeading)
+                .animation(Self.slide, value: player.shelf)
                 .background(alignment: .bottom) {
                     // 同样往屏幕下方多延伸一截，回弹时底下不露缝
                     VStack(spacing: 0) {
@@ -594,7 +1259,7 @@ struct BilibiliPlayerScreen: View {
                 .opacity(player.relatedVisible ? 1 : 0)
                 .animation(Self.slide, value: player.relatedVisible)
 
-                if !player.relatedVisible && !player.qualityMenuVisible && (player.controlsVisible || !player.showing || player.paused) {
+                if barsShown || !player.showing && !player.panelVisible {
                     VStack(alignment: .leading, spacing: 0) {
                         Spacer()
                         Text(video.title)
@@ -602,21 +1267,45 @@ struct BilibiliPlayerScreen: View {
                             .lineLimit(2)
                             .frame(maxWidth: w * 0.7, alignment: .leading)
                             .shadow(color: .black.opacity(0.6), radius: 12, y: 3)
-                        Text(video.owner).font(.system(size: 27)).opacity(0.7).padding(.top, 10)
+                        HStack(spacing: 16) {
+                            // UP 主的名字：用鼠标点一下进他的主页（和右边面板里的"UP 主"一样），返回回到这个视频
+                            Text(video.owner).font(.system(size: 27)).opacity(0.7)
+                                .contentShape(Rectangle())
+                                .hoverLift(scale: 1.04, brighten: 0.2)
+                                .onTapGesture { player.goToUploader() }
+                            // 分 P、合集：正在放的是哪一集
+                            if let index = player.episodeIndex {
+                                let episode = player.episodes[index]
+                                // "P2 · 小标题（共 12 P）"、"第 2 集（共 12 集）"
+                                let unit = episode.label.hasPrefix("P") ? "P" : "集"
+                                let name = episode.title.isEmpty || episode.title == video.title ? "" : " · " + episode.title
+                                Text("\(episode.label)\(name)（共 \(player.episodes.count) \(unit)）")
+                                    .font(.system(size: 27)).opacity(0.7).lineLimit(1)
+                            }
+                        }
+                        .padding(.top, 10)
                         // 进度条和时间每一帧直接问播放器，走得平滑；拖进度时跟着手走，进度条加粗一点
                         TimelineView(.animation(minimumInterval: nil, paused: player.paused && !player.scrubbing)) { _ in
                             let now = player.displayTime()
                             VStack(spacing: 0) {
+                                // 鼠标：按住拖，画面停住、进度跟着走，松开跳过去接着放；点一下就是跳到那里（和网易云一样）。
+                                // 能点的范围比细细一条高一些；鼠标移上去变粗一点，提示能拖
                                 GeometryReader { bar in
                                     ZStack(alignment: .leading) {
                                         Capsule().fill(.white.opacity(0.28))
                                         Capsule().fill(.white)
                                             .frame(width: max(10, bar.size.width * (player.duration > 0 ? min(1, now / player.duration) : 0)))
                                     }
+                                    .frame(height: player.scrubbing || (barHovered && pointer.active) ? 16 : 10)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .contentShape(Rectangle())
+                                    .gesture(DragGesture(minimumDistance: 0)
+                                        .onChanged { value in player.scrub(toFraction: Double(value.location.x / max(1, bar.size.width))) }
+                                        .onEnded { _ in player.endScrub() })
+                                    .onHover { inside in withAnimation(Motion.focus) { barHovered = inside } }
                                 }
-                                .frame(height: player.scrubbing ? 16 : 10)
-                                .frame(height: 16, alignment: .center)
-                                .padding(.top, 31)
+                                .frame(height: 40)
+                                .padding(.top, 19)
                                 HStack {
                                     Text(clock(now))
                                     Spacer()
@@ -641,9 +1330,21 @@ struct BilibiliPlayerScreen: View {
             }
             .foregroundStyle(.white)
             .frame(width: w, height: h)
-            // 点一下画面（哪里都行，包括底下托字的暗角）：暂停 / 继续；清晰度栏、相关视频开着时先收起
+            // 点一下画面（哪里都行，包括底下托字的暗角）：暂停 / 继续；清晰度栏、相关视频、右边的面板开着时先收起。
+            // 按住半秒：从右边拉出面板（和长按确认一样）
             .contentShape(Rectangle())
             .onTapGesture { player.tapVideo() }
+            .onLongPressGesture(minimumDuration: 0.5) { player.openPanel() }
+            // 鼠标在画面上一动，标题和进度条就露出来（这样才拖得到进度条），几秒不动再收起
+            .onContinuousHover { phase in if case .active = phase, PointerActivity.shared.active { player.pointerMoved() } }
+            .onChange(of: player.relatedVisible) { _, visible in
+                if visible { shelfAlive = true; return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(700))   // 等滑出屏幕的动画放完
+                    if !player.relatedVisible { shelfAlive = false }
+                }
+            }
+            .overlay { BilibiliPlayerPanel(player: player) }
             .animation(.easeOut(duration: 0.25), value: player.controlsVisible)
             .animation(.easeOut(duration: 0.25), value: player.showing)
             .animation(.easeOut(duration: 0.2), value: player.paused)

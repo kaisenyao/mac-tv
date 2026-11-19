@@ -13,7 +13,8 @@ struct SubtitleSupportTests {
     }
 
     @Test func uploadStaysInAppFolderAndRejectsInvalidContent() throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("work/tests").appendingPathComponent(UUID().uuidString, isDirectory: true)
+        // 用系统的临时文件夹：代码不许往"文稿"里写（会同步到 iCloud），仓库放在 ~/Documents 下时不能用仓库里的文件夹
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("MacTVTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let folder = root.appendingPathComponent("Subtitles", isDirectory: true)
         let support = SubtitleSupport(folder: folder)

@@ -70,7 +70,7 @@ final class NeteaseStore: ObservableObject {
         case artist(NeteaseSong), goArtist(NeteaseArtist), album(NeteaseSong)
         case rename(NeteasePlaylist), delete(NeteasePlaylist), confirmDelete(NeteasePlaylist), cancel
         case confirmLogout, confirmUnsubscribe(NeteasePlaylist), showQueue
-        case openSettings, setQuality(String)
+        case openSettings, setQuality(String), refresh
     }
     enum MenuAnchor { case card, song, nowPlaying, account, pageButton, setting }
     struct MenuItem: Hashable {
@@ -541,6 +541,8 @@ final class NeteaseStore: ObservableObject {
         if let likedIDs { liked = likedIDs }   // 取失败就保留原来的红心，不清空
         // 正停在某一排上时，更新内容不把焦点挪走（按这一排的名字找回去）
         let built = build(suggested, charts)
+        // 网断了什么都没取到：留着原来的几排，不把首页清空
+        if built.isEmpty, !home.isEmpty { loading = false; return }
         let focusedID = home.indices.contains(rowIndex) ? home[rowIndex].id : nil
         withAnimation(Motion.navigate) {
             home = built
@@ -809,7 +811,8 @@ final class NeteaseStore: ObservableObject {
             prefetchCovers([account?.largeAvatar])   // 设置页的大头像先下好，进去时不用等
             menuParents = []
             withAnimation(Motion.focus) {
-                menu = Menu(anchor: .account, items: [MenuItem(symbol: "gearshape", title: "设置", action: .openSettings),
+                menu = Menu(anchor: .account, items: [MenuItem(symbol: "arrow.clockwise", title: "刷新", action: .refresh),
+                                                      MenuItem(symbol: "gearshape", title: "设置", action: .openSettings),
                                                       MenuItem(symbol: "rectangle.portrait.and.arrow.right", title: "退出登录", action: .logout)])
             }
         }
@@ -1300,6 +1303,18 @@ final class NeteaseStore: ObservableObject {
             toggleSubscribed(list)
         case .openSettings:
             openSettings()
+        case .refresh:
+            // 和哔哩哔哩头像里的"刷新"一样：首页几排（每日推荐、我的歌单、排行榜）重新取一遍；
+            // 取过的歌单、歌手页作废，再点进去拿的是最新的。取的时候原来的内容留着，不闪
+            menuParents = []
+            withAnimation(Motion.focus) { menu = nil }
+            songCache.removeAll()
+            pageCache.removeAll()
+            let before = loadedAt
+            Task { @MainActor in
+                await loadHome()
+                tv?.showToast(loadedAt > before ? "已刷新" : "刷新失败，请检查网络")
+            }
         case .setQuality(let level):
             menuParents = []
             withAnimation(Motion.focus) { menu = nil }
@@ -1444,6 +1459,9 @@ final class NeteaseStore: ObservableObject {
         // 换音质时保持原来的暂停 / 播放；换歌就放（恢复上次的歌时停着）
         if resumeAt == nil || startPaused { paused = startPaused }
         if changed {
+            // 上一首还在等下载的跳转作废，不会跑到这首上来
+            seekCount += 1
+            seeking = false
             listened = 0
             lastHeard = resumeAt ?? 0
             savedAt = resumeAt ?? 0
@@ -1724,7 +1742,7 @@ final class NeteaseStore: ObservableObject {
     private func skip(_ delta: Int, automatic: Bool = false) {
         guard !queue.isEmpty else { return }
         if automatic, mode == .single, current != nil {
-            jump(to: 0) { [weak self] in self?.player.play() }
+            jump(to: 0) { [weak self] in if self?.paused == false { self?.player.play() } }
             return
         }
         if mode == .shuffle, delta > 0, queue.count > 1 {
@@ -1799,18 +1817,51 @@ final class NeteaseStore: ObservableObject {
 
     /// 精确跳到某一刻。FLAC（无损、超清母带）"大概跳"会和实际差好几秒：声音在 A 处，播放器却说在 B 处，
     /// 歌词就对不上了。所以一律精确跳，跳完之前不理会播放器报上来的旧位置。
+    ///
+    /// 跳到还没下载到的地方（双指快进、按住快进、点后面的歌词）时，系统只能按文件大小估算位置，
+    /// 声音和报的时间会错开——以前要再点一下歌词才对上。现在：先停着等那一段下载好，
+    /// 再在同一个位置精确跳一次，然后才出声。和"点一下歌词"是同一个效果，只是自动做、而且在出声之前做完
     private func jump(to target: Double, then: (@MainActor () -> Void)? = nil) {
         seekCount += 1
         let count = seekCount
         seeking = true
         clock.time = target
         updateLine(at: target)
+        let cold = !isBuffered(target)
+        if cold, player.rate > 0 { player.pause() }
         Task { @MainActor in
-            await player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            let time = CMTime(seconds: target, preferredTimescale: 600)
+            await player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
             guard count == seekCount else { return }   // 中途又跳了一次，以最后那次为准
+            if cold {
+                // 最多等 4 秒；网太慢等不到的话先放着，下载好以后再在原地对齐一次
+                var ready = false
+                for _ in 0..<32 {
+                    if isBuffered(target) { ready = true; break }
+                    try? await Task.sleep(for: .milliseconds(125))
+                    guard count == seekCount else { return }
+                }
+                if ready {
+                    await player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                    guard count == seekCount else { return }
+                }
+                // 等完了按"现在该不该出声"来定（连着跳了几次、中途按了暂停、开始拖进度，都以最新的为准）
+                if !paused, !scrubbing { player.play() }
+                if !ready { realignWhenBuffered() }
+            }
             seeking = false
             then?()
             publishNowPlaying()
+        }
+    }
+
+    /// 这一刻往后两秒的声音下载好了没有
+    private func isBuffered(_ seconds: Double) -> Bool {
+        guard let item = player.currentItem else { return false }
+        let until = min(seconds + 2, max(seconds, duration - 0.5))
+        return item.loadedTimeRanges.contains { value in
+            let range = value.timeRangeValue
+            return range.start.seconds <= seconds + 0.05 && range.end.seconds >= until
         }
     }
 
@@ -1838,6 +1889,9 @@ final class NeteaseStore: ObservableObject {
         scrubTarget = playbackTime()
         scrubbing = true
         player.pause()
+        // 还在等下载的那次跳转作废：拖完松手时会按拖到的地方重新跳
+        seekCount += 1
+        seeking = false
     }
 
     func scrub(to seconds: Double) {
@@ -1866,7 +1920,8 @@ final class NeteaseStore: ObservableObject {
         scrubTimer = nil
         let resume = scrubWasPlaying
         jump(to: scrubTarget) { [weak self] in
-            if resume { self?.player.play() }
+            // 等下载的那几秒里又按了暂停、又开始拖，就不出声
+            if resume, self?.paused == false, self?.scrubbing == false { self?.player.play() }
         }
         scrubbing = false
     }
@@ -1925,7 +1980,13 @@ final class NeteaseStore: ObservableObject {
             if queueVisible { return horizontal ? .strip : .drawer }                // 播放列表：长条；往下收起
             return horizontal ? .scrub : .drawer    // 上下拉出音质栏（往下）/ 播放列表（往上）；左右拖进度（和哔哩哔哩看视频一样）
         }
-        if topFocus != nil { return .picker }                                       // 顶栏：固定的几项；往下滑回到下面
+        if topFocus != nil {
+            // 顶栏：左右是挑一个。上下回到下面那块，和上来时方向相反（见 TVController.Module 的"一去一回"）：
+            // 下面是设置项、歌单页左边的按钮（光标，往上滑上来的）→ 往下滑回去；
+            // 下面是首页那几排、歌单里的歌（内容跟着手走，往下滑上来的）→ 往上滑回去
+            if horizontal { return .picker }
+            return settingsOpen || page?.button != nil ? .picker : .drawer
+        }
         if settingsOpen { return horizontal ? .off : .picker }                  // 设置：固定的几行
         if let page {
             if page.button != nil { return .picker }                               // 左边那排按钮：挑一个；往上滑到顶栏
@@ -1933,6 +1994,17 @@ final class NeteaseStore: ObservableObject {
         }
         return horizontal ? .strip : .drawer                                        // 首页那几排：横着是长条，上下换排
     }
+
+    /// 转盘沿着哪个方向走（见 TVController.wheelRunsHorizontally）
+    var wheelRunsHorizontally: Bool {
+        if menu != nil || settingsOpen { return false }                   // 菜单、设置是竖的
+        if nowPlayingVisible || topFocus != nil { return true }           // 音质栏、播放列表、顶栏是横的
+        if let page { return page.button != nil }                         // 歌单页：歌是竖的，左边按钮是横的
+        return true                                                       // 首页那几排
+    }
+
+    /// 转盘在播放界面里快进 / 快退几秒
+    func nudge(_ seconds: Double) { seek(by: seconds) }
 
     func flickCanMove(_ direction: RemoteCommand.Direction) -> Bool {
         guard menu == nil, !typing else { return false }
@@ -1984,7 +2056,8 @@ final class NeteaseStore: ObservableObject {
         func on(_ command: MPRemoteCommand, _ action: @escaping @MainActor (NeteaseStore) -> Void) {
             command.addTarget { [weak self] _ in
                 Task { @MainActor in
-                    guard let self, self.current != nil else { return }
+                    // 正在看哔哩哔哩的视频时，键盘上的播放 / 暂停是给视频的，不去动后台停着的音乐
+                    guard let self, self.current != nil, self.tv?.bilibiliStore.player.current == nil else { return }
                     action(self)
                 }
                 return .success

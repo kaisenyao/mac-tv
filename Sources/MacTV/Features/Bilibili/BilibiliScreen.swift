@@ -62,9 +62,16 @@ struct BilibiliScreen: View {
                 details
                 if store.rows.isEmpty { status }
             }
-            .offset(x: store.headerFocused ? sidebarShift : 0)
-            .opacity(store.headerFocused ? 0.4 : 1)
+            .offset(x: store.headerFocused ? sidebarShift : (store.settingsOpen ? -50 : 0))
+            .opacity(store.settingsOpen ? 0 : (store.headerFocused ? 0.4 : 1))
             .animation(Self.slide, value: store.headerFocused)
+            .animation(.easeOut(duration: 0.2), value: store.settingsOpen)
+            // 设置页：列表先往左退一点淡出，设置页随后从右边进来（和网易云进设置一样）
+            if store.settingsOpen {
+                BilibiliSettingsPage(store: store, player: store.player)
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: 50)).animation(.easeOut(duration: 0.28).delay(0.05)),
+                                            removal: .opacity.animation(.easeIn(duration: 0.12))))
+            }
             topBar
             sidebar
             cardMenu
@@ -253,6 +260,7 @@ struct BilibiliScreen: View {
         switch item {
         case .login: "qrcode.viewfinder"
         case .refresh: "arrow.clockwise"
+        case .settings: "gearshape"
         case .logout, .confirmLogout: "rectangle.portrait.and.arrow.right"
         case .keepLogin: "xmark"
         case .empty: "star"
@@ -471,6 +479,7 @@ struct BilibiliScreen: View {
         switch item {
         case .login: "扫码登录"
         case .refresh: "刷新"
+        case .settings: "设置"
         case .logout, .confirmLogout: "退出登录"
         case .keepLogin: "取消"
         case .empty(let text): text
@@ -561,6 +570,7 @@ struct BilibiliScreen: View {
                     }
                 case .login: action("qrcode.viewfinder", "扫码登录")
                 case .refresh: action("arrow.clockwise", "刷新")
+                case .settings: action("gearshape", "设置")
                 case .logout, .confirmLogout: action("rectangle.portrait.and.arrow.right", "退出登录")
                 case .keepLogin: action("xmark", "取消")
                 case .user(let user):
