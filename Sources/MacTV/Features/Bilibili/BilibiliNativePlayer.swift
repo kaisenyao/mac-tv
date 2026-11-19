@@ -65,6 +65,12 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published private(set) var relation = BiliRelation()
     /// 在面板里点赞、投币、收藏过几次：之前发出去的"我和这个视频的关系"查询回来得晚，就不拿它盖掉刚做的
     private var relationEdits = 0
+    /// 点赞：账号上确认过的样子、有没有请求在路上、等手停下来再发的计时（连着按只发最后一次，按太快哔哩哔哩会拒绝）
+    private var likeConfirmed: Bool?
+    private var likeSending = false
+    private var likeSettle: Task<Void, Never>?
+    /// 投币、收藏的请求还没回来：再按不重复发
+    private var sending: Set<PanelRow> = []
 
     /// 哔哩哔哩网页上的几档倍速（从快到慢，和网页上的排法一样）
     static let speeds: [Double] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
@@ -134,6 +140,8 @@ final class BilibiliNativePlayer: ObservableObject {
     private var lastReveal = Date.distantPast
     /// 这次打开是不是停在那一帧（见 play）
     private var startPaused = false
+    /// 下面那一块是从右边面板的"选集"拉出来的（收起时回到面板）
+    private var shelfFromPanel = false
     /// 这一集放完的事（接下一集 / 摆出相关视频）已经做过了：放完时系统的通知和"停在了最后"都会来，只做一次
     private var endHandled = false
     private var stream: BiliStream?
@@ -244,6 +252,10 @@ final class BilibiliNativePlayer: ObservableObject {
         if current != nil { report() }   // 从相关视频里直接换片：先把上一个的进度记下
         stream = nil                      // 上一个视频的流（分 P 编号、清晰度）不能留给这个用
         qualityMenuVisible = false
+        likeSettle?.cancel()
+        likeConfirmed = nil
+        likeSending = false
+        sending = []
         self.startPaused = startPaused
         endHandled = false
         // 换到同一个选集里的另一集：选集那一排留着；换到别的视频就清掉，等新视频的信息来了再说
@@ -350,12 +362,22 @@ final class BilibiliNativePlayer: ObservableObject {
         guard let first = available.first else { return }
         qualityMenuVisible = false
         closePanel()
+        shelfFromPanel = false
         shelf = available.contains(which) ? which : first
         episodeFocus = episodeIndex ?? 0
         relatedIndex = min(relatedIndex, max(0, related.count - 1))
         controlsVisible = false
         hideControls?.cancel()
         relatedVisible = true
+    }
+
+    /// 收起下面那一块。是从右边面板的"选集"拉出来的，就回到面板、停在"选集"上（从哪里来回哪里去）
+    private func leaveShelf() {
+        relatedVisible = false
+        guard shelfFromPanel else { return }
+        shelfFromPanel = false
+        openPanel()
+        panelRow = .episodes
     }
 
     /// 这一集放完了：选集里还有下一集就接着放；没有的话，有相关视频就摆出来接着挑，没有就回列表
@@ -491,11 +513,11 @@ final class BilibiliNativePlayer: ObservableObject {
                 if shelf == .episodes { playEpisode(episodeFocus) }
                 else if related.indices.contains(relatedIndex) { play(related[relatedIndex]) }
             case .move(.down): if row + 1 < rows.count { shelf = rows[row + 1] }
-            case .move(.up): if row > 0 { shelf = rows[row - 1] } else { relatedVisible = false }
+            case .move(.up): if row > 0 { shelf = rows[row - 1] } else { leaveShelf() }
             case .back:
-                // 播完后摆出来的：返回就是回列表；播放中拉出来的：返回只是收起
-                if duration > 0, duration - time < 2 { return .close }
-                relatedVisible = false
+                // 从右边面板的"选集"进来的：回到面板；播完后摆出来的：返回就是回列表；播放中拉出来的：返回只是收起
+                if !shelfFromPanel, duration > 0, duration - time < 2 { return .close }
+                leaveShelf()
             case .playPause:
                 if player.timeControlStatus == .paused { player.play() } else { player.pause() }
             default: break
@@ -789,9 +811,10 @@ extension BilibiliNativePlayer {
             panelListIndex = 0
             panelList = .danmaku
         case .episodes:
-            // 收起面板，拉出下面那一块，停在选集那一排正在放的这一集上
+            // 收起面板，拉出下面那一块，停在选集那一排正在放的这一集上；返回时回到面板
             closePanel()
             showShelf(.episodes)
+            shelfFromPanel = relatedVisible
         }
     }
 
@@ -834,7 +857,7 @@ extension BilibiliNativePlayer {
                 self.info = found
                 if !found.episodes.isEmpty { self.episodes = found.episodes }
             }
-            if let relation, self.relationEdits == edits { self.relation = relation }
+            if let relation, self.relationEdits == edits { self.relation = relation; self.likeConfirmed = relation.liked }
         }
     }
 
@@ -845,35 +868,62 @@ extension BilibiliNativePlayer {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let mine = await BiliAPI.relation(bvid: video.bvid, cookie: await self.cookie())
-            if self.current == video, self.relationEdits == edits, let mine { self.relation = mine }
+            if self.current == video, self.relationEdits == edits, let mine { self.relation = mine; self.likeConfirmed = mine.liked }
         }
     }
 
+    /// 点赞 / 取消：面板上马上变；连着按的话，等手停下来 0.6 秒，只把最后的样子告诉哔哩哔哩一次
     private func toggleLike() {
-        guard let video = current, aid > 0 else { return }
-        let on = !relation.liked, id = aid
+        guard current != nil, aid > 0 else { return }
         relationEdits += 1
-        relation.liked = on            // 先在面板上变过来，失败再变回去
-        info?.likes += on ? 1 : -1
+        relation.liked.toggle()
+        info?.likes += relation.liked ? 1 : -1
+        likeSettle?.cancel()
+        likeSettle = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let self, !Task.isCancelled else { return }
+            self.syncLike()
+        }
+    }
+
+    /// 把面板上的点赞样子同步到账号上：已经一样就不发；在路上时不再发，等它回来再看要不要补一次
+    private func syncLike() {
+        guard let video = current, !likeSending else { return }
+        let want = relation.liked
+        guard want != likeConfirmed else { return }
+        likeSending = true
+        let id = aid
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let ok = await BiliAPI.setLiked(aid: id, on, cookie: await self.cookie())
+            let reply = await BiliAPI.setLiked(aid: id, want, cookie: await self.cookie())
             guard self.current == video else { return }
-            if !ok {
-                self.relation.liked = !on
-                self.info?.likes -= on ? 1 : -1
+            self.likeSending = false
+            if reply.ok {
+                self.likeConfirmed = want
+                if self.relation.liked != want { self.syncLike(); return }   // 发的途中又按了：把最新的补发过去
+                self.toast?(want ? "已点赞" : "已取消点赞")
+            } else {
+                // 没成功：面板回到账号上的样子，把哔哩哔哩的原话告诉人
+                let back = self.likeConfirmed ?? !want
+                if self.relation.liked != back {
+                    self.relation.liked = back
+                    self.info?.likes += back ? 1 : -1
+                }
+                self.relationEdits += 1
+                self.toast?(reply.message.map { "点赞没成功：\($0)" } ?? "点赞没成功，稍后再试")
             }
-            self.toast?(ok ? (on ? "已点赞" : "已取消点赞") : "操作失败")
         }
     }
 
     private func addCoins(_ count: Int) {
-        guard let video = current, aid > 0 else { return }
+        guard let video = current, aid > 0, !sending.contains(.coin) else { return }
         let id = aid
+        sending.insert(.coin)
         Task { @MainActor [weak self] in
             guard let self else { return }
             let reply = await BiliAPI.addCoins(aid: id, count: count, cookie: await self.cookie())
             guard self.current == video else { return }
+            self.sending.remove(.coin)
             if reply.ok {
                 self.relationEdits += 1
                 self.relation.coins += count
@@ -884,8 +934,9 @@ extension BilibiliNativePlayer {
     }
 
     private func setFavorite(_ on: Bool) {
-        guard let video = current, aid > 0 else { return }
+        guard let video = current, aid > 0, !sending.contains(.favorite) else { return }
         let id = aid, mid = accountMid()
+        sending.insert(.favorite)
         Task { @MainActor [weak self] in
             guard let self else { return }
             let cookie = await self.cookie()
@@ -893,6 +944,7 @@ extension BilibiliNativePlayer {
             if on { ok = await BiliAPI.addFavorite(aid: id, mid: mid, cookie: cookie) }
             else { ok = await BiliAPI.removeFavorite(aid: id, mid: mid, cookie: cookie) }
             guard self.current == video else { return }
+            self.sending.remove(.favorite)
             if ok {
                 self.relationEdits += 1
                 self.relation.favorited = on

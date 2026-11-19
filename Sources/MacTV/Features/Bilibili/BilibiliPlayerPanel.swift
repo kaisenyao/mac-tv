@@ -124,8 +124,11 @@ struct BilibiliPlayerPanel: View {
     // MARK: 第二层：投几个币、倍速、字幕、确认取消收藏
 
     private func listHeader(_ list: BilibiliNativePlayer.PanelList) -> some View {
+        // 投币：原创最多两个，转载一个；已经投过的扣掉。只剩一个能投时写出来，免得以为少了一个选项
+        let coinNote = (player.info?.original == false) ? " · 转载视频最多 1 个"
+            : (player.relation.coins == 1 ? " · 已投 1 个，还能投 1 个" : "")
         let title = switch list {
-        case .coins: "投币"
+        case .coins: "投币" + coinNote
         case .speed: "倍速"
         case .subtitles: "字幕"
         case .unfavorite: "取消收藏这个视频？"

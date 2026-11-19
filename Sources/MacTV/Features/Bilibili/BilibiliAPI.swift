@@ -348,10 +348,15 @@ enum BiliAPI {
         await postReply(address, form: form, cookie: cookie).ok
     }
 
-    /// 同上，失败时带回哔哩哔哩给的那句话（比如"硬币不足"），好原样告诉人
     private static func postReply(_ address: String, form: [String: String], cookie: String) async -> (ok: Bool, message: String?) {
+        let reply = await postCoded(address, form: form, cookie: cookie)
+        return (reply.ok, reply.message)
+    }
+
+    /// 同上，失败时带回哔哩哔哩给的错误号和那句话（比如"硬币不足"），好原样告诉人
+    private static func postCoded(_ address: String, form: [String: String], cookie: String) async -> (ok: Bool, code: Int?, message: String?) {
         guard let csrf = cookie.components(separatedBy: "; ").first(where: { $0.hasPrefix("bili_jct=") })?.dropFirst(9),
-              let url = URL(string: address) else { return (false, nil) }
+              let url = URL(string: address) else { return (false, nil, nil) }
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.httpMethod = "POST"
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -363,9 +368,9 @@ enum BiliAPI {
         all["csrf"] = String(csrf)
         request.httpBody = Data(all.map { "\($0.key)=\($0.value)" }.joined(separator: "&").utf8)
         guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (false, nil) }
-        let ok = (json["code"] as? Int) == 0
-        return (ok, ok ? nil : json["message"] as? String)
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (false, nil, nil) }
+        let code = json["code"] as? Int
+        return (code == 0, code, code == 0 ? nil : json["message"] as? String)
     }
 
     static func setFollowing(mid: Int, follow: Bool, cookie: String) async -> Bool {
@@ -398,7 +403,8 @@ enum BiliAPI {
         if face.hasPrefix("//") { face = "https:" + face }
         let uploader = BiliUser(mid: owner["mid"] as? Int ?? 0, name: owner["name"] as? String ?? "",
                                 face: face.isEmpty ? nil : URL(string: face.replacingOccurrences(of: "http://", with: "https://") + "@120w_120h_1c.webp"))
-        return BiliVideoInfo(aid: data["aid"] as? Int ?? 0, original: (data["copyright"] as? Int ?? 1) == 1, owner: uploader,
+        // 只有 2 是转载（每人最多投 1 个币）；1 是自制，还有别的值（比如 3）也都按自制算，能投 2 个
+        return BiliVideoInfo(aid: data["aid"] as? Int ?? 0, original: (data["copyright"] as? Int ?? 1) != 2, owner: uploader,
                              likes: stat["like"] as? Int ?? 0, coins: stat["coin"] as? Int ?? 0, favorites: stat["favorite"] as? Int ?? 0,
                              episodes: BiliEpisode.list(from: data, cover: image(data["pic"]), owner: uploader, image: image))
     }
@@ -409,9 +415,11 @@ enum BiliAPI {
         return BiliRelation(liked: data["like"] as? Bool ?? false, coins: data["coin"] as? Int ?? 0, favorited: data["favorite"] as? Bool ?? false)
     }
 
-    /// 点赞 / 取消点赞
-    static func setLiked(aid: Int, _ on: Bool, cookie: String) async -> Bool {
-        await post("https://api.bilibili.com/x/web-interface/archive/like", form: ["aid": "\(aid)", "like": on ? "1" : "2"], cookie: cookie)
+    /// 点赞 / 取消点赞。"已经赞过了"（65006）、"本来就没赞"（65004）也算成功：账号上已经是想要的样子
+    static func setLiked(aid: Int, _ on: Bool, cookie: String) async -> (ok: Bool, message: String?) {
+        let reply = await postCoded("https://api.bilibili.com/x/web-interface/archive/like", form: ["aid": "\(aid)", "like": on ? "1" : "2"], cookie: cookie)
+        let already = (on && reply.code == 65006) || (!on && reply.code == 65004)
+        return (reply.ok || already, reply.message)
     }
 
     /// 投币（1 或 2 个）。硬币不够、已经投满时，带回哔哩哔哩的原话
