@@ -83,7 +83,7 @@ struct BilibiliScreen: View {
         let open = store.headerFocused
         return VStack(alignment: .leading, spacing: 10) {
             ForEach(BilibiliStore.Tab.allCases) { tab in
-                let current = tab == store.tab
+                let current = tab == store.sidebarTab
                 HStack(spacing: 20) {
                     Image(systemName: tab.symbol)
                         .font(.system(size: 30, weight: .semibold))
@@ -108,7 +108,7 @@ struct BilibiliScreen: View {
         .background(alignment: .topLeading) {
             // 当前项的白色高亮：展开时是一整条；收起时不跟底板走，而是自己收缩成一个小白点，
             // 停在当前图标的左边，当作"现在在哪一页"的指示。再展开时从这个小白点长回去。
-            let index = CGFloat(BilibiliStore.Tab.allCases.firstIndex(of: store.tab) ?? 0)
+            let index = CGFloat(BilibiliStore.Tab.allCases.firstIndex(of: store.sidebarTab) ?? 0)
             RoundedRectangle(cornerRadius: open ? 22 : 5, style: .continuous)
                 .fill(.white)
                 .frame(width: open ? 292 : 10, height: open ? 78 : 10)
@@ -513,7 +513,7 @@ struct BilibiliScreen: View {
                     // 只画焦点附近的卡片，一排几十张也不卡
                     if abs(column - focusedColumn) <= 6 {
                         card(item, focused: active && column == focusedColumn)
-                            .pointerFocus { store.hoverCard(row: index, column: column) }
+                            .hoverLift()
                             .onTapGesture {
                                 store.focus(row: index, column: column)
                                 store.activate()

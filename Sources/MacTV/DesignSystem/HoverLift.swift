@@ -7,11 +7,14 @@ struct HoverLift: ViewModifier {
     var scale: CGFloat = 1.04
     var brighten: Double = 0.06
     @State private var hovering = false
+    @ObservedObject private var pointer = PointerActivity.shared
 
     func body(content: Content) -> some View {
-        content
-            .scaleEffect(hovering ? scale : 1)
-            .brightness(hovering ? brighten : 0)
+        let shown = hovering && pointer.active
+        return content
+            .scaleEffect(shown ? scale : 1)
+            .brightness(shown ? brighten : 0)
+            .animation(Motion.focus, value: pointer.active)
             .onHover { inside in
                 withAnimation(Motion.focus) { hovering = inside }
             }
@@ -22,14 +25,26 @@ struct HoverLift: ViewModifier {
 struct HoverWash: ViewModifier {
     var radius: CGFloat = 18
     @State private var hovering = false
+    @ObservedObject private var pointer = PointerActivity.shared
 
     func body(content: Content) -> some View {
         content
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.white.opacity(hovering ? 0.08 : 0)))
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.white.opacity(hovering && pointer.active ? 0.08 : 0)))
+            .animation(Motion.focus, value: pointer.active)
             .onHover { inside in
                 withAnimation(Motion.focus) { hovering = inside }
             }
     }
+}
+
+/// 鼠标是不是正在用：按键、双指滑动时变成"不在用"，鼠标悬停的效果全部收起（不然键盘焦点移走了，
+/// 鼠标底下那一项还亮着，屏幕上就有两个高亮）；鼠标真的动了才回来
+@MainActor
+final class PointerActivity: ObservableObject {
+    static let shared = PointerActivity()
+    @Published private(set) var active = true
+
+    func set(_ on: Bool) { if active != on { active = on } }
 }
 
 extension View {
@@ -37,24 +52,11 @@ extension View {
     func hoverWash(radius: CGFloat = 18) -> some View { modifier(HoverWash(radius: radius)) }
 }
 
-/// 鼠标移到哪，焦点就到哪（和键盘移动是同一个焦点，屏幕上只有一个高亮）。
-/// 只有鼠标真的动了才算：焦点一移整排会跟着滑，滑过去的内容碰到静止的鼠标也会触发"移入"，那不算，不然会一直连锁滑下去。
-@MainActor
-enum PointerFocus {
-    private static var last = NSPoint(x: -1, y: -1)
-
-    static func moved() -> Bool {
-        let now = NSEvent.mouseLocation
-        defer { last = now }
-        return now != last
-    }
-}
-
-extension View {
-    /// 鼠标真的移进来时调用 action（用来把焦点挪过来）
-    func pointerFocus(_ action: @escaping @MainActor () -> Void) -> some View {
-        onHover { inside in
-            if inside, PointerFocus.moved() { action() }
-        }
+/// 拖进度时的"档位"：每一段至少 5 秒、或者整段的四十分之一（长的那个）。拖过一个档位响一声"嗒"，像拨旋钮
+enum ScrubDetent {
+    static func size(duration: Double) -> Double { max(5, duration / 40) }
+    static func crossed(from before: Double, to after: Double, duration: Double) -> Bool {
+        let step = size(duration: duration)
+        return Int((before / step).rounded(.down)) != Int((after / step).rounded(.down))
     }
 }

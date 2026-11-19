@@ -25,10 +25,18 @@ struct BiliImage: View {
     }
 }
 
-/// 会换图的地方用它（播放界面的封面和背景）：新图到手之前，上一张原样留着；
-/// 到手后新图在上面慢慢浮现，上一张一直垫在下面——不会先空一下，也不会两张半透明地叠在一起。
+/// 会换图的地方用它（播放界面的封面和背景）：到手后新图在上面慢慢浮现，上一张垫在下面——
+/// 不会两张半透明地叠在一起。
+///
+/// holdWhileLoading：新图还没下载好时上一张要不要留着。网易云的页面背景和播放界面都用 false：
+/// 宁可暗一下也不让上一页 / 上一首的图配着新的内容（下一首的封面会提前下好，按顺序切歌时不会暗）。
+/// 没有图了（url 为空）一律淡出，绝不留着上一张。
 struct FadingImage: View {
     let url: URL?
+    var holdWhileLoading = true
+    /// 现在被别的东西整个盖着（看不见）：直接换，不淡入淡出。不然等盖着的东西拿开时，
+    /// 上一张还在、新的才开始浮现，看起来像先亮一下（或暗一下）再变
+    var instant = false
     @State private var back: NSImage?
     @State private var front: NSImage?
     @State private var frontURL: URL?
@@ -41,17 +49,46 @@ struct FadingImage: View {
             if let front { Image(nsImage: front).resizable().aspectRatio(contentMode: .fill).opacity(shown) }
         }
         .task(id: url) {
-            guard let url, url != frontURL else { return }
+            guard let url else { fadeOut(); return }
+            guard url != frontURL else { return }
+            if instant {
+                back = nil
+                if let image = BiliImageCache.shared.image(for: url) {
+                    front = image
+                    frontURL = url
+                    shown = 1
+                    return
+                }
+                // 新图还没下好：上一张马上拿掉（盖着的东西一拿开就不会露出它），下好了再浮现
+                front = nil
+                frontURL = nil
+            }
             var image = BiliImageCache.shared.image(for: url)
-            if image == nil { image = await BiliImageCache.shared.load(url) }
+            if image == nil {
+                if !holdWhileLoading { fadeOut() }
+                image = await BiliImageCache.shared.load(url)
+            }
             guard let image, !Task.isCancelled else { return }
-            back = front
+            // 上一张已经淡出了就不再垫回去（不然它会突然又冒出来）
+            back = frontURL == nil ? nil : front
             front = image
             frontURL = url
             shown = 0
             try? await Task.sleep(for: .milliseconds(16))   // 先让新图以透明的样子出现一帧，再开始浮现
             withAnimation(.easeInOut(duration: 0.45)) { shown = 1 }
+            // 新图完全浮现以后，把垫在下面的旧图拿掉。不然整块淡入淡出时（比如播放界面收起），
+            // 上下两层一起变透明，上一首的封面会透出来
+            try? await Task.sleep(for: .milliseconds(500))
+            if !Task.isCancelled, frontURL == url { back = nil }
         }
+    }
+
+    /// 淡出到空：垫在下面的那张马上拿掉，上面那张淡出
+    private func fadeOut() {
+        guard frontURL != nil || back != nil else { return }
+        back = nil
+        frontURL = nil
+        withAnimation(.easeOut(duration: 0.15)) { shown = 0 }
     }
 }
 

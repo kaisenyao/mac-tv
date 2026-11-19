@@ -2,12 +2,12 @@ import CommonCrypto
 import CryptoKit
 import Foundation
 
-struct NeteaseArtist: Hashable, Sendable {
+struct NeteaseArtist: Hashable, Sendable, Codable {
     let id: Int
     let name: String
 }
 
-struct NeteaseSong: Hashable, Sendable {
+struct NeteaseSong: Hashable, Sendable, Codable {
     let id: Int
     let name: String
     var artist = ""
@@ -54,7 +54,10 @@ struct NeteasePlaylist: Hashable, Sendable {
 struct NeteaseAccount: Hashable, Sendable {
     let id: Int
     let name: String
+    /// 顶栏那个小圆用的（160 像素）
     var avatar: URL? = nil
+    /// 设置页那个大圆用的（800 像素：400 点的圆在高清屏上正好）
+    var largeAvatar: URL? = nil
 }
 
 /// 网易云音乐网页版自己在用的接口。登录信息由系统的网络库自己保存和携带（这个应用自己的那一份），
@@ -180,7 +183,8 @@ enum NeteaseAPI {
     static func account() async -> NeteaseAccount? {
         guard let profile = (await call("w/nuser/account/get", [:]))?["profile"] as? [String: Any],
               let id = profile["userId"] as? Int else { return nil }
-        return NeteaseAccount(id: id, name: profile["nickname"] as? String ?? "", avatar: image(profile["avatarUrl"], size: 160))
+        return NeteaseAccount(id: id, name: profile["nickname"] as? String ?? "", avatar: image(profile["avatarUrl"], size: 160),
+                              largeAvatar: image(profile["avatarUrl"], size: 800))
     }
 
     // MARK: 内容
@@ -321,17 +325,30 @@ enum NeteaseAPI {
     /// 这首歌的播放地址（约 20 分钟内有效），以及实际给到的音质。
     /// level：standard 标准、higher 较高、exhigh 极高、lossless 无损、hires Hi-Res、jymaster 超清母带；
     /// 账号或这首歌没有那一档时，服务器会给它能给的最高一档。没有版权、需要会员或地区不可用时返回 nil。
-    static func address(song: Int, level: String) async -> (url: URL, level: String)? {
+    /// 一首歌的播放地址、实际给的档位，和平衡音量用的增益（分贝；不知道时为 nil）
+    static func address(song: Int, level: String) async -> (url: URL, level: String, gain: Double?)? {
         let payload: [String: Any] = ["ids": "[\(song)]", "level": level, "encodeType": "flac"]
         // 先走客户端那套接口（网页版最高只给到无损）；它不通再退回网页版
         var list = (await clientCall("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
+        var fromClient = true
         if list?.first?["url"] as? String == nil {
             list = (await webCall("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
+            fromClient = false
         }
         let item = list?.first
         guard let item, let text = item["url"] as? String, !text.isEmpty,
               let url = URL(string: text.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
-        return (url, item["level"] as? String ?? level)
+        // 网页版这套接口的增益一律是 0（实测），等于没给
+        let gain = fromClient ? loudness(gain: (item["gain"] as? NSNumber)?.doubleValue, peak: (item["peak"] as? NSNumber)?.doubleValue) : nil
+        return (url, item["level"] as? String ?? level, gain)
+    }
+
+    /// 平衡音量要给这首歌加多少分贝。网易云给的 gain 是把这首拉到统一响度要加减的分贝数，peak 是这首最响处（1 = 满幅）。
+    /// 往上提时不能超过 peak 留出来的空间（不然会破音）。gain 恰好是 0 的当成没给（实测网页版接口、个别歌一律给 0）
+    static func loudness(gain: Double?, peak: Double?) -> Double? {
+        guard let gain, gain != 0, gain.isFinite else { return nil }
+        guard let peak, peak > 0, peak.isFinite else { return gain }
+        return min(gain, -20 * log10(peak))
     }
 
     // MARK: 官方客户端用的那套接口（eapi）
@@ -476,6 +493,28 @@ enum NeteaseAPI {
             try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
         }
         return nil
+    }
+
+    // MARK: 听歌记录
+
+    /// 告诉网易云听了这首歌：进"最近播放"（手机、电脑上都能看到），也算进听歌排行和推荐。
+    /// 和网页版播放器一样一次报两条：开始放、放完（或中途切走）。实测网页版这套一分钟内就出现在最近播放里，
+    /// 客户端那套返回成功却不进最近播放，所以先走网页版
+    static func reportPlay(song: Int, seconds: Int, finished: Bool, playlist: Int) async -> Bool {
+        let logs = playLogs(song: song, seconds: seconds, finished: finished, playlist: playlist)
+        guard let data = try? JSONSerialization.data(withJSONObject: logs), let text = String(data: data, encoding: .utf8) else { return false }
+        if done(await webCall("feedback/weblog", ["logs": text])) { return true }
+        return done(await clientCall("feedback/weblog", ["logs": text]))
+    }
+
+    /// 上报的那两条记录。playlist：从哪个歌单放的（不是歌单为 0）
+    static func playLogs(song: Int, seconds: Int, finished: Bool, playlist: Int) -> [[String: Any]] {
+        let source = playlist > 0 ? "\(playlist)" : ""
+        let content = playlist > 0 ? "id=\(playlist)" : ""
+        return [["action": "startplay", "json": ["id": song, "type": "song", "content": content, "mainsite": "1"] as [String: Any]],
+                ["action": "play", "json": ["type": "song", "wifi": 0, "download": 0, "id": song, "time": seconds,
+                                            "end": finished ? "playend" : "interrupt", "source": "list", "sourceId": source,
+                                            "mainsite": "1", "content": content] as [String: Any]]]
     }
 
     static func setLiked(song: Int, _ on: Bool) async -> Bool {

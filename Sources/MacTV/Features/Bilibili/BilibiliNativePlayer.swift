@@ -47,6 +47,10 @@ final class BilibiliNativePlayer: ObservableObject {
     private var observers: Set<AnyCancellable> = []
     private var timeObserver: Any?
     private var hideControls: Task<Void, Never>?
+    /// 正在用双指左右滑拖进度：画面先停住，进度条和时间跟着手走，手指抬起才跳过去
+    @Published private(set) var scrubbing = false
+    private var scrubTarget = 0.0
+    private var scrubWasPlaying = false
     private var stream: BiliStream?
     private var loaders: [ObjectIdentifier: BiliHLS.Loader] = [:]
     private let loaderQueue = DispatchQueue(label: "bilibili.playlists")
@@ -61,7 +65,7 @@ final class BilibiliNativePlayer: ObservableObject {
         }.store(in: &observers)
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] now in
             MainActor.assumeIsolated {
-                guard let self, self.current != nil else { return }
+                guard let self, self.current != nil, !self.scrubbing else { return }
                 self.time = now.seconds.isFinite ? now.seconds : 0
                 if let total = self.player.currentItem?.duration.seconds, total.isFinite { self.duration = total }
                 if !self.showing, self.time > 0.05 { self.showing = true }
@@ -237,14 +241,24 @@ final class BilibiliNativePlayer: ObservableObject {
 
     // MARK: 按键
 
+    private var lastStep = Date.distantPast
+    /// 单按一下用平常的动画；连着走（按住方向键、双指一甩）时换一条短的，不然每一下都重新起一段弹簧，忽快忽慢
+    private func stepMotion() -> Animation {
+        let now = Date()
+        defer { lastStep = now }
+        return now.timeIntervalSince(lastStep) < 0.2 ? .smooth(duration: 0.16) : Motion.focus
+    }
+
     func handle(_ command: RemoteCommand) -> Outcome {
+        if scrubbing { endScrub() }   // 拖进度时按了别的键：先在拖到的地方落下
         if qualityMenuVisible {
             switch command {
             // 清晰度是从上面下来的一横排（和下面的相关视频对称）：左右选，确认切换，按下或返回收起
             case .move(.left): withAnimation(Motion.focus) { qualityIndex = max(0, qualityIndex - 1) }
             case .move(.right): withAnimation(Motion.focus) { qualityIndex = min(qualities.count - 1, qualityIndex + 1) }
             case .select: if qualities.indices.contains(qualityIndex) { switchQuality(to: qualities[qualityIndex]) }
-            case .back, .move(.down), .move(.up): qualityMenuVisible = false
+            // 清晰度栏是往下拉出来的：往上推回去（或返回）才收起；再往下拉不动
+            case .back, .move(.down): qualityMenuVisible = false
             case .playPause:
                 if player.timeControlStatus == .paused { player.play() } else { player.pause() }
             default: break
@@ -253,8 +267,8 @@ final class BilibiliNativePlayer: ObservableObject {
         }
         if relatedVisible {
             switch command {
-            case .move(.left): withAnimation(Motion.focus) { relatedIndex = max(0, relatedIndex - 1) }
-            case .move(.right): withAnimation(Motion.focus) { relatedIndex = min(related.count - 1, relatedIndex + 1) }
+            case .move(.left): withAnimation(stepMotion()) { relatedIndex = max(0, relatedIndex - 1) }
+            case .move(.right): withAnimation(stepMotion()) { relatedIndex = min(related.count - 1, relatedIndex + 1) }
             case .select: if related.indices.contains(relatedIndex) { play(related[relatedIndex]) }
             case .move(.up): relatedVisible = false
             case .back:
@@ -311,6 +325,63 @@ final class BilibiliNativePlayer: ObservableObject {
 
     /// 转盘用的细调：一格几秒
     func scrub(by delta: Double) { seek(by: delta) }
+
+    // MARK: 双指左右滑拖进度、点画面暂停
+
+    /// 进度条、时间显示用：每一帧直接问播放器（以前半秒才更新一次，进度条一跳一跳的）；拖进度时是拖到的位置
+    func displayTime() -> Double {
+        if scrubbing { return scrubTarget }
+        let now = player.currentTime().seconds
+        return now.isFinite ? now : time
+    }
+
+    /// 手指在触控板上横着滑了 points 这么远（往右为正）：进度跟着走。一次滑多远按视频长短算——
+    /// 短视频滑一下几十秒，长视频滑一下几分钟
+    /// 返回这一下有没有跨过一个档位（每一段响一声"嗒"）
+    @discardableResult
+    func scrubMove(points: Double) -> Bool {
+        guard let item = player.currentItem, item.status == .readyToPlay, duration > 0 else { return false }
+        if !scrubbing {
+            scrubWasPlaying = player.timeControlStatus != .paused
+            scrubTarget = displayTime()
+            scrubbing = true
+            player.pause()
+            hideControls?.cancel()
+            controlsVisible = true
+        }
+        let perPoint = max(0.05, min(1.0, duration / 1500))
+        let before = scrubTarget
+        scrubTarget = max(0, min(duration - 1, scrubTarget + points * perPoint))
+        time = scrubTarget
+        return ScrubDetent.crossed(from: before, to: scrubTarget, duration: duration)
+    }
+
+    /// 手指抬起：精确跳到拖到的那一秒，原来在放就接着放
+    func endScrub() {
+        guard scrubbing else { return }
+        let target = scrubTarget, resume = scrubWasPlaying
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: CMTime(seconds: 0.2, preferredTimescale: 600), toleranceAfter: CMTime(seconds: 0.2, preferredTimescale: 600)) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.scrubbing = false
+                if resume { self.player.play() }
+                self.flashControls()
+            }
+        }
+    }
+
+    /// 点一下画面：清晰度栏、相关视频开着就先收起；不然暂停 / 继续（和网易云点封面一样）
+    func tapVideo() {
+        if qualityMenuVisible || relatedVisible {
+            qualityMenuVisible = false
+            relatedVisible = false
+            return
+        }
+        if failed || current == nil { return }
+        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+        flashControls()
+    }
 
     private func seek(by delta: Double) {
         guard let item = player.currentItem, item.status == .readyToPlay else { return }
@@ -411,7 +482,7 @@ struct BilibiliPlayerScreen: View {
                     .transition(.opacity)
                 }
 
-                if player.paused, player.showing, !player.relatedVisible, !player.qualityMenuVisible {
+                if player.paused, player.showing, !player.scrubbing, !player.relatedVisible, !player.qualityMenuVisible {
                     Image(systemName: "pause.fill")
                         .font(.system(size: 76, weight: .bold))
                         .frame(width: 180, height: 180)
@@ -532,22 +603,30 @@ struct BilibiliPlayerScreen: View {
                             .frame(maxWidth: w * 0.7, alignment: .leading)
                             .shadow(color: .black.opacity(0.6), radius: 12, y: 3)
                         Text(video.owner).font(.system(size: 27)).opacity(0.7).padding(.top, 10)
-                        GeometryReader { bar in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(.white.opacity(0.28))
-                                Capsule().fill(.white)
-                                    .frame(width: max(10, bar.size.width * (player.duration > 0 ? min(1, player.time / player.duration) : 0)))
+                        // 进度条和时间每一帧直接问播放器，走得平滑；拖进度时跟着手走，进度条加粗一点
+                        TimelineView(.animation(minimumInterval: nil, paused: player.paused && !player.scrubbing)) { _ in
+                            let now = player.displayTime()
+                            VStack(spacing: 0) {
+                                GeometryReader { bar in
+                                    ZStack(alignment: .leading) {
+                                        Capsule().fill(.white.opacity(0.28))
+                                        Capsule().fill(.white)
+                                            .frame(width: max(10, bar.size.width * (player.duration > 0 ? min(1, now / player.duration) : 0)))
+                                    }
+                                }
+                                .frame(height: player.scrubbing ? 16 : 10)
+                                .frame(height: 16, alignment: .center)
+                                .padding(.top, 31)
+                                HStack {
+                                    Text(clock(now))
+                                    Spacer()
+                                    Text(clock(player.duration))
+                                }
+                                .font(.system(size: 25, weight: .semibold).monospacedDigit())
+                                .padding(.top, 11)
                             }
                         }
-                        .frame(height: 10)
-                        .padding(.top, 34)
-                        HStack {
-                            Text(clock(player.time))
-                            Spacer()
-                            Text(clock(player.duration))
-                        }
-                        .font(.system(size: 25, weight: .semibold).monospacedDigit())
-                        .padding(.top, 14)
+                        .animation(.easeOut(duration: 0.15), value: player.scrubbing)
                     }
                     .padding(.horizontal, w * 0.05)
                     .padding(.bottom, 62)
@@ -562,6 +641,9 @@ struct BilibiliPlayerScreen: View {
             }
             .foregroundStyle(.white)
             .frame(width: w, height: h)
+            // 点一下画面（哪里都行，包括底下托字的暗角）：暂停 / 继续；清晰度栏、相关视频开着时先收起
+            .contentShape(Rectangle())
+            .onTapGesture { player.tapVideo() }
             .animation(.easeOut(duration: 0.25), value: player.controlsVisible)
             .animation(.easeOut(duration: 0.25), value: player.showing)
             .animation(.easeOut(duration: 0.2), value: player.paused)

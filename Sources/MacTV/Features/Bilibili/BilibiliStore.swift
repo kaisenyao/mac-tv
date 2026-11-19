@@ -108,6 +108,43 @@ final class BilibiliStore: ObservableObject {
     @Published private(set) var account: BiliAccount?
 
     weak var tv: TVController? { didSet { wirePlayer() } }
+    // MARK: 交互区域（规则见 TVController.Module）
+
+    func module(horizontal: Bool) -> TVController.Module {
+        if player.current != nil {
+            // 播放中：上下拉出清晰度栏（往下）/ 相关视频（往上）。左右：相关视频是长条；
+            // 清晰度栏是挑一个；平时左右是拖进度（进度条跟着手走，往右滑往前）
+            guard horizontal else { return .drawer }
+            if player.relatedVisible { return .strip }
+            return player.qualityMenuVisible ? .picker : .scrub
+        }
+        if editing { return horizontal ? .off : .drawer }
+        if cardMenu != nil || accountMenuOpen { return .picker }               // 菜单：固定的几项
+        // 左边栏是从左边拉出来的抽屉（像 Mac 右边的通知中心）：往右滑拉出来，往左滑推回去，再往右滑不动；
+        // 在里面上下是挑一项（光标）
+        if headerFocused { return horizontal ? .drawer : .picker }
+        // 右上角头像、关注按钮：往右滑同样是把左边栏拉出来；上下按光标走（往下滑回到下面）
+        if accountFocused || upPage?.followFocused == true { return horizontal ? .drawer : .picker }
+        if let page = upPage, page.sortFocused, !page.browsing { return .picker }   // 三个排序：挑一个
+        return horizontal ? .strip : .drawer                                    // 视频排：横着是长条，上下换排
+    }
+
+    func flickCanMove(_ direction: RemoteCommand.Direction) -> Bool {
+        if player.current != nil {
+            guard player.relatedVisible else { return false }
+            switch direction {
+            case .left: return player.relatedIndex > 0
+            case .right: return player.relatedIndex < player.related.count - 1
+            default: return false
+            }
+        }
+        guard !headerFocused, !accountFocused, cardMenu == nil, rows.indices.contains(row) else { return false }
+        switch direction {
+        case .left: return column > 0                              // 到第一张就停，不进左边栏
+        case .right: return column < rows[row].items.count - 1
+        default: return false
+        }
+    }
     /// 原生播放器：直接取流，不经过网页
     let player = BilibiliNativePlayer()
     private var playerChanges: AnyCancellable?
@@ -142,7 +179,17 @@ final class BilibiliStore: ObservableObject {
         return rows[row].items[column]
     }
     /// 给按键音用：焦点变了才出声
-    var focusKey: String { "\(tab.rawValue)-\(headerFocused)-\(row)-\(column)-\(rows.count)-\(player.current?.bvid ?? "")" }
+    var focusKey: String {
+        "\(tab.rawValue)-\(headerFocused)-\(row)-\(column)-\(rows.count)-\(player.current?.bvid ?? "")"
+            // 播放器里的清晰度栏、底下那排视频也算：在里面左右走才有按键声
+            + "-\(player.qualityMenuVisible)-\(player.qualityIndex)-\(player.relatedVisible)-\(player.relatedIndex)"
+            + "-\(accountFocused)-\(accountMenuOpen)-\(accountIndex)-\(confirmingLogout)-\(cardMenu?.count ?? 0)-\(cardMenuIndex)"
+            // 左边栏的高亮（上下滑时先动它，停一下才换页）、UP 主页的排序和关注、搜索框
+            + "-\(sidebarTab.rawValue)-\(editing)-\(upPage?.sort.rawValue ?? -1)-\(upPage?.sortFocused ?? false)"
+            + "-\(upPage?.followFocused ?? false)-\(upPage?.browsing ?? false)"
+            // 看视频时键盘左右是快进快退十秒：进度也算，这样每一下都有声音
+            + "-\(Int(player.time))"
+    }
 
     private func wirePlayer() {
         player.cookie = { [weak self] in await self?.cookieHeader() ?? "" }
@@ -437,6 +484,7 @@ final class BilibiliStore: ObservableObject {
             case .move(.up): step(-1)
             case .move(.down): step(1)
             case .move(.right), .select:
+                commitSidebar()
                 if tab == .search {
                     // 搜索页：左边栏收起，输入框直接可以打字。已有结果时按右是去结果，按确认才是重新输入。
                     if case .move = command, !rows.isEmpty { withAnimation(Motion.focus) { headerFocused = false } }
@@ -446,7 +494,9 @@ final class BilibiliStore: ObservableObject {
                 }
             // 左边栏是盖在右边内容之上的二级菜单：按一下 Esc 永远是收起它、回到右边
             //（哪怕右边暂时只有一个搜索框）。离开哔哩哔哩要长按 Esc。
-            case .back: withAnimation(Motion.focus) { headerFocused = false }
+            case .back:
+                commitSidebar()
+                withAnimation(Motion.focus) { headerFocused = false }
             default: break
             }
             return
@@ -493,10 +543,28 @@ final class BilibiliStore: ObservableObject {
     }
 
     /// 在左边栏里上下移动；右边的内容跟着换（和 Apple TV 一样，不用再按确认）
+    /// 左边栏里高亮停在哪一项。上下滑时先只移动它，停下来一会儿才换右边的内容——换一页要重画好几排卡片、
+    /// 给选中的视频预热、有时还要联网，每走一格都换的话前几下会卡
+    @Published private(set) var sidebarTab: Tab = .home
+    private var sidebarCommit: Task<Void, Never>?
+
     private func step(_ delta: Int) {
         let all = Tab.allCases
-        guard let index = all.firstIndex(of: tab), all.indices.contains(index + delta) else { return }
-        select(all[index + delta])
+        guard let index = all.firstIndex(of: sidebarTab), all.indices.contains(index + delta) else { return }
+        withAnimation(Motion.focus) { sidebarTab = all[index + delta] }
+        sidebarCommit?.cancel()
+        sidebarCommit = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self, !Task.isCancelled else { return }
+            self.commitSidebar()
+        }
+    }
+
+    /// 高亮停住了，或者离开左边栏：右边换成高亮的那一页
+    private func commitSidebar() {
+        sidebarCommit?.cancel()
+        sidebarCommit = nil
+        if sidebarTab != tab { select(sidebarTab) }
     }
 
     func select(_ target: Tab) {
@@ -504,6 +572,9 @@ final class BilibiliStore: ObservableObject {
         accountMenuOpen = false
         accountFocused = false
         if editing, target != .search { stopEditing() }
+        sidebarCommit?.cancel()
+        sidebarCommit = nil
+        sidebarTab = target
         withAnimation(Motion.navigate) { tab = target; upPage = nil }
         if content[target] == nil || isStale(target) { load(target) }
         warmFocused()
@@ -513,8 +584,22 @@ final class BilibiliStore: ObservableObject {
         guard rows.indices.contains(row) else { return }
         let clamped = max(0, min(rows[row].items.count - 1, value))
         guard clamped != column else { return }
-        withAnimation(Motion.focus) { columns[rows[row].id] = clamped }
+        withAnimation(stepMotion()) { columns[rows[row].id] = clamped }
+        // 往后几张的封面先下好：甩着翻会一下走好几张，不然翻过去是一排空的灰块
+        for case .video(let video) in rows[row].items.dropFirst(clamped + 1).prefix(12) {
+            if let url = video.cover, BiliImageCache.shared.image(for: url) == nil {
+                Task { @MainActor in _ = await BiliImageCache.shared.load(url) }
+            }
+        }
         loadMoreIfNeeded()
+    }
+
+    private var lastStep = Date.distantPast
+    /// 单按一下用平常的动画；连着走（按住方向键、双指一甩）时换一条短的，不然每一下都重新起一段弹簧，忽快忽慢
+    private func stepMotion() -> Animation {
+        let now = Date()
+        defer { lastStep = now }
+        return now.timeIntervalSince(lastStep) < 0.2 ? .smooth(duration: 0.16) : Motion.focus
     }
 
     /// 快翻到一排的末尾时，悄悄再取一批接在后面，所以可以一直往后翻
@@ -553,20 +638,6 @@ final class BilibiliStore: ObservableObject {
             self.content[owner] = list
             if fresh.isEmpty { self.loadMoreIfNeeded() }   // 这一批全是重复的，接着取下一批
         }
-    }
-
-    /// 鼠标移到某张卡片上：焦点挪过去（和键盘是同一个焦点）
-    func hoverCard(row r: Int, column c: Int) {
-        guard !editing, cardMenu == nil, !accountMenuOpen, player.current == nil, rows.indices.contains(r) else { return }
-        guard headerFocused || accountFocused || r != row || column(of: rows[r]) != c else { return }
-        withAnimation(Motion.focus) {
-            headerFocused = false
-            accountFocused = false
-            upPage?.followFocused = false
-            setRow(r)
-            columns[rows[r].id] = c
-        }
-        warmFocused()
     }
 
     func focus(row r: Int, column c: Int) {

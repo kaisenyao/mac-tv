@@ -9,8 +9,10 @@ import GameController
 /// rather than loaded from files, and only play on Mac TV's own screens, never over a show.
 @MainActor
 final class Feedback: ObservableObject {
+    /// move：长条里走一格（轻快的"嗒"）；step：挑选、抽屉、换排走一格（厚一点的"咔"，像拨档位）；
+    /// select、back：确认、返回。分类见 TVController.Module
     enum Cue: CaseIterable {
-        case move, select, back
+        case move, step, select, back
     }
 
     /// Where a command came from, so the haptic goes to the thing in the user's hand.
@@ -94,8 +96,16 @@ final class Feedback: ObservableObject {
         }
     }
 
+    private var lastMoveSound = Date.distantPast
+
     func play(_ cue: Cue, from source: Source) {
         guard enabled else { return }
+        // 连着走很多格（按住方向键、双指一甩）时，两次之间至少隔 45 毫秒：像拨滚轮，声音和震动都不糊成一片
+        if cue == .move || cue == .step {
+            let now = Date()
+            if now.timeIntervalSince(lastMoveSound) < 0.045 { return }
+            lastMoveSound = now
+        }
         if source != .pointer { sound(cue) }
         haptic(cue, from: source)
     }
@@ -134,6 +144,11 @@ final class Feedback: ObservableObject {
             (duration, level) = (0.025, 0.07)
             (tickDecay, cutoff) = (0.0012, 2_600)
             (bodyFrequency, bodyDecay, bodyGain) = (900, 0.002, 0.25)
+        case .step:
+            // 同一个"嗒"，底下多一点短促的低音：像拨了一下档位，比长条里连着走的那种厚一点
+            (duration, level) = (0.045, 0.085)
+            (tickDecay, cutoff) = (0.0014, 2_300)
+            (bodyFrequency, bodyDecay, bodyGain) = (420, 0.007, 0.55)
         case .select:
             (duration, level) = (0.08, 0.11)
             (tickDecay, cutoff) = (0.0015, 2_200)
@@ -171,16 +186,22 @@ final class Feedback: ObservableObject {
 
     // MARK: Haptics
 
+    /// 每个声音都带一点触控板震动（手指搭在 Force Touch 触控板上才感觉得到，用键盘时不会打扰）：
+    /// 长条走一格轻轻一下，挑选 / 抽屉明显一点，确认、返回一下。鼠标点下去的那一下触控板自己会咔哒，不再叠一下
     private func haptic(_ cue: Cue, from source: Source) {
         switch source {
-        case .trackpad, .pointer:
-            // Felt while a finger is on a Force Touch trackpad; the trackpad's own click covers select.
-            guard cue == .move else { return }
-            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        case .keyboard, .trackpad, .pointer:
+            if source == .pointer, cue == .select || cue == .back { return }
+            let pattern: NSHapticFeedbackManager.FeedbackPattern = switch cue {
+            case .move: .alignment
+            case .step: .levelChange
+            case .select, .back: .generic
+            }
+            NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .now)
         case .controller:
             controllerTap(cue)
-        case .keyboard, .remote:
-            break
+        case .remote:
+            break   // 手机遥控器自己会震
         }
     }
 
@@ -195,6 +216,7 @@ final class Feedback: ObservableObject {
         guard let engine = controllerEngine else { return }
         let (intensity, sharpness): (Float, Float) = switch cue {
         case .move: (0.35, 0.7)
+        case .step: (0.5, 0.6)
         case .select: (0.75, 0.5)
         case .back: (0.55, 0.25)
         }

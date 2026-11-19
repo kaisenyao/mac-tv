@@ -47,6 +47,54 @@ final class TVController: NSObject, ObservableObject {
     @Published private(set) var focus: Focus = .app(0)
     /// Suppresses mouse hover focus changes during scrolling or keyboard navigation until the pointer actually moves.
     var suppressHover = false
+    // MARK: 交互规则（全局唯一的定义）
+    //
+    // 屏幕上每一块能操作的地方都属于下面一类，横着、竖着各自归一类。各应用只申报"焦点现在所在的地方横 / 竖是哪一类"
+    // （module(horizontal:)）和"长条里朝这边还有没有下一个"（flickCanMove），方向、走几格、惯性、声音、震动都由这一处决定：
+    // 双指滑动在 main.swift，按键音和震动在 handle(_:) 里按这里的分类挑。
+    //
+    // - strip 长条：窗口不动、内容在底下滚的一长排（视频排、歌单排、播放列表、相关视频、歌单页的歌）。选中是加一圈框。
+    //   手指带着内容走：往左 / 往上滑是下一个。轻轻一拨一格；用力一甩接着滑，越往后越慢，到这一条的头就停。
+    //   声音是轻快的"嗒"（甩出去时连着响，像拨滚轮），触控板轻震。
+    // - picker 挑选：选项不动、白色高亮在动（主屏图标、顶栏、音质栏、清晰度栏、菜单、设置项、左边栏里的上下、排序）。
+    //   选中是从灰变白。光标跟着手走：往右 / 往下滑光标往右 / 往下，一次滑动一格。声音是厚一点的"咔"，触控板明显一点地震一下。
+    // - drawer 抽屉：从屏幕边上拉出来的面板（左边栏从左、音质栏和清晰度栏从上、播放列表和相关视频从下），
+    //   以及在一摞会滚的排之间换排。内容跟着手走：往外拉出来，往反方向推回去；拉出来以后同方向再滑不动（像 Mac 的通知中心）。
+    //   一次滑动一格，声音、震动和挑选一样。
+    // - scrub 进度：视频、音乐播放中左右滑。进度跟着手走，每拖过一段（ScrubDetent）响一声"嗒"、震一下，抬手才跳过去。
+    // - off：这里不响应。
+    //
+    // 从一个区域到另一个区域（进左边栏、上顶栏）只能是一次新的滑动的第一格：甩出去的惯性不会冲过去。
+    // 鼠标：点一下选中并打开，按住弹出菜单；停在上面只是轻轻浮起、不改选中，一按键或一滑动就收起（PointerActivity）。
+    // 键盘：方向键就是光标方向；回车确认、长按回车菜单；Esc 返回、长按 Esc 回主屏。
+    // 核对用的现象（不是依据）：长条里选中是加框；挑选里选中是变白。
+    enum Module { case strip, picker, drawer, scrub, off }
+
+    func module(horizontal: Bool) -> Module {
+        if activeSheet != nil { return .picker }   // 弹出的面板：一列固定的选项
+        if bilibiliOpen { return bilibiliStore.module(horizontal: horizontal) }
+        if neteaseOpen { return neteaseStore.module(horizontal: horizontal) }
+        if movies != nil { return .drawer }
+        // 主屏：左右是在一排固定的图标里挑；上下是在 Top Shelf、图标、下面的格子之间翻
+        return horizontal ? .picker : .drawer
+    }
+
+    /// 拖进度：手指横着滑了多远（往右为正）、手指抬起
+    func scrubMove(points: Double) {
+        let crossed = bilibiliOpen ? bilibiliStore.player.scrubMove(points: points)
+            : neteaseOpen ? neteaseStore.scrubMove(points: points) : false
+        if crossed { feedback.play(.move, from: .trackpad) }   // 拖过一段响一声，像旋钮的档位
+    }
+    func endScrub() {
+        if bilibiliOpen { bilibiliStore.player.endScrub() } else if neteaseOpen { neteaseStore.endScrub() }
+    }
+
+    /// 长条里朝这个方向还有没有下一个。没有就停：一次滑动接着走的（第二格起、甩出去的惯性）不离开这一条
+    func flickCanMove(_ direction: RemoteCommand.Direction) -> Bool {
+        if bilibiliOpen { return bilibiliStore.flickCanMove(direction) }
+        if neteaseOpen { return neteaseStore.flickCanMove(direction) }
+        return false
+    }
     /// The top-row app whose content the Top Shelf shows.
     @Published private(set) var shelfAppIndex = 0
     /// Pointer position over the focused tile, -0.5…0.5 on each axis, for the parallax tilt. Kept
@@ -361,6 +409,7 @@ final class TVController: NSObject, ObservableObject {
         default:
             NSCursor.setHiddenUntilMouseMoves(true)
             suppressHover = true
+            PointerActivity.shared.set(false)
         }
 
         switch command {
@@ -450,10 +499,16 @@ final class TVController: NSObject, ObservableObject {
         switch mode {
         case .launcher:
             let before = feedbackState
+            // 走一格的声音按焦点（走之前）所在的区域：长条、进度是轻快的"嗒"，其余一格一格的（挑选、抽屉）是"咔"
+            var moveCue = Feedback.Cue.step
+            if case .move(let direction) = command, [.strip, .scrub].contains(module(horizontal: direction == .left || direction == .right)) {
+                moveCue = .move
+            }
             handleInLauncher(command)
             let changed = feedbackState != before
             switch command {
-            case .move where changed: feedback.play(.move, from: source)
+            case .move where changed: feedback.play(moveCue, from: source)
+            case .seek: feedback.play(.move, from: source)   // 快进 / 快退（滚轮、手机遥控器）：轻快的"嗒"
             case .select: feedback.play(.select, from: source)
             case .back where changed: feedback.play(.back, from: source)
             default: break
