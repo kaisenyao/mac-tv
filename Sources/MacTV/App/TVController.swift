@@ -486,8 +486,12 @@ final class TVController: NSObject, ObservableObject {
             phonePresses.handle(key, phase, from: source)
             return
         }
-        if source == .remote {
-            noteRemoteConnection()
+        if source == .remote || source == .siriRemote {
+            if source == .remote { noteRemoteConnection() }
+            switch command {
+            case .screenOff, .sleepMac: break   // 关屏幕、睡眠时不能又报"有人在用"
+            default: RemoteActivity.note()
+            }
             if displaysSleeping {
                 switch command {
                 case .screenOff, .screenOn, .sleepMac: break
@@ -530,7 +534,10 @@ final class TVController: NSObject, ObservableObject {
                 handle(.move(direction), from: source)
             }
             return
-        case .home: goHome(); return
+        case .home:
+            // 控制中心开着时：按一下 TV / 主屏键只把它收起来（按住拉下来、按一下收回去，和 Apple TV 一样）
+            if controlCenter != nil { controlCenter = nil; return }
+            goHome(); return
         case .swipe(let dx, let dy, let phase):
             // 手机触控板上的双指滑动：和 Mac 触控板上滑一样（同一套门槛、惯性、声音）。
             // 不归它管的地方（网页播放器里）就滚动网页，和以前一样
@@ -624,7 +631,7 @@ final class TVController: NSObject, ObservableObject {
             return
         }
 
-        if source == .remote || source == .controller, !NSApp.isActive {
+        if source == .remote || source == .siriRemote || source == .controller, !NSApp.isActive {
             bringToFront()
         }
 
@@ -793,6 +800,7 @@ final class TVController: NSObject, ObservableObject {
     func startControllers() {
         controllerInput = ControllerInput(tv: self)
         controllerInput?.start()
+        startSiriRemote()
     }
 
     func showControllerNotice(_ notice: ControllerNotice) { notices.showController(notice) }

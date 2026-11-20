@@ -53,16 +53,9 @@ extension TVController {
             controlCenter = nil
             return
         case .move(let direction):
+            // 和 Apple TV 一样：走到边上就停住，不会把控制中心关掉（遥控器一滑容易冲过头）。按返回才关
             if let next = ControlCenterPanel.neighbour(of: panel.item, direction) {
                 panel.item = next
-            } else if direction == .up, panel.item == .sleepMac || panel.item == .audio {
-                // Up from the top row goes back to the status row's Control Center button.
-                controlCenter = nil
-                return
-            } else if direction == .down, panel.item == .controller || panel.item == .screenOff
-                        || panel.item == .lid || panel.item == .settings {
-                controlCenter = nil
-                return
             }
         case .select:
             controlCenter = panel

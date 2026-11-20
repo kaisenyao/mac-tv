@@ -21,7 +21,7 @@ final class PhonePresses {
 
     private weak var tv: TVController?
     /// 正按住的键：按住时在做什么
-    private enum Holding { case repeating(Timer), scrubbing, menu, selectOnRelease, done }
+    private enum Holding { case repeating(Timer), scrubbing, menu, selectOnRelease(Feedback.Source), done }
     private var holding: [Key: Holding] = [:]
     private var watchdogs: [Key: Timer] = [:]
 
@@ -62,7 +62,7 @@ final class PhonePresses {
                 tv.feedback.play(.select, from: source)
                 holding[key] = .menu
             } else {
-                holding[key] = .selectOnRelease                  // 没有菜单的地方：松手时是一次普通的确认（和回车一样）
+                holding[key] = .selectOnRelease(source)                 // 没有菜单的地方：松手时是一次普通的确认（和回车一样）
             }
         case .left, .right, .up, .down:
             guard let direction = Self.direction(key) else { return }
@@ -98,7 +98,7 @@ final class PhonePresses {
         switch state {
         case .repeating(let timer): timer.invalidate()
         case .scrubbing: if tv.dedaoOpen { tv.dedaoStore.endHold() } else { tv.neteaseStore.endScrub() }
-        case .selectOnRelease: tv.handle(.select, from: .remote)
+        case .selectOnRelease(let source): tv.handle(.select, from: source)
         case .menu, .done: break
         }
     }
