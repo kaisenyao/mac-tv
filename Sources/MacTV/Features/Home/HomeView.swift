@@ -320,12 +320,14 @@ struct AppTile: View {
                     .foregroundStyle(.white)
             }
         } else if case .settings = service.kind {
+            // Settings, as on Apple TV: the gears on a dark disc (Icons/settings.svg), on silver.
             ZStack {
-                LinearGradient(colors: [Color(hex: "#8E8E93"), Color(hex: "#3A3A3C")],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 76))
-                    .foregroundStyle(.white)
+                LinearGradient(colors: [Color(hex: "#DEDEE1"), Color(hex: "#A2A2A7")],
+                               startPoint: .top, endPoint: .bottom)
+                if let gears = SettingsTile.gears {
+                    Image(nsImage: gears).resizable().interpolation(.high)
+                        .frame(width: 111, height: 111)
+                }
             }
         } else if service.id == BilibiliStore.appID, let icon = Icons.image(for: service) {
             // 整个方形图标完整放进卡片（小电视轮廓不裁掉），四周用图标自己的底色补满。
@@ -376,4 +378,25 @@ enum DedaoTile {
 enum StoreTile {
     static let glyph: NSImage? = Bundle.main.url(forResource: "store.svg", withExtension: nil, subdirectory: "Icons")
         .flatMap(NSImage.init(contentsOf:))
+}
+
+/// Settings 磁贴上的齿轮圆盘（照 Apple TV 的设置图标）。矢量图里有几千个点，载入时画成一张位图
+/// （够放大到聚焦时的 1.14 倍、Retina），主屏动画时不再反复画矢量。
+@MainActor
+enum SettingsTile {
+    static let gears: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "settings.svg", withExtension: nil, subdirectory: "Icons"),
+              let svg = NSImage(contentsOf: url) else { return nil }
+        let side = 384
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8,
+                                            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        svg.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.addRepresentation(bitmap)
+        return image
+    }()
 }
