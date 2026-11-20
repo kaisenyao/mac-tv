@@ -295,9 +295,10 @@ struct BrowserSheetPanel<Rows: View>: View {
     @ViewBuilder let rows: () -> Rows
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
+        // A Sheet (DesignSystem/Layers): the frosted backdrop, and a plain panel on it, as Add App's.
+        let shape = RoundedRectangle(cornerRadius: 44, style: .continuous)
         ZStack {
-            Color.black.opacity(0.5)
+            SheetBackdrop()
             VStack(alignment: .leading, spacing: 6) {
                 if let title {
                     Text(title).font(.tv(.headline, emphasized: true)).foregroundStyle(.white).lineLimit(2)
@@ -307,9 +308,7 @@ struct BrowserSheetPanel<Rows: View>: View {
             }
             .padding(12)
             .frame(width: 640)
-            .background(shape.fill(Color(hex: "#2A2B30")))
-            .overlay(shape.strokeBorder(.white.opacity(0.1), lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
+            .tvPanel(in: shape)
         }
         .environment(\.colorScheme, .dark)
         .transition(.opacity)
@@ -326,14 +325,13 @@ struct BrowserSheetRow: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
-        let red = Color(hex: "#FF453A")
         HStack(spacing: 20) {
             if let symbol { Image(systemName: symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36) }
             Text(title)
             Spacer(minLength: 0)
         }
         .font(.tv(.callout))
-        .foregroundStyle(destructive ? red : lit ? .black : .white.opacity(0.9))
+        .foregroundStyle(destructive ? Color.destructive : lit ? .black : .white.opacity(0.9))
         .padding(.horizontal, 24)
         .frame(height: 72)
         .background(shape.fill(lit ? Color.white : .clear))

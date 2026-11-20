@@ -58,10 +58,12 @@ private struct BrowserTopBarLayer: View {
                     .transition(reduceMotion ? .opacity : .offset(y: -(BrowserTopBar.height + 30)).combined(with: .opacity))
             }
             if store.menu != nil {
+                DimBackdrop(close: { _ = store.closeHoldMenu() })
+                    .transition(.opacity)
                 BrowserMenu(store: store)
                     .padding(.top, BrowserTopBar.height + 12)
                     .padding(.trailing, 28)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                    .transition(.growing(from: .topTrailing))
             }
             // "⋯"里的 Remove from Favorites：先问
             if store.itemMenu != nil {
@@ -70,7 +72,7 @@ private struct BrowserTopBarLayer: View {
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topTrailing)
         .animation(Motion.slide, value: store.barShown)
-        .animation(Motion.appear, value: store.menu != nil)
+        .animation(Motion.slide, value: store.menu != nil)
         .animation(Motion.appear, value: store.itemMenu != nil)
     }
 }
@@ -574,8 +576,7 @@ struct BrowserMenu: View {
     @ObservedObject var store: BrowserStore
 
     var body: some View {
-        let isPrivate = store.barIsPrivate
-        let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 34, style: .continuous)
         return VStack(spacing: 6) {
             // 开始页上只有 New Private Tab、Close Tab（见 BrowserStore.menuRows）
             ForEach(store.menuRows, id: \.self) { items in
@@ -584,9 +585,8 @@ struct BrowserMenu: View {
         }
         .padding(12)
         .frame(width: 640)
-        .background(shape.fill(Color(hex: isPrivate ? "#221D30" : "#2A2B30")))
-        .overlay(shape.strokeBorder(.white.opacity(0.1), lineWidth: 1.5))
-        .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
+        .tvPanelSurface(in: shape)
+        .tvShadow(.float)
         .environment(\.colorScheme, .dark)
     }
 

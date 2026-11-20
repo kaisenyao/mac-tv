@@ -25,12 +25,8 @@ struct BilibiliPlayerPanel: View {
         }
         .padding(16)
         .frame(width: width, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.black.opacity(0.4))
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 34, style: .continuous).strokeBorder(.white.opacity(0.16))
-        }
-        .shadow(color: .black.opacity(0.5), radius: 40, x: -12)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
         .padding(.trailing, 64)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
         .offset(x: open ? 0 : width + 140)
@@ -189,7 +185,7 @@ struct BilibiliPlayerPanel: View {
 
     private func highlight(at index: Int, danger: Bool) -> some View {
         RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(danger ? Color(hex: "#E5484D") : .white)
+            .fill(danger ? Color.destructive : .white)
             .frame(height: rowHeight)
             .offset(y: CGFloat(index) * (rowHeight + gap))
     }

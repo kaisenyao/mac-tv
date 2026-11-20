@@ -565,15 +565,12 @@ private struct DedaoSidebar: View {
         .padding(18)
         .background {
             // 玻璃底板：收起时向左缩并滑出去
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 38, style: .continuous).fill(.black.opacity(0.35))
-                RoundedRectangle(cornerRadius: 38, style: .continuous).fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 38, style: .continuous).strokeBorder(.white.opacity(0.16))
-            }
-            .shadow(color: .black.opacity(0.5), radius: 40, x: 12)
-            .opacity(open ? 1 : 0)
-            .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
-            .offset(x: open ? 0 : -150)
+            Color.clear
+                .tvPanelSurface(in: RoundedRectangle(cornerRadius: 38, style: .continuous))
+                .tvShadow(.float)
+                .opacity(open ? 1 : 0)
+                .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
+                .offset(x: open ? 0 : -150)
         }
         .padding(.leading, open ? 30 : 26)
         .frame(height: canvas.height - top - 30, alignment: .center)
@@ -703,21 +700,19 @@ private struct DedaoMenuLayer: View {
     static func width(_ menu: DedaoStore.Menu) -> CGFloat {
         menu.items.contains { !$0.detail.isEmpty || $0.chevron || $0.action == .sleepMenu } ? 420 : 360
     }
-    private static let danger = Color(hex: "#E5484D")
     private var canvas: CGSize { proxy.size }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             if store.menu != nil {
-                Color.black.opacity(0.001)
-                    .contentShape(Rectangle())
-                    .onTapGesture { store.dismissMenu() }
+                DimBackdrop(close: { store.dismissMenu() })
+                    .transition(.opacity)
             }
             if let menu = store.menu {
                 let place = placement(menu)
                 panel(menu)
                     .offset(x: place.origin.x, y: place.origin.y)
-                    .transition(.scale(scale: 0.86, anchor: place.from).combined(with: .opacity))
+                    .transition(.growing(from: place.from))
                     .id(menu.anchor == .account ? "account" : menu.anchor == .setting ? "setting" : "nowPlaying")
             }
         }
@@ -786,12 +781,8 @@ private struct DedaoMenuLayer: View {
                 }
         }
         .padding(16)
-        .background {
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.black.opacity(0.35))
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 34, style: .continuous).strokeBorder(.white.opacity(0.16))
-        }
-        .shadow(color: .black.opacity(0.55), radius: 30, y: 14)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
         .fixedSize()
         .animation(Motion.focus, value: index)
         .animation(Motion.slide, value: items.count)
@@ -838,7 +829,7 @@ private struct DedaoMenuLayer: View {
         }
         .background(alignment: .top) {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(danger ? Self.danger : .white)
+                .fill(danger ? Color.destructive : .white)
                 .frame(height: 74)
                 .offset(y: CGFloat(index) * Self.step)
         }

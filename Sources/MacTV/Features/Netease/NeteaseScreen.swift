@@ -52,7 +52,6 @@ struct NeteaseScreen: View {
     private static let lyric = Animation.spring(response: 0.6, dampingFraction: 0.9)
     private static let swap = AnyTransition.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.4).delay(0.12)),
                                                        removal: .opacity.animation(.easeIn(duration: 0.12)))
-    private static let danger = Color(hex: "#E5484D")
     /// 换界面（首页、歌单页、设置页、播放界面之间）：旧的先在 0.12 秒里淡出，新的稍后淡入。
     /// 两层不会半透明地叠在一起——叠着就会看到上一页的人的残影
     private static let fadeOut = Animation.easeIn(duration: 0.12)
@@ -251,18 +250,16 @@ struct NeteaseScreen: View {
     private func menuLayer(_ anchors: [String: Anchor<CGRect>], _ proxy: GeometryProxy) -> some View {
         ZStack(alignment: .topLeading) {
             if store.menu != nil {
-                Color.black.opacity(0.001)
-                    .contentShape(Rectangle())
-                    .onTapGesture { store.dismissMenu() }
+                DimBackdrop(close: { store.dismissMenu() })
+                    .transition(.opacity)
             }
             if let menu = store.menu {
                 let place = menuPlacement(menu, anchors, proxy)
                 // 摆好位置以后整块铺满屏幕，再以"从哪儿来"的那个点为中心放大 / 缩小
                 menuPanel(menu)
                     .position(x: place.origin.x + place.size.width / 2, y: place.origin.y + place.size.height / 2)
-                    .transition(.scale(scale: 0.04, anchor: UnitPoint(x: place.from.x / max(1, proxy.size.width),
-                                                                      y: place.from.y / max(1, proxy.size.height)))
-                        .combined(with: .opacity))
+                    .transition(.growing(from: UnitPoint(x: place.from.x / max(1, proxy.size.width),
+                                                         y: place.from.y / max(1, proxy.size.height))))
                     .id(menu.anchor)
             }
         }
@@ -322,19 +319,15 @@ struct NeteaseScreen: View {
             }
             .background(alignment: .top) {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(danger ? Self.danger : .white)   // 确认"删除""退出登录""取消收藏"时，高亮是红的
+                    .fill(danger ? Color.destructive : .white)   // 确认"删除""退出登录""取消收藏"时，高亮是红的
                     .frame(height: 74)
                     .offset(y: CGFloat(index) * 82)
                     .opacity(items.isEmpty ? 0 : 1)
             }
         }
         .padding(16)
-        .background {
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.black.opacity(0.35))
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 34, style: .continuous).strokeBorder(.white.opacity(0.16))
-        }
-        .shadow(color: .black.opacity(0.55), radius: 30, y: 14)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
         .fixedSize()
         .onChange(of: store.naming) { _, naming in namingField = naming != nil }
         .onChange(of: store.focusRequest) { _, _ in if store.naming != nil { namingField = true } }
@@ -934,8 +927,12 @@ struct NeteaseScreen: View {
             .padding(.bottom, 54)
             .frame(width: canvas.width)
             .background {
-                LinearGradient(colors: [.black.opacity(0.85), .black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
-                    .padding(.top, -400)   // 往屏幕外多铺一段：滑下来回弹时顶上不露缝
+                // 往屏幕外多铺一段同样深的：滑下来回弹时顶上不露缝
+                VStack(spacing: 0) {
+                    Color.black.opacity(0.85).frame(height: 400)
+                    EdgeScrim(strength: 0.85, edge: .top)
+                }
+                .padding(.top, -400)
             }
             Spacer()
         }

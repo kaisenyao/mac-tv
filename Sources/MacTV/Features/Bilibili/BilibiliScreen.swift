@@ -83,8 +83,17 @@ struct BilibiliScreen: View {
                     .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: 50)).animation(.easeOut(duration: 0.28).delay(0.05)),
                                             removal: .opacity.animation(.easeIn(duration: 0.12))))
             }
+            if store.accountMenuOpen {
+                // 头像菜单后面：屏幕压暗一层，点一下收起（和别的菜单一样）
+                DimBackdrop(close: { store.tapAccount() })
+                    .transition(.opacity.animation(BiliMotion.slide))
+            }
             topBar
             sidebar
+            if store.cardMenu != nil {
+                DimBackdrop(close: { _ = store.closeCardMenu() })
+                    .transition(.opacity.animation(BiliMotion.slide))
+            }
             cardMenu
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
@@ -133,15 +142,12 @@ struct BilibiliScreen: View {
         }
         .background {
             // 玻璃底板：收起时向左缩并滑出去
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 38, style: .continuous).fill(.black.opacity(0.35))
-                RoundedRectangle(cornerRadius: 38, style: .continuous).fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 38, style: .continuous).strokeBorder(.white.opacity(0.16))
-            }
-            .shadow(color: .black.opacity(0.5), radius: 40, x: 12)
-            .opacity(open ? 1 : 0)
-            .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
-            .offset(x: open ? 0 : -150)
+            Color.clear
+                .tvPanelSurface(in: RoundedRectangle(cornerRadius: 38, style: .continuous))
+                .tvShadow(.float)
+                .opacity(open ? 1 : 0)
+                .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
+                .offset(x: open ? 0 : -150)
         }
         .padding(.leading, open ? 30 : 26)
         .frame(height: canvas.height, alignment: .center)
@@ -246,19 +252,15 @@ struct BilibiliScreen: View {
         .background(alignment: .top) {
             let index = min(store.accountIndex, max(0, actions.count - 1))
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(actions.indices.contains(index) && actions[index] == .confirmLogout ? Color(hex: "#E5484D") : .white)
+                .fill(actions.indices.contains(index) && actions[index] == .confirmLogout ? Color.destructive : .white)
                 .frame(height: 74)
                 .offset(y: CGFloat(index) * 82)
         }
         .padding(16)
-        .background {
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.black.opacity(0.35))
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 34, style: .continuous).strokeBorder(.white.opacity(0.16))
-        }
-        .shadow(color: .black.opacity(0.5), radius: 30, y: 14)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
         .fixedSize()
-        .scaleEffect(open ? 1 : 0.86, anchor: .topTrailing)
+        .scaleEffect(open ? 1 : 0.04, anchor: .topTrailing)
         .offset(y: open ? 0 : -26)
         .opacity(open ? 1 : 0)
         .allowsHitTesting(open)
@@ -489,14 +491,10 @@ struct BilibiliScreen: View {
                 .opacity(actions.isEmpty ? 0 : 1)
         }
         .padding(16)
-        .background {
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.black.opacity(0.35))
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 34, style: .continuous).strokeBorder(.white.opacity(0.16))
-        }
-        .shadow(color: .black.opacity(0.55), radius: 30, y: 14)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
         .fixedSize()
-        .scaleEffect(open ? 1 : 0.86, anchor: .topLeading)
+        .scaleEffect(open ? 1 : 0.04, anchor: .topLeading)
         .opacity(open ? 1 : 0)
         .allowsHitTesting(open)
         // 选中的卡片在第一或第二个位置上；菜单压在它的左上角里面一点
@@ -585,7 +583,7 @@ struct BilibiliScreen: View {
         .frame(height: 66)
         .fixedSize(horizontal: true, vertical: false)
         .background {
-            Capsule().fill(focused ? (armed ? Color(hex: "#E5484D") : .white) : .white.opacity(clear ? 0.05 : 0.1))
+            Capsule().fill(focused ? (armed ? Color.destructive : .white) : .white.opacity(clear ? 0.05 : 0.1))
             PillOutline().strokeBorder(.white.opacity(focused ? 0 : 0.12))
         }
         .scaleEffect(focused ? 1.08 : 1)

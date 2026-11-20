@@ -66,8 +66,8 @@ struct PlaybackFailureView: View {
                 }
             }
         }
-        .padding(60).frame(width: 1280).tvGlass(in: RoundedRectangle(cornerRadius: 40))
+        .padding(60).frame(width: 1280).tvGlass(in: RoundedRectangle(cornerRadius: 40, style: .continuous))
         .foregroundStyle(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.black.opacity(0.8))
+        .background(SheetBackdrop())
     }
 }

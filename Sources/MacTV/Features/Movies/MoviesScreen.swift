@@ -90,9 +90,13 @@ struct MoviesScreen: View {
                 .padding(.trailing, 96)
                 .padding(.top, 56)
 
+            if browser.menu != nil {
+                DimBackdrop(close: { _ = tv.closeMoviesMenu() })
+                    .transition(.opacity)
+            }
             if let menu = browser.menu {
                 MoviesMenuView(tv: tv, browser: browser, menu: menu, rows: rows)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .topLeading)))
+                    .transition(.growing(from: .topLeading))
             }
             if let row = browser.adding, browser.shareForm == nil {
                 AddSourceSheet(tv: tv, row: row)
@@ -881,15 +885,12 @@ private struct MoviesSidebarView: View {
         }
         .padding(18)
         .background {
-            ZStack {
-                RoundedRectangle(cornerRadius: 38, style: .continuous).fill(.black.opacity(0.35))
-                RoundedRectangle(cornerRadius: 38, style: .continuous).fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 38, style: .continuous).strokeBorder(.white.opacity(0.16))
-            }
-            .shadow(color: .black.opacity(0.5), radius: 40, x: 12)
-            .opacity(open ? 1 : 0)
-            .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
-            .offset(x: open ? 0 : -150)
+            Color.clear
+                .tvPanelSurface(in: RoundedRectangle(cornerRadius: 38, style: .continuous))
+                .tvShadow(.float)
+                .opacity(open ? 1 : 0)
+                .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
+                .offset(x: open ? 0 : -150)
         }
         .padding(.leading, open ? 30 : 26)
         .frame(height: canvas.height, alignment: .center)
@@ -945,7 +946,7 @@ private struct MoviesMenuView: View {
                 .background {
                     if focused {
                         RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(item == .confirmRemove ? Color(hex: "#E5484D") : .white)
+                            .fill(item == .confirmRemove ? Color.destructive : .white)
                     }
                 }
                 .scaleEffect(focused && tv.moviesWork.pressed == "menu-\(index)" ? 0.97 : 1)
@@ -954,12 +955,8 @@ private struct MoviesMenuView: View {
             }
         }
         .padding(16)
-        .background {
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.black.opacity(0.35))
-            RoundedRectangle(cornerRadius: 34, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 34, style: .continuous).strokeBorder(.white.opacity(0.16))
-        }
-        .shadow(color: .black.opacity(0.55), radius: 30, y: 14)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
         .fixedSize()
         .animation(Motion.slide, value: menu)
         .offset(anchor)
@@ -1050,10 +1047,9 @@ private struct AddSourceSheet: View {
         }
         .padding(56)
         .frame(width: 900, alignment: .leading)
-        .background(Color(white: 0.1), in: RoundedRectangle(cornerRadius: 44, style: .continuous))
         .tvPanel(in: RoundedRectangle(cornerRadius: 44, style: .continuous))
         .frame(width: canvas.width, height: canvas.height)
-        .background(Color.black.opacity(0.35))
+        .background(SheetBackdrop())
         .animation(Motion.focus, value: row)
     }
 }
@@ -1087,11 +1083,10 @@ struct ShareFormSheet: View {
         }
         .padding(56)
         .frame(width: 1000, alignment: .leading)
-        .background(Color(white: 0.1), in: RoundedRectangle(cornerRadius: 44, style: .continuous))
         .tvPanel(in: RoundedRectangle(cornerRadius: 44, style: .continuous))
         .foregroundStyle(.white)
         .frame(width: canvas.width, height: canvas.height)
-        .background(Color.black.opacity(0.35))
+        .background(SheetBackdrop())
         .animation(Motion.focus, value: form)
     }
 

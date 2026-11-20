@@ -73,11 +73,13 @@ struct BrowserScreen: View {
             // 标签栏收起、出来：整块一起上下挪（BrowserStore 里那一下是 Motion.navigate）
             .offset(y: store.startBarShown ? 0 : -collapse)
             if store.menu != nil {
+                DimBackdrop(close: { _ = store.closeHoldMenu() })
+                    .transition(.opacity)
                 BrowserMenu(store: store)
                     .padding(.top, BrowserTopBar.height + 12)
                     .padding(.trailing, 28)
                     .frame(width: canvas.width, alignment: .trailing)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                    .transition(.growing(from: .topTrailing))
             }
             // 按住确认一个网站：它的菜单（个人收藏的 Rename、Edit Address… 也在这里打字）
             if store.itemMenu != nil {

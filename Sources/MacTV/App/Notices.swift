@@ -24,20 +24,20 @@ final class Notices: ObservableObject {
     }
 
     func showVolume(_ level: VolumeLevel) {
-        withAnimation(.smooth(duration: 0.3)) { volume = level }
+        withAnimation(Motion.appear) { volume = level }
         volumeTask?.cancel()
         volumeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
-            if !Task.isCancelled { withAnimation(.smooth(duration: 0.4)) { self?.volume = nil } }
+            if !Task.isCancelled { withAnimation(Motion.appear) { self?.volume = nil } }
         }
     }
 
     func showController(_ notice: ControllerNotice) {
-        withAnimation(.smooth(duration: 0.35)) { controller = notice }
+        withAnimation(Motion.appear) { controller = notice }
         controllerTask?.cancel()
         controllerTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
-            if !Task.isCancelled { withAnimation(.smooth(duration: 0.4)) { self?.controller = nil } }
+            if !Task.isCancelled { withAnimation(Motion.appear) { self?.controller = nil } }
         }
     }
 }

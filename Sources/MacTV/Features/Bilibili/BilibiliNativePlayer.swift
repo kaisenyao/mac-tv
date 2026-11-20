@@ -1672,16 +1672,6 @@ struct BilibiliPlayerScreen: View {
 
     @Namespace private var glass
 
-    /// 托字用的暗角：靠边最深，按缓出曲线很快衰减，尾部淡得看不出边界。
-    /// 普通的线性渐变中段偏重、收尾拖得长，看起来就是"一大片阴影"；这条曲线同样的深度下显得轻得多。
-    private static func scrim(strength: Double, from edge: UnitPoint) -> LinearGradient {
-        let curve: [(Double, Double)] = [(0, 1), (0.19, 0.738), (0.34, 0.541), (0.47, 0.382), (0.565, 0.278), (0.65, 0.194),
-                                         (0.73, 0.126), (0.802, 0.075), (0.861, 0.042), (0.91, 0.021), (0.952, 0.008),
-                                         (0.982, 0.002), (1, 0)]
-        return LinearGradient(stops: curve.map { .init(color: .black.opacity(strength * $0.1), location: $0.0) },
-                              startPoint: edge, endPoint: edge == .top ? .bottom : .top)
-    }
-
     private static let shelfHeight: CGFloat = 380
     private static let shelfGap: CGFloat = 40
 
@@ -1870,7 +1860,7 @@ struct BilibiliPlayerScreen: View {
                     // 往屏幕上方多延伸一截，是因为滑下来带一点回弹，会先冲过头，不延伸顶上会露缝。
                     VStack(spacing: 0) {
                         Color.black.opacity(0.42).frame(height: 400)
-                        Self.scrim(strength: 0.42, from: .top).frame(height: 54 + 78 + 54)
+                        EdgeScrim(strength: 0.42, edge: .top).frame(height: 54 + 78 + 54)
                     }
                     .offset(y: -400)
                 }
@@ -1901,7 +1891,7 @@ struct BilibiliPlayerScreen: View {
                     // 同样往屏幕下方多延伸一截，回弹时底下不露缝
                     VStack(spacing: 0) {
                         // 暗色的高度跟着这排内容走（标题、卡片、两行字，大约 400 高），只比内容高出一小段用来收尾
-                        Self.scrim(strength: 0.6, from: .bottom).frame(height: 470)
+                        EdgeScrim(strength: 0.6, edge: .bottom).frame(height: 470)
                         Color.black.opacity(0.6).frame(height: 400)
                     }
                     .offset(y: 400)
@@ -1987,7 +1977,7 @@ struct BilibiliPlayerScreen: View {
                     .padding(.bottom, 62)
                     .frame(width: w, height: h, alignment: .bottomLeading)
                     .background(alignment: .bottom) {
-                        Self.scrim(strength: 0.6, from: .bottom)
+                        EdgeScrim(strength: 0.6, edge: .bottom)
                             .frame(height: 330)
                             .opacity(player.showing ? 1 : 0)
                     }

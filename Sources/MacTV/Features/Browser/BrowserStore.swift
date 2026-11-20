@@ -1009,12 +1009,12 @@ final class BrowserStore: ObservableObject {
         guard pageWebView != nil || onStartPage, menu == nil else { return false }
         if editing { endEditingByClick() }   // 正在改地址时按住确认：先不改了（不留下改了一半的地址栏）
         if barFocus == nil { focusBar(on: .more) }
-        withAnimation(Motion.appear) { barFocus = .more; menu = menuRows[0][0] }
+        withAnimation(Motion.slide) { barFocus = .more; menu = menuRows[0][0] }
         return true
     }
 
     private func closeMenu() {
-        withAnimation(Motion.appear) { menu = nil }
+        withAnimation(Motion.slide) { menu = nil }
     }
 
     /// "⋯"菜单开着时再按住确认：收起，焦点留在标签栏的"⋯"上（同返回，规矩见 TVController.toggle）
