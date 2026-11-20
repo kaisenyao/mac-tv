@@ -18,7 +18,7 @@ final class Feedback: ObservableObject {
     /// Where a command came from, so the haptic goes to the thing in the user's hand.
     /// The phone remote vibrates by itself.
     enum Source {
-        case keyboard, trackpad, pointer, remote, controller
+        case keyboard, trackpad, pointer, remote, controller, siriRemote
     }
 
     static let shared = Feedback()
@@ -216,8 +216,8 @@ final class Feedback: ObservableObject {
             NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .now)
         case .controller:
             controllerTap(cue)
-        case .remote:
-            break   // 手机遥控器自己会震
+        case .remote, .siriRemote:
+            break   // 手机遥控器自己会震；Siri Remote 没有震动
         }
     }
 

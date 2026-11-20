@@ -53,6 +53,7 @@ struct RootView: View {
                     TVCanvas { Screensaver() }
                         .ignoresSafeArea()
                         .transition(.opacity.animation(.easeInOut(duration: 1.2)))
+                        .zIndex(100)   // 在所有弹出的面板上面（面板有固定的层级，见 ModalSheetRouter）
                 }
             }
 
@@ -83,6 +84,8 @@ struct ModalSheetRouter: View {
                 .accessibilityHidden(!tv.isTopSheet(layer))
                 .background { if layer != .controlCenter { SheetBackdrop() } }
                 .transition(transition(layer))
+                // 固定的层级：不然收起时 SwiftUI 把它挪到主屏下面，收回去的动画被挡住，看起来是一下子没了
+                .zIndex(1 + Double(layer.rawValue))
         }
     }
 
