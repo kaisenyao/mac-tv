@@ -136,6 +136,11 @@ final class InputPresses {
     private weak var tv: TVController?
     private var timing: [Feedback.Source: PressTiming] = [:]
     private var timer: Timer?
+    /// Keys whose release may never arrive as an event (H while ⌘ is held: AppKit doesn't deliver that keyUp).
+    /// While one is down its physical state is checked every `watchInterval`, and it's let go as soon as it's up.
+    static let watchInterval: TimeInterval = 0.02
+    private var watched: [(key: PhonePresses.Key, source: Feedback.Source, isDown: () -> Bool)] = []
+    private var watchTimer: Timer?
     /// The clock; tests pass their own times instead.
     var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
 
@@ -152,6 +157,7 @@ final class InputPresses {
     /// A button came up. False when it wasn't down here (so the key isn't this one's).
     @discardableResult
     func up(_ key: PhonePresses.Key, from source: Feedback.Source) -> Bool {
+        unwatch { $0.key == key && $0.source == source }
         guard let phase = timing[source]?.release(key) else { return false }
         tv?.handle(.press(key, phase), from: source)
         schedule()
@@ -169,12 +175,38 @@ final class InputPresses {
 
     /// Lets go of a device's buttons (all devices' with nil): a hold ends, a press not yet a tap does nothing.
     func reset(_ source: Feedback.Source? = nil) {
+        unwatch { source == nil || $0.source == source }
         for each in Array(timing.keys) where source == nil || each == source {
             let released = timing[each]?.reset() ?? []
             timing[each] = nil
             for (key, phase) in released { tv?.handle(.press(key, phase), from: each) }
         }
         schedule()
+    }
+
+    /// Lets `key` go when `isDown` says it's up (checked every `watchInterval` while it's down).
+    func watch(_ key: PhonePresses.Key, from source: Feedback.Source, isDown: @escaping () -> Bool) {
+        unwatch { $0.key == key && $0.source == source }
+        watched.append((key, source, isDown))
+        guard watchTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.watchInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkWatched() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchTimer = timer
+    }
+
+    /// The watched keys, checked now: one that's up is let go (a tap, or the end of a hold).
+    func checkWatched() {
+        for entry in watched where !entry.isDown() { up(entry.key, from: entry.source) }
+    }
+
+    private func unwatch(_ matching: (_ entry: (key: PhonePresses.Key, source: Feedback.Source, isDown: () -> Bool)) -> Bool) {
+        watched.removeAll(where: matching)
+        if watched.isEmpty {
+            watchTimer?.invalidate()
+            watchTimer = nil
+        }
     }
 
     private func schedule() {

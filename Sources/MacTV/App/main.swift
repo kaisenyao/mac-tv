@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 extension NSScreen {
@@ -414,7 +415,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // pressed, the Home Screen; twice, the App Switcher; held, Control Center. "Hide Mac TV" has no shortcut.
             if mods == [.command], event.charactersIgnoringModifiers?.lowercased() == "h" {
                 self?.commandHDown = true
-                tv.inputPresses.down(.home, from: .keyboard)   // a key repeat does nothing
+                if tv.inputPresses.down(.home, from: .keyboard) {   // a key repeat does nothing
+                    // AppKit doesn't deliver H's keyUp while ⌘ is held, so the press would only end when ⌘ is let go
+                    // (slow, and a hold by then). The H key itself is watched instead: the session's key state, which
+                    // needs no permission; a press ends within 20 ms of letting go of H, ⌘ held or not.
+                    let hDown = { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_ANSI_H)) }
+                    if hDown() { tv.inputPresses.watch(.home, from: .keyboard, isDown: hDown) }
+                    else { tv.inputPresses.up(.home, from: .keyboard) }   // let go already (or unreadable): a tap
+                }
                 return nil
             }
             guard event.window === self?.window else { return event }

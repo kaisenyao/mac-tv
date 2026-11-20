@@ -218,6 +218,67 @@ import WebKit
         }
     }
 
+    // MARK: ⌘H, with ⌘ held
+
+    /// ⌘H as main.swift sends it: down, then the H key watched (AppKit doesn't deliver H's keyUp while ⌘ is held).
+    /// `h` is the key's physical state; `time` when it went down.
+    static func commandH(_ tv: TVController, at time: TimeInterval, h: @escaping () -> Bool) {
+        if tv.inputPresses.down(.home, from: .keyboard, at: time) { tv.inputPresses.watch(.home, from: .keyboard, isDown: h) }
+    }
+
+    @Test func commandHActsWithinAWatchOfLettingGoOfH() async throws {
+        #expect(InputPresses.watchInterval <= 0.03, "a tap acts within 30 ms of letting go of H")
+        try await Self.withTV { tv in
+            tv.dedaoOpen = true
+            var h = true
+            Self.commandH(tv, at: 0, h: { h })
+            tv.inputPresses.checkWatched()
+            #expect(tv.dedaoOpen, "still down: nothing yet")
+            h = false   // H let go at 0.08 s, ⌘ still held
+            tv.inputPresses.checkWatched()   // the next watch, ≤ 20 ms later
+            #expect(!tv.dedaoOpen && tv.lastTVPress != nil, "Home, without waiting for ⌘")
+        }
+    }
+
+    @Test func commandHTwiceWithCommandHeldIsTheAppSwitcher() async throws {
+        try await Self.withTV { tv in
+            tv.dedaoOpen = true
+            var h = true
+            Self.commandH(tv, at: 0, h: { h })
+            h = false
+            tv.inputPresses.checkWatched()
+            #expect(!tv.dedaoOpen)
+            // ⌘ never let go: the second ⌘H is a new press, not "already down"
+            h = true
+            Self.commandH(tv, at: 0.2, h: { h })
+            h = false
+            tv.inputPresses.checkWatched()
+            #expect(tv.appSwitcher?.origin == DedaoStore.appID, "the App Switcher, on 得到")
+        }
+    }
+
+    @Test func aCommandHTapWithCommandHeldAfterIsHomeNotControlCenter() async throws {
+        try await Self.withTV { tv in
+            tv.dedaoOpen = true
+            var h = true
+            Self.commandH(tv, at: 0, h: { h })
+            h = false
+            tv.inputPresses.checkWatched()        // H up at 0.1 s
+            tv.inputPresses.advance(to: 1.1)      // ⌘ held for 1 s more
+            #expect(!tv.dedaoOpen && tv.controlCenter == nil, "Home, never Control Center")
+            // Held H for the hold time: Control Center, and letting go adds nothing
+            tv.lastTVPress = nil
+            tv.dedaoOpen = true
+            h = true
+            Self.commandH(tv, at: 2, h: { h })
+            tv.inputPresses.advance(to: 2 + InputTiming.hold + 0.01)
+            #expect(tv.controlCenter != nil && tv.dedaoOpen)
+            h = false
+            tv.inputPresses.checkWatched()
+            #expect(tv.controlCenter != nil && tv.dedaoOpen && tv.lastTVPress == nil)
+        }
+    }
+
     // MARK: Devices going away
 
     @Test func aDeviceGoingAwayMidHoldDoesNothingLater() async throws {
