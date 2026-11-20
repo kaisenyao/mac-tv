@@ -175,6 +175,9 @@ final class InputPresses {
         schedule()
     }
 
+    /// The Siri button is down on this input (its release hasn't come).
+    func siriIsDown(from source: Feedback.Source) -> Bool { siri[source]?.isDown ?? false }
+
     /// The Siri button came up. False when it wasn't down here.
     @discardableResult
     func siriUp(from source: Feedback.Source, at time: TimeInterval? = nil) -> Bool {

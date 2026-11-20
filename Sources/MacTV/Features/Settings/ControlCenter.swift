@@ -185,8 +185,9 @@ extension TVController {
             } else if controls.contains(panel.item) {
                 panel.lifted = panel.lifted == panel.item ? nil : panel.item
             } else if ControlCenterPanel.Item.controls.contains(panel.item) {
-                controls.append(panel.item)   // added last; focus stays on it, now among the buttons
-                controlCenterControls = controls
+                controlCenter = panel
+                addControlCenterControl(panel.item)   // added last; focus stays on it, now among the buttons
+                return
             }
         default:
             break
@@ -200,19 +201,31 @@ extension TVController {
         panel.item = .edit
     }
 
-    /// Press and hold Select while editing Control Center: the focused round button comes out, to Add a Control.
-    func removeControlCenterControl() -> Bool {
+    /// Editing Control Center: a round button comes out, to Add a Control: the focused one when Select is held, or the
+    /// one whose "−" was clicked.
+    func removeControlCenterControl(_ chosen: ControlCenterPanel.Item? = nil) -> Bool {
         guard var panel = controlCenter, panel.editing, panel.list == nil else { return false }
+        let item = chosen ?? panel.item
         var controls = controlCenterControls
-        guard let index = controls.firstIndex(of: panel.item) else { return false }
+        guard let index = controls.firstIndex(of: item) else { return false }
         controls.remove(at: index)
         controlCenterControls = controls
-        panel.lifted = nil
+        if panel.lifted == item { panel.lifted = nil }
         panel.presses += 1
         // Focus goes to the button that took its place, or the last one; with none left, to what it became.
-        panel.item = controls.isEmpty ? panel.item : controls[min(index, controls.count - 1)]
+        if panel.item == item { panel.item = controls.isEmpty ? item : controls[min(index, controls.count - 1)] }
         controlCenter = panel
         return true
+    }
+
+    /// Editing Control Center: a round button from Add a Control goes in, last, with focus on it.
+    func addControlCenterControl(_ item: ControlCenterPanel.Item) {
+        guard var panel = controlCenter, panel.editing, ControlCenterPanel.Item.controls.contains(item),
+              !controlCenterControls.contains(item) else { return }
+        controlCenterControls.append(item)
+        panel.item = item
+        panel.presses += 1
+        controlCenter = panel
     }
 
     /// Select or a click. Sheets opened from here (Connect a Remote, Audio, Settings, Arrange Apps, Store) open over
@@ -386,19 +399,22 @@ struct ControlCenterView: View {
         .animation(Motion.focus, value: tv.controlCenterControls)
     }
 
-    /// Round buttons four to a row, each in its place across the cluster's width.
+    /// Round buttons four to a row, each placed by its place in the order, as Arrange Apps places apps: one moving
+    /// glides there and the others make room, instead of the rows being laid out again.
     private func rounds(_ items: [ControlCenterPanel.Item], _ panel: ControlCenterPanel, adding: Bool) -> some View {
         let perRow = ControlCenterPanel.Item.perRow
         let spacing = (Self.width - CGFloat(perRow) * Self.row) / CGFloat(perRow - 1)
-        let rows = stride(from: 0, to: items.count, by: perRow).map { Array(items[$0..<min($0 + perRow, items.count)]) }
-        return VStack(alignment: .leading, spacing: Self.gap) {
-            ForEach(rows, id: \.self) { row in
-                HStack(spacing: spacing) {
-                    ForEach(row, id: \.self) { item in round(item, panel, adding: adding) }
-                }
+        let rowCount = (items.count + perRow - 1) / perRow
+        let height = rowCount == 0 ? 0 : CGFloat(rowCount) * Self.row + CGFloat(rowCount - 1) * Self.gap
+        return ZStack(alignment: .topLeading) {
+            ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                round(item, panel, adding: adding)
+                    .position(x: CGFloat(index % perRow) * (Self.row + spacing) + Self.row / 2,
+                              y: CGFloat(index / perRow) * (Self.row + Self.gap) + Self.row / 2)
+                    .zIndex(panel.lifted == item ? 3 : panel.item == item ? 2 : 1)
             }
         }
-        .frame(width: Self.width, alignment: .leading)
+        .frame(width: Self.width, height: height, alignment: .topLeading)
     }
 
     /// Editing: the round buttons that could be added, under a heading.
@@ -516,9 +532,9 @@ struct ControlCenterView: View {
         .buttonStyle(PressDip(presses: panel.presses, focused: focused))
     }
 
-    /// A round button. One that's switched on is white, as Apple TV's are; focus lifts it. Editing, they wiggle and
-    /// wear a badge: "−" on the ones in Control Center (hold Select to take one out), "+" on the ones that can be
-    /// added; the one picked up lifts further.
+    /// A round button. One that's switched on is white, as Apple TV's are; focus lifts it. Editing, as Arrange Apps:
+    /// the one picked up lifts further and wiggles while it moves; each wears a badge above everything, "−" to take it
+    /// out, "+" to add it (with the remote: hold Select to take one out, Select to add one).
     private func round(_ item: ControlCenterPanel.Item, _ panel: ControlCenterPanel, adding: Bool) -> some View {
         let focused = panel.item == item
         let lifted = panel.lifted == item
@@ -541,21 +557,34 @@ struct ControlCenterView: View {
                 .focusPlatter(Circle(), focused: focused)
                 .contentShape(Circle())
                 .lifted(focused, in: Circle())
-                .overlay(alignment: .topLeading) {
-                    if panel.editing {
-                        Image(systemName: adding ? "plus" : "minus")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(.black)
-                            .frame(width: 28, height: 28)
-                            .background(.white, in: Circle())
-                            .offset(x: -4, y: -4)
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
-                .scaleEffect(lifted ? 1.1 : 1)
-                .modifier(Wiggle(active: panel.editing && !adding))
         }
         .buttonStyle(PressDip(presses: panel.presses, focused: focused))
+        .overlay(alignment: .topLeading) {
+            if panel.editing { badge(item, adding: adding) }
+        }
+        .scaleEffect(lifted ? 1.1 : 1)
+        .tvShadow(.lift, active: lifted)
+        .modifier(Wiggle(active: lifted))
+    }
+
+    /// Editing: "−" takes a round button out, "+" puts one in. Dark, so it shows on a white focused button too, and
+    /// outside the button's edge even when it's lifted.
+    private func badge(_ item: ControlCenterPanel.Item, adding: Bool) -> some View {
+        Button {
+            if adding { tv.addControlCenterControl(item) } else { _ = tv.removeControlCenterControl(item) }
+        } label: {
+            Image(systemName: adding ? "plus" : "minus")
+                .font(.system(size: 15, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Color(hex: "#48484A"), in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .offset(x: -10, y: -10)
+        .transition(.scale.combined(with: .opacity))
     }
 
     /// A tile's list in place of the tiles, as tvOS opens one: its choices in Settings' rows. Back returns.

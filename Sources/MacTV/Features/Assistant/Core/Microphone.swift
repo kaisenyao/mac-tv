@@ -132,11 +132,28 @@ final class Microphone: Hearing {
         self.input = input
         let engine = AVAudioEngine()
         let node = engine.inputNode
-        if let input, let unit = node.audioUnit {
+        // Only a device other than the one the input already has: setting it, even to the same one, can make the
+        // engine report a configuration change as soon as it starts.
+        if let input, let unit = node.audioUnit, Self.currentDevice(of: unit) != input.id {
             var id = input.id
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id,
                                  UInt32(MemoryLayout<AudioDeviceID>.size))
         }
+        self.engine = engine
+        do { try listen(engine) } catch {
+            self.engine = nil
+            throw error
+        }
+        changes = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
+                                                         queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.configurationChanged() }
+        }
+    }
+
+    /// The tap, in the input's format now, and the engine started.
+    private func listen(_ engine: AVAudioEngine) throws {
+        let node = engine.inputNode
+        node.removeTap(onBus: 0)
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw Failure.noMicrophone }
         guard let converter = PCMConverter(from: format) else { throw Failure.cannotConvert }
@@ -149,23 +166,43 @@ final class Microphone: Hearing {
             node.removeTap(onBus: 0)
             throw error
         }
-        self.engine = engine
-        changes = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
-                                                         queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.configurationChanged() }
-        }
     }
 
-    /// macOS changed the audio setup (a device came or went, a format changed). The microphone still there: it goes
-    /// on hearing, through a new engine. Gone: it's lost.
+    /// macOS changed the audio setup (a device came or went, a format or the default changed), which stops the
+    /// engine. The microphone still alive: the same engine starts again, in the input's format now. Gone, or failing
+    /// to start a few times running: it's lost. The reason goes to the log.
     private func configurationChanged() {
-        guard engine != nil else { return }
-        let input = input
-        let present = input.map { input in AudioInputs.list().contains { $0.uid == input.uid } } ?? !AudioInputs.list().isEmpty
-        stopEngine()
+        guard let engine else { return }
+        let alive = input.map { Self.isAlive($0.id) } ?? !AudioInputs.list().isEmpty
         restarts += 1
-        if present, restarts <= 3, (try? run(input)) != nil { return }
+        if alive, restarts <= 3 {
+            do {
+                try listen(engine)
+                Log.app.notice("Jasmine's microphone: the audio setup changed; hearing again (\(self.restarts, privacy: .public))")
+                return
+            } catch {
+                Log.app.error("Jasmine's microphone: couldn't start again after a change: \(String(describing: error), privacy: .public)")
+            }
+        } else {
+            Log.app.error("Jasmine's microphone: lost (alive: \(alive, privacy: .public), changes: \(self.restarts, privacy: .public))")
+        }
+        stopEngine()
         onLost?()
+    }
+
+    private static func currentDevice(of unit: AudioUnit) -> AudioDeviceID? {
+        var id: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        return AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id, &size) == noErr ? id : nil
+    }
+
+    /// The device is still there and working.
+    private static func isAlive(_ id: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsAlive, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var alive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(id, &address, 0, nil, &size, &alive) == noErr && alive != 0
     }
 
     func stop() {

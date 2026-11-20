@@ -184,6 +184,21 @@ import Testing
         }
     }
 
+    @Test func aSiriKeyWithoutItsKeyUpEndsWithTheNextPress() async throws {
+        try await Self.withJasmine { rig in
+            let presses = rig.tv.inputPresses
+            presses.siriDown(from: .keyboard, at: 0)            // fn-F5: no watch (its state reads up), no keyUp
+            presses.advance(to: InputTiming.hold)
+            #expect(rig.tv.jasmine.phase == .listening)
+            #expect(presses.siriIsDown(from: .keyboard))
+            // The next keyDown (main.swift): the open press ends first, then the new one starts
+            #expect(presses.siriUp(from: .keyboard, at: 3))
+            #expect(rig.transcribers[0].finished && !presses.siriIsDown(from: .keyboard))
+            presses.siriDown(from: .keyboard, at: 3)
+            #expect(presses.siriIsDown(from: .keyboard) && rig.microphone.running && rig.transcribers.count == 2)
+        }
+    }
+
     // MARK: What was heard
 
     @Test func shortCommandsCountNoiseDoesnt() {

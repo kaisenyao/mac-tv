@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Jasmine on screen, laid out as tvOS 26's Siri:
 /// - her orb in the top-right corner; while she listens or works, a glass capsule beside it with your words;
-/// - a short answer (or why she can't), in a glass card there;
+/// - a short answer (or why she can't), in a floating card there (tvPanelSurface, tvShadow(.float));
 /// - a longer answer, in large type at the top left over the whole screen dimmed (SheetBackdrop): a few lines,
 ///   then MORE (Select shows the rest).
 /// Over everything (RootView), never taking the pointer. Drawn only while she shows: hidden, nothing of it runs.
@@ -43,7 +43,7 @@ struct JasmineOverlay: View {
     @ViewBuilder private var corner: some View {
         let orb = JasmineOrb(phase: jasmine.phase, level: jasmine.level).frame(width: orbSize, height: orbSize)
         if let text = cornerText {
-            HStack(alignment: .center, spacing: 22) {
+            let content = HStack(alignment: .center, spacing: 22) {
                 Text(text)
                     .font(.tv(.callout))
                     .foregroundStyle(.white.opacity(dimmed ? 0.7 : 1))
@@ -54,7 +54,15 @@ struct JasmineOverlay: View {
                 orb
             }
             .padding(.leading, 34).padding(.trailing, 14).padding(.vertical, 14)
-            .tvGlass(in: RoundedRectangle(cornerRadius: cornerIsCard ? 36 : orbSize / 2 + 14, style: .continuous))
+            if cornerIsCard {
+                // Her short answer: a floating card (Layers: a panel's surface and shadow).
+                content
+                    .tvPanelSurface(in: RoundedRectangle(cornerRadius: 36, style: .continuous))
+                    .tvShadow(.float)
+            } else {
+                // Your words while she hears: a caption (Layers: a notice, a glass capsule).
+                content.tvGlass(in: Capsule())
+            }
         } else {
             orb.padding(14).tvGlass(in: Circle())
         }

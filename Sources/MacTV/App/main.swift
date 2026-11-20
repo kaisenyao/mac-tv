@@ -385,7 +385,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             guard let self else { return event }
             if event.charactersIgnoringModifiers?.lowercased() == "q" { tv.quitKeyUp() }
-            if event.keyCode == 96, tv.inputPresses.siriUp(from: .keyboard) { return nil }   // F5 (🎤): the Siri button
+            if event.keyCode == 96 {   // F5 (🎤): the Siri button
+                Log.app.notice("F5 up")
+                if tv.inputPresses.siriUp(from: .keyboard) { return nil }
+            }
             guard let key = Self.button(event) else { return event }
             if key == .home, commandHDown, event.keyCode != 115 { commandHDown = false }
             return tv.inputPresses.up(key, from: .keyboard) ? nil : event
@@ -450,12 +453,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // held, Jasmine, or dictation into the field with focus (see Jasmine)
             if event.keyCode == 96, mods.isEmpty {
                 if !event.isARepeat {
-                    tv.inputPresses.siriDown(from: .keyboard)
-                    // With fn held (fn-F5), AppKit may never deliver F5's keyUp, and every later press would be taken
-                    // for a key repeat. As ⌘H: the key itself is watched, and let go within 20 ms of coming up.
-                    let f5Down = { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_F5)) }
-                    if f5Down() { tv.inputPresses.watchSiri(from: .keyboard, isDown: f5Down) }
-                    else { tv.inputPresses.siriUp(from: .keyboard) }   // let go already (or unreadable): a press
+                    let presses = tv.inputPresses
+                    // A press still open (its keyUp never came) ends first, so the key can never wedge.
+                    if presses.siriIsDown(from: .keyboard) { presses.siriUp(from: .keyboard) }
+                    presses.siriDown(from: .keyboard)
+                    // The keyDown and keyUp are what count. On top of them, one "it's up now" signal, only from what
+                    // reads down at this moment: F5's own state when macOS tracks it; otherwise, for fn-F5 (whose
+                    // keyUp AppKit may never deliver while fn is held), fn itself: letting go of fn lets go of F5.
+                    // Neither readable: the keyUp ends it. Checked every 20 ms while it's down, as ⌘H.
+                    let state = CGEventSourceStateID.combinedSessionState
+                    let f5Down = { CGEventSource.keyState(state, key: CGKeyCode(kVK_F5)) }
+                    let fnDown = { CGEventSource.flagsState(state).contains(.maskSecondaryFn) }
+                    let f5 = f5Down(), fn = fnDown()
+                    Log.app.notice("F5 down: F5 reads \(f5 ? "down" : "up", privacy: .public), fn \(fn ? "down" : "up", privacy: .public)")
+                    if f5 { presses.watchSiri(from: .keyboard, isDown: f5Down) }
+                    else if fn { presses.watchSiri(from: .keyboard, isDown: fnDown) }
                 }
                 return nil
             }
