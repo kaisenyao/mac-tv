@@ -206,7 +206,9 @@ final class RemoteCoordinator: ObservableObject {
             "audioDevice": tv.currentAudioDevice?.name ?? "",
             "apps": tv.arrangedServices.map { service -> [String: Any] in
                 ["id": service.id, "name": service.name, "icon": Icons.image(for: service) != nil,
-                 "playing": playingAudio(service.id, tv), "added": tv.organizerActions(for: service.id).contains(.deleteForEveryone)]
+                 "playing": playingAudio(service.id, tv), "added": tv.organizerActions(for: service.id).contains(.deleteForEveryone),
+                 // A system app (Movies, Web): the phone's Edit shows no "−" on it
+                 "system": AppLibrary.isSystemApp(service.id)]
             },
             // Home's first apps are its top row, the dock; the phone's Edit shows the same.
             "dockSize": AppLibrary.dockSize,
@@ -353,10 +355,14 @@ final class RemoteCoordinator: ObservableObject {
         case ("POST", "/apps/remove"):
             // Hide: the app leaves this profile's Home only.
             guard let id = body["id"] as? String else { return .json(["error": "Missing app"], status: "400 Bad Request") }
-            tv.hideApp(id)
+            if let refusal = tv.hideApp(id) { return .json(["error": refusal], status: "400 Bad Request") }
             return .json(["ok": true])
         case ("POST", "/apps/delete"):
-            // Delete for Everyone: only for an app someone added; built-in apps can only be hidden. Its files go to the Trash.
+            // Delete for Everyone: only for an app someone added; built-in apps can only be hidden, and system apps
+            // neither. Its files go to the Trash.
+            if let id = body["id"] as? String, AppLibrary.isSystemApp(id) {
+                return .json(["error": tv.systemAppRefusal(id, deleting: true)], status: "400 Bad Request")
+            }
             guard let id = body["id"] as? String, tv.library.containsAddedApp(id),
                   !Catalog.services.contains(where: { $0.id == id }) else {
                 return .json(["error": "Built-in apps can’t be deleted. You can hide them."], status: "400 Bad Request")

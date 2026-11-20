@@ -25,9 +25,10 @@ extension TVController {
         !UserDefaults.standard.bool(forKey: "setupDone") && !phonePaired && !library.hasSavedApps
     }
 
-    /// The built-in apps setup offers, in home-screen order.
+    /// The built-in apps setup offers, in home-screen order. System apps (Movies, Web) are always on Home, so
+    /// there's nothing to choose for them.
     var setupChoices: [Service] {
-        Catalog.services.filter { $0.kind != .addApp && $0.kind != .settings && $0.isAvailable }
+        Catalog.services.filter { $0.kind != .addApp && $0.kind != .settings && $0.isAvailable && !AppLibrary.isSystemApp($0.id) }
     }
 
     func startSetup() {

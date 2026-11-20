@@ -473,7 +473,13 @@ import Testing
 
             tv.activateSetting(.movieFolder(path))
             #expect(tv.settings?.page == .movieFolder(path))
-            #expect(rows(tv) == [.removeMovieSource])
+            #expect(rows(tv) == [.homeVideos, .removeMovieSource])
+            // Home Videos: the same switch as the Movies app's source menu
+            tv.handleSettings(.select)
+            #expect(library.isHomeVideos(path))
+            tv.handleSettings(.select)
+            #expect(!library.isHomeVideos(path))
+            tv.handleSettings(.move(.down))
             tv.handleSettings(.select)
             #expect(tv.settings?.page == .confirmRemoval(.removeMovieSource) && library.isWatched(films))
             #expect(tv.settingsContent(.acceptRemoval, panel: try #require(tv.settings), focused: true).title == "Remove Folder")

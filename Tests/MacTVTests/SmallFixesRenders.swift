@@ -4,8 +4,8 @@ import Testing
 @testable import MacTV
 
 /// 1920×1080 renders of the Audio Output sheet's Volume row, the 得到 Top Shelf checklist with its section headers,
-/// and the Movies app's Settings button and Folders sheet. Only with MACTV_RENDER_SMALL=<folder>; everything it
-/// sets up lives in a temporary folder, and the 得到 categories are registered in memory only.
+/// and the flip clock. Only with MACTV_RENDER_SMALL=<folder>; everything it sets up lives in a temporary folder, and
+/// the 得到 categories are registered in memory only.
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["MACTV_RENDER_SMALL"] != nil), .timeLimit(.minutes(1))) @MainActor
 struct SmallFixesRenders {
     private let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["MACTV_RENDER_SMALL"] ?? "/tmp", isDirectory: true)
@@ -95,32 +95,6 @@ struct SmallFixesRenders {
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .frame(width: card.width, height: card.height)
             })
-        }
-    }
-
-    @Test func moviesSettingsButton() async throws {
-        let screen = { (tv: TVController) in ZStack { Color.black; TVCanvas { MoviesScreen(tv: tv) } } }
-        try await withTV(movies: []) { tv in
-            tv.openMoviesBrowserOnly()
-            try await render("movies-empty", screen(tv))
-        }
-        let titles = ["Arrival", "Dune", "Heat", "Ronin", "Collateral", "Sicario", "Prisoners", "Blade Runner 2049", "Drive"]
-        let movies = titles.enumerated().map { index, title in
-            Movie(path: "/render/\(title).mkv", title: title, year: 2000 + index, added: .now, size: 1,
-                  duration: 7_200, position: index == 2 ? 2_400 : nil, lastWatched: index == 2 ? .now : nil)
-        }
-        try await withTV(movies: movies) { tv in
-            // Straight to the Movies app's handler: TVController.handle would also play the sounds.
-            tv.openMoviesBrowserOnly()
-            tv.handleMovies(.move(.down))
-            try await render("movies-library", screen(tv))
-            tv.handleMovies(.move(.up))
-            tv.handleMovies(.move(.up))
-            #expect(tv.movies?.settingsFocused == true)
-            try await render("movies-settings-focused", screen(tv))
-            tv.handleMovies(.select)
-            #expect(tv.movies?.folderRow == 0)
-            try await render("movies-folders", screen(tv))
         }
     }
 }

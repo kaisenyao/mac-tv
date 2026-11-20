@@ -5,7 +5,8 @@ import SwiftUI
 /// D-pad moves it, the others making room; Select again puts it down and Back puts it back where it was.
 /// Moving an app into a full dock moves the dock's last app to the first place below; moving one out brings
 /// the first app below up into the dock. Press and hold Select on an app for Hide (and, for an app someone
-/// added, Delete for Everyone). The pointer drags apps directly.
+/// added, Delete for Everyone); system apps (AppLibrary.systemApps) move but never hide. The pointer drags apps
+/// directly.
 ///
 /// App identities, rather than positions, keep the selection on the same app as things move.
 struct AppOrganizer: Equatable {
@@ -90,11 +91,13 @@ extension TVController {
     /// What Arrange Apps shows: Home's order, with an app that's being moved where it's going.
     var organizerOrder: [String] { organizer?.lift?.order ?? appOrder }
 
-    /// What press and hold offers for an app: Hide for every app, Delete for Everyone for an app someone added, and,
-    /// held on Home, Edit Home Screen first.
+    /// What press and hold offers for an app: Hide for every app but a system app (Movies, Web), Delete for Everyone
+    /// for an app someone added, and, held on Home, Edit Home Screen first. A system app held on Home offers only
+    /// Edit Home Screen; in Arrange Apps it offers nothing, so holding it opens no menu.
     func organizerActions(for id: String) -> [AppOrganizer.Action] {
         let added = library.containsAddedApp(id) && !Catalog.services.contains(where: { $0.id == id })
-        return (organizer?.fromHome == true ? [.editHomeScreen] : []) + [.hide] + (added ? [.deleteForEveryone] : [])
+        let hide: [AppOrganizer.Action] = AppLibrary.isSystemApp(id) ? [] : [.hide]
+        return (organizer?.fromHome == true ? [.editHomeScreen] : []) + hide + (added ? [.deleteForEveryone] : [])
     }
 
     /// Focus is on an app on the Home Screen itself (no app open, no sheet): holding Select opens its menu.
@@ -182,10 +185,11 @@ extension TVController {
 
     // MARK: Press and hold
 
-    /// Press and hold Select on an app: its menu. Not while an app is being moved.
+    /// Press and hold Select on an app: its menu. Not while an app is being moved, and not for an app it would
+    /// offer nothing for (a system app).
     func openOrganizerMenu() -> Bool {
         guard var panel = organizer, panel.lift == nil, panel.menu == nil,
-              let id = panel.selectedID, appOrder.contains(id) else { return false }
+              let id = panel.selectedID, appOrder.contains(id), !organizerActions(for: id).isEmpty else { return false }
         panel.menu = .actions(row: 0)
         organizer = panel
         return true
@@ -229,7 +233,9 @@ extension TVController {
                 organizer?.menu = nil
                 organizer?.fromHome = false
                 organizer?.lift = AppOrganizer.Lift(id: id, in: appOrder)
-            case .hide: removeOrganizerApp(id) { hideApp($0) }
+            case .hide:
+                guard !AppLibrary.isSystemApp(id) else { return }
+                removeOrganizerApp(id) { hideApp($0) }
             case .deleteForEveryone: organizer?.menu = .confirmDelete(row: AppOrganizer.Menu.cancelRow)
             }
         case .confirmDelete:

@@ -91,6 +91,7 @@ final class MatroskaPlayback: NSObject, @unchecked Sendable {
         super.init()
         videoLayer.videoGravity = .resizeAspect
         videoLayer.backgroundColor = CGColor.black
+        videoLayer.wantsExtendedDynamicRangeContent = true   // HDR on a display that can show it
         clock.addRenderer(videoRenderer)
         clock.addRenderer(audioRenderer)
         PlaybackVolume.shared.attach(audioRenderer)   // 电视的音量调不了时，音量键调它

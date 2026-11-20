@@ -4,7 +4,8 @@
 // AppLibrary.move on the Mac), then the real page in an isolated headless browser: a long-press picks an app up,
 // dragging it makes the others room, into a full dock its last app goes below (and comes back when the app leaves),
 // the drop goes to the TV as one /apps/place, a quick swipe only scrolls, "−" offers Hide (and Delete for Everyone
-// for an app someone added), the TV's own changes move the same tiles, and no star or hint text is left.
+// for an app someone added), a system app (Movies, Web) has no "−" but still moves in and out of the dock, the TV's
+// own changes move the same tiles, and no star or hint text is left.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -85,8 +86,8 @@ async function run() {
   // The TV: its state, and the arranging routes doing what the Mac does (the page's own rule stands in for it).
   await call('Page.addScriptToEvaluateOnNewDocument', { source: `
     localStorage.setItem('mactvKey', 'a'.repeat(64));
-    const app = id => ({ id, name: id[0].toUpperCase() + id.slice(1), icon: false, added: id === 'site' });
-    window.testState = { apps: ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'site'].map(app),
+    const app = id => ({ id, name: id[0].toUpperCase() + id.slice(1), icon: false, added: id === 'site', system: id === 'movies' });
+    window.testState = { apps: ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'site', 'movies'].map(app),
       dockSize: 6, canRestore: false, autoSkip: false, autoNext: false, keepMacAwake: false, lidOverride: false, displaySetup: { displays: [] } };
     window.posts = []; window.vibrations = [];
     navigator.vibrate = pattern => { window.vibrations.push(pattern); return true; };
@@ -125,7 +126,7 @@ async function run() {
   assert.ok(!/favorite/i.test(plain.labels), 'no app is called a favorite');
   await evaluate(`document.querySelector('#edit-apps').click()`); await delay(100);
   const start = await layout();
-  assert.deepEqual(start, { dock: ['one', 'two', 'three', 'four', 'five', 'six'], below: ['seven', 'eight', 'nine', 'site'] },
+  assert.deepEqual(start, { dock: ['one', 'two', 'three', 'four', 'five', 'six'], below: ['seven', 'eight', 'nine', 'site', 'movies'] },
     'Edit: Home’s first six apps in the dock, the rest below');
   const look = await evaluate(`(() => { const d = document.querySelector('#apps .dock'), t = d.querySelector('.tile'), s = getComputedStyle(t);
     return { jiggle: s.animationName, iteration: s.animationIterationCount, badge: !!t.querySelector('.hide-badge .sign.minus'),
@@ -182,7 +183,7 @@ async function run() {
   assert.deepEqual(await evaluate('vibrations'), [22], 'one haptic on the drop');
   assert.deepEqual(await evaluate('posts'), [{ path: '/apps/place', body: { id: 'eight', index: 2 } }], 'the drop is one move on the TV');
   now = await layout();
-  assert.deepEqual(now, { dock: ['one', 'two', 'eight', 'three', 'four', 'five'], below: ['six', 'seven', 'nine', 'site'] }, 'and it stays there');
+  assert.deepEqual(now, { dock: ['one', 'two', 'eight', 'three', 'four', 'five'], below: ['six', 'seven', 'nine', 'site', 'movies'] }, 'and it stays there');
   assert.equal(await evaluate(`document.querySelector('#apps [data-app-id="eight"]').style.transform`), '', 'the dropped icon settles in its place');
 
   // Moving an app out of the dock brings the first app below up into it.
@@ -230,11 +231,45 @@ async function run() {
   assert.deepEqual(await evaluate('posts'), [{ path: '/apps/remove', body: { id: 'nine' } }], 'Hide hides it here');
   assert.equal(await evaluate(`document.querySelector('#apps .app-menu')`), null, 'the menu goes');
 
+  // A system app (Movies, Web) can never be hidden or deleted: no "−", and nothing reaches the TV if asked anyway.
+  assert.equal(await evaluate(`document.querySelector('#apps [data-app-id="movies"] .hide-badge')`), null, 'a system app has no “−”');
+  await evaluate('posts.length = 0');
+  await evaluate(`(() => { const movies = apps.find(a => a.id === 'movies'); hideApp(movies); deleteApp(movies);
+    appMenu(document.querySelector('#apps [data-app-id="movies"]'), movies); })()`);
+  await delay(200);
+  assert.deepEqual(await evaluate('posts'), [], 'a system app is never hidden or deleted from the phone');
+  assert.equal(await evaluate(`document.querySelector('#apps .app-menu')`), null, 'and opens no menu');
+  // It still moves: into the dock's first place, then back out below.
+  await evaluate(`document.querySelector('#apps-sheet .sheet').scrollTop = 0`); await delay(50);
+  let movies = await centre('movies');
+  const first = await evaluate(`(() => { const r = document.querySelector('#apps .dock .app .tile').getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await touch('touchStart', movies.x, movies.y);
+  await delay(420);
+  await glide(movies, first);
+  await delay(50);
+  await touch('touchEnd');
+  await delay(500);
+  assert.deepEqual(await evaluate('posts'), [{ path: '/apps/place', body: { id: 'movies', index: 0 } }], 'a system app moves into the dock');
+  assert.equal((await layout()).dock[0], 'movies');
+  await evaluate('posts.length = 0');
+  movies = await centre('movies');
+  const bottom = await evaluate(`(() => { const r = document.querySelector('#apps > .app-grid').getBoundingClientRect(); return { x: r.left + 20, y: r.bottom - 20 }; })()`);
+  await touch('touchStart', movies.x, movies.y);
+  await delay(420);
+  await glide(movies, bottom);
+  await delay(50);
+  await touch('touchEnd');
+  await delay(500);
+  assert.equal((await evaluate('posts'))[0]?.path, '/apps/place', 'and out of it');
+  now = await layout();
+  assert.ok(!now.dock.includes('movies') && now.below.includes('movies'), 'back below the dock');
+
   // Done ends editing: the icons stop.
   await evaluate(`document.querySelector('#edit-apps').click()`); await delay(100);
   assert.equal(await evaluate(`document.querySelector('#apps .dock')`), null, 'Done ends editing');
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('#apps .app .tile')).animationName`), 'none', 'nothing jiggles outside Edit');
-  console.log('PASS arranging on the page: dock, long-press drag, make room, push out, pull up, drop, TV changes, hide, delete');
+  console.log('PASS arranging on the page: dock, long-press drag, make room, push out, pull up, drop, TV changes, hide, delete, system apps');
 }
 (async () => {
   try { await run(); }

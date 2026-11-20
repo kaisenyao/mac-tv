@@ -495,7 +495,8 @@ function renderPlayerChoices(current, braveInstalled) {
 // Apps sheet: launch tiles. Edit arranges them as the iPhone Home Screen does: the icons jiggle; on top, in a frame,
 // the TV's dock (Home's top row, its first six apps), and the other apps below in Home's order. Long-press an app
 // and drag it; the others make room. Into a full dock, its last app moves to the first place below; out of the dock,
-// the first app below comes up into it. "−" offers Hide, and Delete for Everyone for an app someone added. The TV
+// the first app below comes up into it. "−" offers Hide, and Delete for Everyone for an app someone added; a system
+// app (Movies, Web) has no "−", it only moves. The TV
 // takes each drop at once (/apps/place); what changes on the TV arrives with the next state and moves the icons
 // here. One haptic on pick-up and one on drop, a tick each time the others make room. Only the jiggle runs on its
 // own, only while editing, and only as a CSS transform.
@@ -671,18 +672,29 @@ function renderArrangement(box) {
       tile.setAttribute('aria-roledescription', 'app');
       arranged.tiles.set(app.id, tile);
     }
-    const look = JSON.stringify([app.name, !!app.icon, !!app.added]);
+    const look = JSON.stringify([app.name, !!app.icon, !!app.added, !!app.system]);
     if (tile.dataset.look !== look) fillArrangeTile(tile, app, look);
-    tile.querySelector('.hide-badge').disabled = appMutationPending;
+    const badge = tile.querySelector('.hide-badge');
+    if (badge) badge.disabled = appMutationPending;
   }
   for (const [id, tile] of arranged.tiles) if (!seen.has(id)) { tile.remove(); arranged.tiles.delete(id); }
   placeTiles(appOrder());
 }
-// An app while editing: its icon with the "−" (the iPhone Home Screen's remove badge), and its name
+// An app while editing: its icon with the "−" (the iPhone Home Screen's remove badge), and its name. A system app
+// (Movies, Web) can't be hidden or deleted, so it has no "−"
 function fillArrangeTile(tile, app, look) {
   const face = document.createElement('span');
   face.className = 'tile';
   face.append(appArt(app));
+  if (!app.system) face.append(hideBadge(tile, app));
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = app.name;
+  tile.setAttribute('aria-label', app.name);
+  tile.replaceChildren(face, name);
+  tile.dataset.look = look;
+}
+function hideBadge(tile, app) {
   const badge = document.createElement('button');
   badge.className = 'hide-badge';
   badge.setAttribute('aria-label', `Remove ${app.name}`);
@@ -695,13 +707,7 @@ function fillArrangeTile(tile, app, look) {
     if (Date.now() - droppedAt < 500) return;   // the end of a drag that started near it
     if (openMenu?.parentElement === tile) closeAppMenu(); else appMenu(tile, app);
   };
-  face.append(badge);
-  const name = document.createElement('span');
-  name.className = 'name';
-  name.textContent = app.name;
-  tile.setAttribute('aria-label', app.name);
-  tile.replaceChildren(face, name);
-  tile.dataset.look = look;
+  return badge;
 }
 // Puts each tile in its place: the first six in the dock, the rest below. Tiles that move glide from where they
 // were; `still` (the one under the finger) follows the finger instead.
@@ -727,7 +733,7 @@ function placeTiles(order, still = null) {
 let openMenu = null;
 function appMenu(tile, app) {
   closeAppMenu();
-  if (drag || appMutationPending) return;
+  if (drag || appMutationPending || app.system) return;
   const menu = document.createElement('div');
   menu.className = 'app-menu';
   menu.setAttribute('role', 'menu');
@@ -752,7 +758,7 @@ document.addEventListener('pointerdown', e => {
 }, true);
 // Hide: off this profile's Home. A built-in app comes back with Restore built-in apps; one someone added, by adding it again
 function hideApp(app) {
-  if (drag || appMutationPending) return;
+  if (drag || appMutationPending || app.system) return;
   apps = apps.filter(item => item.id !== app.id);
   if (!app.added) canRestore = true;
   renderApps();
@@ -760,7 +766,7 @@ function hideApp(app) {
 }
 // Delete for Everyone: off every profile's Home, so it asks first
 function deleteApp(app) {
-  if (drag || appMutationPending || !confirm(`Delete “${app.name}” for Everyone?`)) return;
+  if (drag || appMutationPending || app.system || !confirm(`Delete “${app.name}” for Everyone?`)) return;
   apps = apps.filter(item => item.id !== app.id);
   renderApps();
   saveArrangement('/apps/delete', { id: app.id });

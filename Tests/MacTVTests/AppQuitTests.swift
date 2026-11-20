@@ -52,8 +52,8 @@ import Testing
             tv.handle(.back)
             #expect(tv.movies == nil)
             #expect(tv.appInFront == nil)
-            // Both went to the background, the most recent first.
-            #expect(tv.backgroundApps.map(\.id).prefix(2) == [DedaoStore.appID, BilibiliStore.appID])
+            // All three went to the background (Movies too, as the spec's Back rule says), the most recent first.
+            #expect(tv.backgroundApps.map(\.id).prefix(3) == ["movies", DedaoStore.appID, BilibiliStore.appID])
         }
     }
 
@@ -89,12 +89,13 @@ import Testing
         try await withTV { tv in
             let movies = try #require(Catalog.services.first { $0.kind == .movies })
             tv.movies = MoviesBrowser()
+            tv.movies?.section = .movies
             tv.movies?.row = 2
-            tv.movies?.column = 3
+            tv.movies?.columns["grid-2"] = 3
             tv.handle(.home)
             #expect(tv.movies == nil && tv.appInFront == nil)
             tv.open(movies)
-            #expect(tv.movies?.row == 2 && tv.movies?.column == 3)   // the same screen, the same place
+            #expect(tv.movies?.section == .movies && tv.movies?.row == 2 && tv.movies?.columns["grid-2"] == 3)   // the same place
             // Quitting Movies drops it: next time it opens fresh.
             tv.quitApp("movies", reason: "test")
             #expect(tv.movies == nil && tv.playbackCoordinator.parkedMovies == nil)

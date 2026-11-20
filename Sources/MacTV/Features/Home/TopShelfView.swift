@@ -63,9 +63,12 @@ struct AppBanner: View {
             let shelf = movieLibrary.shelf
             if !shelf.isEmpty {
                 let pick = shelf[clock.beat % shelf.count]
-                // Posters sit on the right like album covers; frames from the film fill the screen.
-                return (pick.path, movieLibrary.movies.first(where: { $0.path == pick.path })?.displayTitle ?? "Movies",
-                        pick.image, pick.image.size.height > pick.image.size.width, false)
+                // Posters sit on the right like album covers; frames from the film fill the screen. Only the picture
+                // showing is decoded, at the size it's drawn, and kept in Movies' picture cache.
+                if let image = movieLibrary.artwork.image(pick.file, maxPixel: 1920) {
+                    return (pick.path, movieLibrary.movie(pick.path)?.displayTitle ?? "Movies",
+                            image, image.size.height > image.size.width, false)
+                }
             }
         }
         if let art = steamArt {

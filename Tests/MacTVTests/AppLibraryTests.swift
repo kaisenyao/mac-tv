@@ -285,6 +285,128 @@ struct AppLibraryTests {
         }
     }
 
+    // MARK: System apps
+
+    /// Movies, Web, Settings and Add App are system apps, as Apple's are: no path hides or deletes them.
+    @Test
+    func systemAppsAreNeverHiddenOrDeletedFromAnyPath() throws {
+        try withFolder { folder in
+            let library = AppLibrary(folder: folder)
+            let tv = TVController(library: library)
+            @MainActor func request(_ path: String, _ id: String) -> (status: String?, error: String?) {
+                let response = tv.handleAppsRequest(HTTPRequest(method: "POST", path: path, query: [:], headers: [:],
+                                                                body: Data(#"{"id":"\#(id)"}"#.utf8)))
+                let reply = response.flatMap { try? JSONSerialization.jsonObject(with: $0.body) as? [String: Any] }
+                return (response?.status, reply?["error"] as? String)
+            }
+            #expect(AppLibrary.systemApps == ["movies", "browser", "settings", "add-app"])
+            for id in AppLibrary.systemApps {
+                let name = try #require(Catalog.services.first { $0.id == id }?.name)
+                #expect(!library.hide(id), "\(id)")
+                #expect(!library.setHidden(id, true), "\(id)")
+                #expect(!library.isHidden(id), "\(id)")
+                #expect(library.deleteForEveryone(id) == .systemApp, "\(id)")
+                #expect(tv.hideApp(id) == "“\(name)” is a system app and can’t be hidden.", "\(id)")
+                #expect(tv.deleteAppForEveryone(id) == "“\(name)” is a system app and can’t be deleted.", "\(id)")
+                let hide = request("/apps/remove", id), delete = request("/apps/delete", id)
+                #expect(hide.status == "400 Bad Request" && hide.error == "“\(name)” is a system app and can’t be hidden.", "\(id)")
+                #expect(delete.status == "400 Bad Request" && delete.error == "“\(name)” is a system app and can’t be deleted.", "\(id)")
+                #expect(tv.organizerActions(for: id).isEmpty, "\(id): Arrange Apps offers nothing")
+                #expect(!tv.setupChoices.contains { $0.id == id }, "\(id): setup doesn't offer to leave it out")
+            }
+            // Still on Home, and in the file too.
+            #expect(Set(tv.appOrder).isSuperset(of: ["movies", "browser"]))
+            #expect(Array(tv.services.suffix(2).map(\.id)) == ["add-app", "settings"])
+            #expect(Set(AppLibrary(folder: folder).services().map(\.id)).isSuperset(of: AppLibrary.systemApps))
+            #expect(!library.hasHiddenBuiltIns)
+            // The phone: Movies and Web carry the system flag, so its Edit shows no "−" on them.
+            let apps = try #require(tv.remoteState()["apps"] as? [[String: Any]])
+            for app in apps {
+                let id = try #require(app["id"] as? String)
+                #expect(app["system"] as? Bool == AppLibrary.isSystemApp(id), "\(id)")
+            }
+        }
+    }
+
+    @Test
+    func systemAppsStillMoveInAndOutOfTheDock() throws {
+        try withFolder { folder in
+            let library = AppLibrary(folder: folder)
+            for name in ["One", "Two", "Three"] { library.add(name: name, url: site(name), bundleID: nil) }
+            let tv = TVController(library: library)
+            #expect(tv.moveApp("movies", to: 0))
+            #expect(tv.appOrder.first == "movies")
+            #expect(tv.moveApp("movies", to: tv.appOrder.count - 1), "out of the dock")
+            #expect(tv.appOrder.last == "movies" && tv.appOrder.firstIndex(of: "movies")! >= AppLibrary.dockSize)
+            let place = tv.handleAppsRequest(HTTPRequest(method: "POST", path: "/apps/place", query: [:], headers: [:],
+                                                         body: Data(#"{"id":"browser","index":0}"#.utf8)))
+            #expect(place?.status == "200 OK")
+            #expect(tv.appOrder.first == "browser")
+            #expect(AppLibrary(folder: folder).arrangement() == tv.appOrder)
+        }
+    }
+
+    @Test
+    func theOtherBuiltInAppsCanStillBeHidden() throws {
+        try withFolder { folder in
+            let library = AppLibrary(folder: folder)
+            let tv = TVController(library: library)
+            for id in ["bilibili", "netease", "dedao", "youtube"] {
+                #expect(!AppLibrary.isSystemApp(id))
+                #expect(tv.organizerActions(for: id) == [.hide], "\(id)")
+                #expect(tv.setupChoices.contains { $0.id == id }, "\(id)")
+                let response = tv.handleAppsRequest(HTTPRequest(method: "POST", path: "/apps/remove", query: [:], headers: [:],
+                                                                body: Data(#"{"id":"\#(id)"}"#.utf8)))
+                #expect(response?.status == "200 OK", "\(id)")
+                #expect(library.isHidden(id) && !tv.appOrder.contains(id), "\(id)")
+            }
+            library.restoreBuiltIns()
+            for id in ["bilibili", "netease", "dedao", "youtube"] {
+                #expect(library.setHidden(id, true) && library.isHidden(id), "\(id)")
+            }
+        }
+    }
+
+    /// Earlier versions let Movies and Web be hidden: every profile's layout shows them again on load, once, and
+    /// nothing else in the files changes.
+    @Test
+    func hiddenSystemAppsComeBackOnceInEveryProfile() throws {
+        try withFolder { folder in
+            let main = folder.appendingPathComponent("apps.json")
+            let kids = folder.appendingPathComponent("apps-kids.json")
+            let other = folder.appendingPathComponent("apps-other.json")
+            let broken = folder.appendingPathComponent("apps-broken.json")
+            try Data(#"{"added":[{"id":"user-video","name":"Video","url":"https://video.example"}],"hidden":["movies","browser","netease","settings","add-app"],"order":["youtube","movies","user-video","browser","netease"]}"#.utf8).write(to: main)
+            try Data(#"{"hidden":["browser","dedao"],"order":["dedao","browser","bilibili"]}"#.utf8).write(to: kids)
+            try Data(#"{"hidden":["youtube"],"order":["youtube"]}"#.utf8).write(to: other)
+            try Data("not json".utf8).write(to: broken)
+            let untouched = try Data(contentsOf: other)
+
+            let library = AppLibrary(folder: folder)
+            #expect(Set(library.arrangement()).isSuperset(of: ["movies", "browser"]))
+            #expect(library.isHidden("netease") && !library.isHidden("movies") && !library.isHidden("browser"))
+            let saved = try json(main)
+            #expect(Set(saved["hidden"] as? [String] ?? []) == ["netease"])
+            #expect(saved["order"] as? [String] == ["youtube", "movies", "user-video", "browser", "netease"], "the order is kept")
+            #expect((saved["added"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == ["user-video"], "the added apps are kept")
+            // A profile that isn't open is shown them too; its own choices stay.
+            let kidsSaved = try json(kids)
+            #expect(Set(kidsSaved["hidden"] as? [String] ?? []) == ["dedao"])
+            #expect(kidsSaved["order"] as? [String] == ["dedao", "browser", "bilibili"])
+            let kidsLibrary = AppLibrary(profileID: "kids", folder: folder)
+            #expect(kidsLibrary.arrangement().contains("browser") && kidsLibrary.isHidden("dedao"))
+            // A file that hides no system app isn't written; one that can't be read is left alone.
+            #expect(try Data(contentsOf: other) == untouched)
+            #expect(try Data(contentsOf: broken) == Data("not json".utf8))
+
+            // Once: loading again writes nothing.
+            let after = try [main, kids].map { try Data(contentsOf: $0) }
+            _ = AppLibrary(folder: folder)
+            _ = AppLibrary(profileID: "kids", folder: folder)
+            #expect(try [main, kids].map { try Data(contentsOf: $0) } == after)
+        }
+    }
+
     // MARK: Deleting is careful
 
     /// Records what was moved to a test's own Trash, never the Mac's.
@@ -311,8 +433,9 @@ struct AppLibraryTests {
             let library = AppLibrary(folder: folder)
             let tv = TVController(library: library)
             for service in Catalog.services {
-                #expect(library.deleteForEveryone(service.id) == .notAdded, "\(service.id)")
-                #expect(tv.organizerActions(for: service.id) == [.hide], "\(service.id)")
+                let system = AppLibrary.isSystemApp(service.id)
+                #expect(library.deleteForEveryone(service.id) == (system ? .systemApp : .notAdded), "\(service.id)")
+                #expect(tv.organizerActions(for: service.id) == (system ? [] : [.hide]), "\(service.id)")
                 let response = tv.handleAppsRequest(HTTPRequest(method: "POST", path: "/apps/delete", query: [:], headers: [:],
                                                                 body: Data(#"{"id":"\#(service.id)"}"#.utf8)))
                 #expect(response?.status == "400 Bad Request", "\(service.id)")
@@ -320,11 +443,12 @@ struct AppLibraryTests {
             let state = try #require(tv.remoteState()["apps"] as? [[String: Any]])
             #expect(!state.contains { $0["added"] as? Bool == true }, "the phone offers only Hide for built-in apps")
             // Hide is for this profile and always comes back.
-            for id in ["bilibili", "netease", "dedao", "youtube", "browser", "movies"] {
+            for id in ["bilibili", "netease", "dedao", "youtube"] {
                 #expect(tv.handleAppsRequest(HTTPRequest(method: "POST", path: "/apps/remove", query: [:], headers: [:],
                                                          body: Data(#"{"id":"\#(id)"}"#.utf8)))?.status == "200 OK")
             }
-            #expect(Set(tv.appOrder).isDisjoint(with: ["bilibili", "netease", "dedao", "youtube", "browser", "movies"]) && library.hasHiddenBuiltIns)
+            #expect(Set(tv.appOrder).isDisjoint(with: ["bilibili", "netease", "dedao", "youtube"]) && library.hasHiddenBuiltIns)
+            #expect(Set(tv.appOrder).isSuperset(of: ["browser", "movies"]))
             tv.restoreBuiltInApps()
             #expect(Set(tv.appOrder).isSuperset(of: ["bilibili", "netease", "dedao", "youtube", "browser", "movies"]))
             #expect(Array(tv.services.suffix(2).map(\.id)) == ["add-app", "settings"])

@@ -440,13 +440,10 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     }
 
     private func startMovie(_ movie: Movie, engine: PlaybackEngine, from seconds: Double) {
-        let player = MoviePlayer(movie: movie, engine: engine)
-        player.onEnd = { [weak self] in self?.closeMovie() }
+        let player = MoviePlayer(movie: movie, engine: engine, library: tv?.movieLibrary ?? .shared)
+        player.onEnd = { [weak self] in self?.movieEnded(movie) }
         player.onClose = { [weak self] in self?.closeMovie() }
-        player.onFailure = { [weak self] _ in
-            self?.closeMovie()
-            self?.openElsewhere(movie)
-        }
+        player.onFailure = { [weak self] _ in self?.movieFailed(movie) }
         var instant = Transaction()
         instant.disablesAnimations = true
         withTransaction(instant) {
@@ -474,6 +471,39 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
             tv?.setMode(.launcher)
         }
         tv?.displayCoordinator.releasePlaybackKeepAwake()
+    }
+
+    /// The end of a movie: back to Movies, or with Autoplay Next Episode on, straight into the show's next episode.
+    private func movieEnded(_ movie: Movie) {
+        closeMovie()
+        guard let tv, tv.autoNext else { return }
+        let library = tv.movieLibrary
+        guard let current = library.movie(movie.path), let next = library.show(of: current)?.episode(after: current) else { return }
+        playMovie(next, from: next.inProgress ? max(0, (next.position ?? 0) - 5) : 0)
+    }
+
+    /// The picture or sound stopped partway. Where it stopped is saved (closing saves it). A file that's no longer
+    /// there (a share that dropped) says so; anything else is a file this player can't decode, offered to IINA or VLC.
+    private func movieFailed(_ movie: Movie) {
+        closeMovie()
+        guard !movie.isRemote else { openElsewhere(movie); return }
+        let path = movie.path
+        Task { @MainActor [weak self] in
+            // A dead share can keep a file check waiting: give it two seconds
+            let reachable = await withTaskGroup(of: Bool?.self) { group in
+                group.addTask { await Task.detached { FileManager.default.isReadableFile(atPath: path) }.value }
+                group.addTask { try? await Task.sleep(for: .seconds(2)); return nil }
+                let first = await group.next() ?? nil
+                group.cancelAll()
+                return first ?? false
+            }
+            if reachable {
+                self?.openElsewhere(movie)
+            } else {
+                self?.tv?.showToast("“\(movie.title)” isn't available right now. Its source may be offline.")
+                self?.tv?.movieLibrary.refresh()
+            }
+        }
     }
 
     private func openElsewhere(_ movie: Movie) {

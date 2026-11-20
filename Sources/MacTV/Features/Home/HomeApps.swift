@@ -134,12 +134,21 @@ extension TVController {
         if target === library || library.containsAddedApp(id) { reloadServices() }
     }
 
+    /// Why a system app (Movies, Web, Settings, Add App) can't be hidden or deleted, as Apple words it.
+    func systemAppRefusal(_ id: String, deleting: Bool) -> String {
+        let name = Catalog.services.first { $0.id == id }?.name ?? "This app"
+        return "“\(name)” is a system app and can’t be \(deleting ? "deleted" : "hidden")."
+    }
+
     /// Hide: the app leaves this profile's Home. Built-in apps come back with Restore Built-in Apps; an app
-    /// someone added comes back by adding it again.
-    func hideApp(_ id: String) {
-        guard appOrder.contains(id) else { return }
+    /// someone added comes back by adding it again. A system app never hides: returns why.
+    @discardableResult
+    func hideApp(_ id: String) -> String? {
+        if AppLibrary.isSystemApp(id) { return systemAppRefusal(id, deleting: false) }
+        guard appOrder.contains(id) else { return nil }
         library.hide(id)
         reloadServices()
+        return nil
     }
 
     /// Delete for Everyone: an app someone added goes from every profile's Home; its icon and art go to the Trash.
@@ -152,6 +161,8 @@ extension TVController {
             Icons.forget(id)
             reloadServices()
             return nil
+        case .systemApp:
+            return systemAppRefusal(id, deleting: true)
         case .notAdded:
             return "Built-in apps can’t be deleted. You can hide them."
         case .trashFailed:

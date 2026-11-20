@@ -430,7 +430,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if event.keyCode == 53, mods.isEmpty {
                 let composing = (tv.mode == .launcher
                     && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.typing)
-                        || (tv.browserOpen && tv.browserStore.editing)) || (tv.browserPageInFront && tv.browserStore.editing))
+                        || (tv.browserOpen && tv.browserStore.editing) || tv.movies?.typing == true)
+                        || (tv.browserPageInFront && tv.browserStore.editing))
                     && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
                 if composing { return event }
                 tv.inputPresses.down(.back, from: .keyboard)
@@ -472,6 +473,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 if self?.window.firstResponder is NSTextView || mods.contains(.command) { return event }
                 tv.browserStore.refocus()
                 return nil
+            }
+            // Movies' search field: the keys go to it while it has the keyboard (an input method needs the arrows and
+            // Return). If it didn't get the keyboard, typing stops and the keys work as usual.
+            if tv.mode == .launcher, tv.activeSheet == nil, tv.movies?.typing == true, tv.movies?.shareForm == nil {
+                if self?.window.firstResponder is NSTextView { return event }
+                tv.movies?.typing = false
             }
             // 网易云音乐的搜索框同理
             if tv.mode == .launcher, tv.neteaseOpen, tv.neteaseStore.typing {

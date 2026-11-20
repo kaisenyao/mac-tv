@@ -178,6 +178,62 @@ struct ArrangeAppsTests {
         }
     }
 
+    /// Movies and Web are system apps: held on Home, the menu offers only Edit Home Screen; in Arrange Apps, holding
+    /// one opens no menu. They still move, and nothing hides them.
+    @Test func systemAppsOfferNoHideOnTheTV() throws {
+        _ = NSApplication.shared
+        try withFolder { folder in
+            let tv = twoRows(folder)
+            for id in ["movies", "browser"] {
+                // On Home: Edit Home Screen only, which picks the app up in Arrange Apps.
+                tv.organizer = nil
+                tv.setFocus(.app(try #require(tv.services.firstIndex { $0.id == id })))
+                #expect(tv.homeAppFocused, "\(id)")
+                #expect(tv.holdSelect(from: .keyboard), "\(id)")
+                #expect(tv.organizer?.fromHome == true && tv.organizer?.menu == .actions(row: 0), "\(id)")
+                #expect(tv.organizerActions(for: id) == [.editHomeScreen], "\(id)")
+                tv.handle(.move(.down))
+                #expect(tv.organizer?.menu == .actions(row: 0), "\(id): there's no second row")
+                tv.chooseOrganizerMenuRow(1)
+                #expect(tv.appOrder.contains(id) && !tv.library.isHidden(id), "\(id): no row hides it")
+                tv.handle(.select)
+                #expect(tv.organizer?.lift?.id == id && tv.organizer?.menu == nil, "\(id): Edit Home Screen")
+
+                // It moves: into the dock's first place, then out of the dock.
+                tv.handle(.back)
+                tv.openOrganizer()
+                select(tv, id)
+                #expect(tv.moveApp(id, to: 0) && tv.appOrder.first == id, "\(id)")
+                #expect(tv.moveApp(id, to: AppLibrary.dockSize + 1) && tv.appOrder.firstIndex(of: id) == AppLibrary.dockSize + 1, "\(id)")
+
+                // In Arrange Apps: nothing to offer, so no menu, from the remote or the pointer.
+                select(tv, id)
+                #expect(tv.organizerActions(for: id).isEmpty, "\(id)")
+                #expect(!tv.holdSelect(from: .keyboard), "\(id)")
+                #expect(tv.organizer?.menu == nil, "\(id)")
+                tv.organizerHold(id)
+                #expect(tv.organizer?.menu == nil, "\(id)")
+                // Even a menu forced open can't hide it.
+                tv.organizer?.menu = .actions(row: 0)
+                tv.chooseOrganizerMenuRow(0)
+                #expect(tv.appOrder.contains(id) && !tv.library.isHidden(id), "\(id)")
+                // Picking it up with Select still works.
+                tv.organizer?.menu = nil
+                tv.handleOrganizer(.select)
+                #expect(tv.organizer?.lift?.id == id, "\(id)")
+                tv.handleOrganizer(.back)
+                tv.handle(.back)
+            }
+            // The other built-in apps still offer Hide.
+            tv.organizer = nil
+            tv.openOrganizer()
+            for id in ["bilibili", "netease", "dedao", "youtube"] {
+                select(tv, id)
+                #expect(tv.organizerActions(for: id) == [.hide], "\(id)")
+            }
+        }
+    }
+
     /// Press and hold on a Home Screen app, as on Apple TV: its menu, from every remote that has a hold (the phone's
     /// and the Siri Remote's OK, held Return). Edit Home Screen picks the app up in Arrange Apps; Back, or Hide,
     /// goes back to Home.
@@ -365,10 +421,11 @@ struct ArrangeAppsTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let library = AppLibrary(folder: folder)
-        // The built-in icons live in the app bundle, which tests don't have: stand-ins carry the same artwork.
-        for id in ["bilibili", "netease", "dedao", "youtube", "browser", "iina"] { library.setHidden(id, true) }
+        // The built-in icons live in the app bundle, which tests don't have: stand-ins carry the same artwork. Web and
+        // Movies are system apps, which never hide, so they stay as themselves.
+        for id in ["bilibili", "netease", "dedao", "youtube", "iina"] { library.setHidden(id, true) }
         let art: [(String, String)] = [("YouTube", "youtube"), ("哔哩哔哩", "bilibili"), ("网易云音乐", "netease"),
-                                       ("得到", "dedao"), ("Web", "browser"), ("IINA", "iina"),
+                                       ("得到", "dedao"), ("IINA", "iina"),
                                        ("Crunchyroll", ""), ("Twitch", ""), ("Plex", ""), ("Disney+", ""), ("Steam", "")]
         for (index, (name, icon)) in art.enumerated() {
             let app = library.add(name: name, url: URL(string: "https://app\(index).example"), bundleID: nil)

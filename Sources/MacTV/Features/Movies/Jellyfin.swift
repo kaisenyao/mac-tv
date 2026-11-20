@@ -134,18 +134,6 @@ final class JellyfinServers: ObservableObject {
         MovieLibrary.shared.refresh()
     }
 
-    /// The Folders sheet's row: switches a reachable server's movies on or off, or tries again.
-    func activate(_ server: Server) {
-        guard let index = servers.firstIndex(where: { $0.id == server.id }) else { return }
-        if !server.on || status[server.id] == .connected {
-            servers[index].on.toggle()
-            save()
-        } else {
-            status[server.id] = .connecting
-        }
-        MovieLibrary.shared.refresh()
-    }
-
     fileprivate func update(_ id: String, _ value: NetworkShares.Status) { status[id] = value }
 
     // MARK: Library
@@ -158,9 +146,9 @@ final class JellyfinServers: ObservableObject {
         for server in servers {
             do {
                 guard let token = JellyfinKeychain.token(server: server.id) else { throw Failure.http(401) }
-                let query = ["userId": server.userID, "includeItemTypes": "Movie,Episode", "recursive": "true",
-                             "fields": "DateCreated", "enableUserData": "true", "enableImageTypes": "Primary",
-                             "imageTypeLimit": "1"]
+                let query = ["userId": server.userID, "includeItemTypes": "Movie,Episode,Video", "recursive": "true",
+                             "fields": "DateCreated,Overview,Genres,People,Width,Height", "enableUserData": "true",
+                             "enableImageTypes": "Primary,Backdrop", "imageTypeLimit": "1"]
                 let reply = try await call(request(server.address, "/Items", query: query, token: token)) as? [String: Any]
                 let items = reply?["Items"] as? [[String: Any]] ?? []
                 movies += items.compactMap { movie(from: $0, server: server) }
@@ -174,13 +162,18 @@ final class JellyfinServers: ObservableObject {
         return (movies, unreachable)
     }
 
-    /// A Movie from one of the server's items.
+    /// A Movie from one of the server's items: what the server knows (its type, show, season and episode, overview,
+    /// genres, rating, cast), where you stopped and whether you've seen it.
     nonisolated static func movie(from item: [String: Any], server: Server) -> Movie? {
         guard let id = item["Id"] as? String, let name = item["Name"] as? String else { return nil }
-        let isEpisode = item["Type"] as? String == "Episode"
+        let type = item["Type"] as? String ?? "Video"
+        let isEpisode = type == "Episode"
         var episode: String?
-        if isEpisode, let number = item["IndexNumber"] as? Int {
-            episode = "S\(item["ParentIndexNumber"] as? Int ?? 1) E\(number)"
+        var season: Int?, number: Int?
+        if isEpisode, let index = item["IndexNumber"] as? Int {
+            season = item["ParentIndexNumber"] as? Int ?? 1
+            number = index
+            episode = "S\(season ?? 1) E\(index)"
         }
         let year = item["ProductionYear"] as? Int
         var title = isEpisode ? item["SeriesName"] as? String ?? name : name
@@ -189,9 +182,29 @@ final class JellyfinServers: ObservableObject {
         var movie = Movie(path: scheme + server.id + "/" + id, title: title, year: year, episode: episode,
                           added: date(item["DateCreated"]) ?? .distantPast, size: 0)
         movie.server = server.name
+        movie.declared = isEpisode && episode != nil ? "Episode" : (type == "Movie" ? "Movie" : "Video")
+        if isEpisode, episode != nil {
+            movie.show = title
+            movie.season = season
+            movie.number = number
+            // An episode's own name, as its overview's first words
+            if name != title { movie.overview = [name, item["Overview"] as? String].compactMap { $0 }.joined(separator: "\n") }
+        }
+        if movie.overview == nil { movie.overview = item["Overview"] as? String }
+        movie.genre = (item["Genres"] as? [String])?.first
+        movie.rating = item["OfficialRating"] as? String
+        movie.width = item["Width"] as? Int
+        movie.height = item["Height"] as? Int
+        let people = (item["People"] as? [[String: Any]] ?? []).prefix(12).compactMap { person -> Movie.Person? in
+            guard let name = person["Name"] as? String else { return nil }
+            let role = (person["Role"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? person["Type"] as? String
+            return Movie.Person(name: name, role: role)
+        }
+        if !people.isEmpty { movie.cast = Array(people) }
         if let ticks = (item["RunTimeTicks"] as? NSNumber)?.doubleValue, ticks > 0 { movie.duration = ticks / 10_000_000 }
         let user = item["UserData"] as? [String: Any]
         if let ticks = (user?["PlaybackPositionTicks"] as? NSNumber)?.doubleValue, ticks > 0 { movie.position = ticks / 10_000_000 }
+        if user?["Played"] as? Bool == true { movie.watched = true }
         movie.lastWatched = date(user?["LastPlayedDate"])
         // Episodes use their show's poster; their own pictures are wide frames.
         if isEpisode, let series = item["SeriesId"] as? String, item["SeriesPrimaryImageTag"] != nil {
@@ -201,16 +214,54 @@ final class JellyfinServers: ObservableObject {
         } else {
             movie.posterChecked = true
         }
+        if !((item["BackdropImageTags"] as? [Any]) ?? []).isEmpty {
+            movie.backdropItem = id
+        } else if let parent = item["ParentBackdropItemId"] as? String {
+            movie.backdropItem = parent
+        }
         return movie
     }
 
     nonisolated static func poster(for movie: Movie, on server: Server) async -> Data? {
         guard let artwork = movie.artwork else { return nil }
-        let request = request(server.address, "/Items/\(artwork)/Images/Primary", query: ["maxHeight": "900", "quality": "90"],
-                              token: JellyfinKeychain.token(server: server.id))
+        return await image(server, "/Items/\(artwork)/Images/Primary", query: ["maxHeight": "900", "quality": "90"])
+    }
+
+    /// The item's (or its show's) backdrop, as wide as Mac TV draws it.
+    nonisolated static func backdrop(for movie: Movie, on server: Server) async -> Data? {
+        guard let item = movie.backdropItem else { return nil }
+        return await image(server, "/Items/\(item)/Images/Backdrop", query: ["maxWidth": "1920", "quality": "85"])
+    }
+
+    private nonisolated static func image(_ server: Server, _ path: String, query: [String: String]) async -> Data? {
+        let request = request(server.address, path, query: query, token: JellyfinKeychain.token(server: server.id))
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return data
+    }
+
+    // MARK: Watched, on the server too
+
+    /// Mark as Watched / Unwatched, on the server as well, so its other apps agree.
+    func setPlayed(_ movie: Movie, _ played: Bool) {
+        guard let ids = Self.ids(in: movie.path), let server = server(for: movie.path),
+              let token = JellyfinKeychain.token(server: server.id) else { return }
+        var request = Self.request(server.address, "/Users/\(server.userID)/PlayedItems/\(ids.item)", token: token)
+        request.httpMethod = played ? "POST" : "DELETE"
+        Task.detached {
+            do { _ = try await Self.call(request) } catch { Log.movies.failure("Jellyfin played", error) }
+        }
+    }
+
+    /// Clear Progress, on the server as well.
+    func clearPosition(_ movie: Movie) {
+        guard let ids = Self.ids(in: movie.path), let server = server(for: movie.path),
+              let token = JellyfinKeychain.token(server: server.id) else { return }
+        let request = Self.request(server.address, "/Users/\(server.userID)/Items/\(ids.item)/UserData", token: token,
+                                   body: ["PlaybackPositionTicks": 0])
+        Task.detached {
+            do { _ = try await Self.call(request) } catch { Log.movies.failure("Jellyfin clear position", error) }
+        }
     }
 
     // MARK: Playing
@@ -220,7 +271,7 @@ final class JellyfinServers: ObservableObject {
     func stream(for movie: Movie) async -> Result<Stream, Problem> {
         guard let ids = Self.ids(in: movie.path), let server = server(for: movie.path),
               let token = JellyfinKeychain.token(server: server.id) else {
-            return .failure(Problem(message: "Sign in to \(movie.server ?? "the server") again in Movies › Folders."))
+            return .failure(Problem(message: "Sign in to \(movie.server ?? "the server") again in Settings › Apps › Movies."))
         }
         let body: [String: Any] = ["UserId": server.userID, "DeviceProfile": Self.profile, "AutoOpenLiveStream": true,
                                    "EnableDirectPlay": true, "EnableDirectStream": true, "EnableTranscoding": true,

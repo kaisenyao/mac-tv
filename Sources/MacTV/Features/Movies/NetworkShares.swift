@@ -191,8 +191,14 @@ final class NetworkShares: ObservableObject {
         let wasOffline = status[id] != .connected
         status[id] = .connected
         if shares[index].mountPath != path {
+            let before = shares[index].folder
             shares[index].mountPath = path
             save()
+            // Mounted under a new name ("Media-1"): Movies follows it, keeping its videos and where you stopped
+            if let before, let after = shares[index].folder, MovieLibrary.shared.isWatched(before) {
+                MovieLibrary.shared.move(before, to: after)
+                return
+            }
         }
         guard let folder = shares[index].folder else { return }
         if addToMovies {

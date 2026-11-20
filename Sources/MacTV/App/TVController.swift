@@ -94,7 +94,7 @@ final class TVController: NSObject, ObservableObject {
         if neteaseOpen { return neteaseStore.module(horizontal: horizontal) }
         if browserOpen, mode == .launcher { return browserStore.startModule(horizontal: horizontal) }
         if dedaoOpen { return dedaoStore.module(horizontal: horizontal) }
-        if movies != nil { return .drawer }
+        if movies != nil, mode == .launcher { return moviesModule(horizontal: horizontal) }
         // 主屏顶部的轮播（哔哩哔哩、网易云、YouTube）：左右是翻页，内容跟着手走，一次滑动翻一页；上下离开这一栏
         if case .shelf = focus, AppShelf.services.contains(shelfService.id), appShelf.current(for: shelfService.id) != nil {
             return .drawer
@@ -152,6 +152,7 @@ final class TVController: NSObject, ObservableObject {
         }
         if neteaseOpen { return neteaseStore.closeHoldMenu() }
         if dedaoOpen { return dedaoStore.closePlayerMenu() }
+        if movies != nil { return closeMoviesMenu() }   // Movies: a card's or a source's menu
         return false
     }
 
@@ -178,6 +179,7 @@ final class TVController: NSObject, ObservableObject {
         }
         // 得到的播放界面：按住确认 = "⋯"菜单（倍速、定时关闭、讲目列表），同网易云
         if dedaoOpen { return dedaoStore.openPlayerMenu() }
+        if movies != nil { return openMoviesMenu() }
         return false
     }
 
@@ -189,6 +191,7 @@ final class TVController: NSObject, ObservableObject {
         if neteaseOpen { return neteaseStore.wheelCanMove(direction) }
         if browserOpen, mode == .launcher { return browserStore.canMove(direction) }
         if dedaoOpen { return dedaoStore.canMove(direction) }
+        if movies != nil, mode == .launcher { return moviesWheelCanMove(direction) }
         return true
     }
 
@@ -200,6 +203,7 @@ final class TVController: NSObject, ObservableObject {
         if neteaseOpen { return neteaseStore.wheelRunsHorizontally }
         if browserOpen, mode == .launcher { return browserStore.startWheelRunsHorizontally }
         if dedaoOpen { return dedaoStore.wheelRunsHorizontally }
+        if movies != nil, mode == .launcher { return moviesWheelRunsHorizontally }
         return true                               // 主屏：一排图标
     }
 
@@ -210,6 +214,7 @@ final class TVController: NSObject, ObservableObject {
         if neteaseOpen { return neteaseStore.flickCanMove(direction) }
         if browserOpen, mode == .launcher { return browserStore.canMove(direction) }
         if dedaoOpen { return dedaoStore.canMove(direction) }
+        if movies != nil, mode == .launcher { return moviesWheelCanMove(direction) }
         return false
     }
     /// The top-row app whose content the Top Shelf shows.
@@ -244,6 +249,8 @@ final class TVController: NSObject, ObservableObject {
     var terminate: () -> Void = { NSApp.terminate(nil) }
     /// The Movies app's screen, while it's open.
     @Published var movies: MoviesBrowser?
+    /// The Movies app's presses, sidebar settle and scenes (see MoviesBrowser).
+    let moviesWork = MoviesWork()
     /// 哔哩哔哩的原生页面（自用分支）。这几个应用的数据是每个人（个人资料）各一份：
     /// 建它们之前 ProfileSpace.current 已经是在看的这个人（见 init），换人时各自重新读（见 ProfileApp）
     let bilibiliStore: BilibiliStore
@@ -863,17 +870,6 @@ final class TVController: NSObject, ObservableObject {
     func setMode(_ newMode: Mode) { mode = newMode }
     func clearPointer() { pointer = nil }
     func setLaunchedAppID(_ id: String?) { launchedAppID = id }
-    func openMoviesBrowserOnly() { movies = MoviesBrowser() }
-    func reconcileMovieBrowserPosition(for path: String) {
-        for (row, line) in movieRows.enumerated() {
-            if let column = line.items.firstIndex(of: .movie(path)) {
-                movies?.row = row
-                movies?.column = column
-                break
-            }
-        }
-    }
-
     func bringToFront() {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)

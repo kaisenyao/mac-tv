@@ -219,6 +219,7 @@ extension TVController {
         case BrowserStore.appID: closeBrowser(); browserStore.closePrivateTabs()
         case "movies":
             movies = nil
+            moviesWork.stop()
             playbackCoordinator.quitMovies()
         default: break
         }
@@ -319,6 +320,7 @@ extension TVController {
     func memoryPressure(critical: Bool) {
         Log.app.notice("Memory pressure (\(critical ? "critical" : "warning", privacy: .public)): giving memory back")
         BiliImageCache.shared.trim()
+        movieLibrary.artwork.trim()
         browserStore.trimMemory()
         let parked = playbackCoordinator.parkedWebIDs
         let leastRecentFirst = backgroundApps.reversed().map(\.id).filter(parked.contains)

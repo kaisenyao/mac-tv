@@ -58,6 +58,8 @@ struct SettingsPanel: Equatable {
         // Apps › Movies
         case movieFolder(String), addMovieFolder, networkShare(String), addNetworkShare
         case jellyfinServer(String), addJellyfinServer, removeMovieSource
+        /// A source's Home Videos switch: never looked up online, always in Other Videos (the Movies app's too)
+        case homeVideos
         // Movies' forms: the text fields, then Connect or Sign In
         case formAddress, formUser, formPassword, formSubmit
         // System
@@ -341,7 +343,7 @@ extension TVController {
             return movieFolders.map { .movieFolder($0.path) } + [.addMovieFolder]
                 + networkShares.shares.map { .networkShare($0.id) } + [.addNetworkShare]
                 + jellyfin.servers.map { .jellyfinServer($0.id) } + [.addJellyfinServer]
-        case .movieFolder, .networkShare, .jellyfinServer: return [.removeMovieSource]
+        case .movieFolder, .networkShare, .jellyfinServer: return [.homeVideos, .removeMovieSource]
         case .addNetworkShare, .addJellyfinServer: return SourceForm.fields + [.formSubmit]
         case .about: return [.version, .source, .report]
         case .userGuide: return UserGuide.sections.indices.map { .guideSection($0) }
@@ -522,6 +524,7 @@ extension TVController {
             return Content(title: server?.name ?? "", value: server.map { URL(string: $0.address)?.host ?? $0.address },
                            accessory: .chevron, symbol: "server.rack")
         case .addJellyfinServer: return Content(title: "Sign In to Jellyfin…", accessory: .chevron, symbol: "plus")
+        case .homeVideos: return onOff("Home Videos", movieSourceID(panel.page).map(movieLibrary.isHomeVideos) ?? false)
         case .removeMovieSource:
             switch panel.page {
             case .networkShare: return Content(title: "Remove Share")
@@ -772,6 +775,9 @@ extension TVController {
         case .networkShare(let id): openSettingsPage(.networkShare(id))
         case .jellyfinServer(let id): openSettingsPage(.jellyfinServer(id))
         case .addMovieFolder: chooseMovieFolders()
+        case .homeVideos:
+            if let id = movieSourceID(panel.page) { movieLibrary.setHomeVideos(id, !movieLibrary.isHomeVideos(id)) }
+            objectWillChange.send()
         case .addNetworkShare: openSettingsPage(.addNetworkShare)
         case .addJellyfinServer: openSettingsPage(.addJellyfinServer)
         case .formAddress, .formUser, .formPassword: focusFormField(row)
@@ -948,8 +954,9 @@ extension TVController {
         if let added { focusSetting(.profile(added.id)) }
     }
 
-    /// The Mac's folder chooser, as the Movies app's Add Folder… opens it.
-    private func chooseMovieFolders() {
+    /// The Mac's folder chooser, for Movies' sources: what's chosen goes to `done` (Settings adds the folders and keeps
+    /// focus on Add Folder…; the Movies app just adds them).
+    func chooseMovieFolders(_ done: (([URL]) -> Void)? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -959,7 +966,9 @@ extension TVController {
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK else { return }
-            MainActor.assumeIsolated { self?.addMovieFolders(panel.urls) }
+            MainActor.assumeIsolated {
+                if let done { done(panel.urls) } else { self?.addMovieFolders(panel.urls) }
+            }
         }
     }
 
@@ -968,6 +977,16 @@ extension TVController {
         folders.forEach(movieLibrary.add)
         objectWillChange.send()
         focusSetting(.addMovieFolder)
+    }
+
+    /// The Movies source a Settings page is about, as the Movies app names it.
+    private func movieSourceID(_ page: SettingsPanel.Page?) -> String? {
+        switch page {
+        case .movieFolder(let path): path
+        case .networkShare(let id): networkShares.shares.first { $0.id == id }?.folder?.path
+        case .jellyfinServer(let id): JellyfinServers.scheme + id
+        default: nil
+        }
     }
 
     /// Takes a source out of Movies. A folder stays on disk; a share stays connected in Finder.

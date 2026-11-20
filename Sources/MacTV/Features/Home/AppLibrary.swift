@@ -74,6 +74,12 @@ final class AppLibrary {
     /// How many apps Home's top row, the dock, holds. Every row below holds as many.
     nonisolated static let dockSize = 6
 
+    /// Mac TV's system apps, as Apple's are on Apple TV: Movies, Web, Settings and Add App. They can be moved,
+    /// but never hidden or deleted, from any path. The one place this rule lives.
+    nonisolated static let systemApps: Set<String> = ["movies", "browser", "settings", "add-app"]
+
+    nonisolated static func isSystemApp(_ id: String) -> Bool { systemApps.contains(id) }
+
     /// apps.json or apps-<profile>.json. Only apps.json has `added`. `pinned` is from earlier versions: it's read
     /// once so Home keeps its order (see `keepHomeOrder`), and written only while a file still has it.
     private struct Saved: Codable {
@@ -128,6 +134,7 @@ final class AppLibrary {
         sharedFile = folder.appendingPathComponent("apps.json")
         layoutFile = isMain ? sharedFile : folder.appendingPathComponent("apps-\(profileID).json")
         Self.gatherAddedApps(in: folder, into: sharedFile)
+        Self.unhideSystemApps(in: folder, shared: sharedFile)
         added = (try? Self.read(sharedFile))?.added ?? []
         let layout = try? Self.read(layoutFile)
         hidden = layout?.hidden ?? []
@@ -210,19 +217,20 @@ final class AppLibrary {
     /// This profile has arranged or hidden apps at some point.
     var hasSavedApps: Bool { FileManager.default.fileExists(atPath: layoutFile.path) }
 
-    /// Shows or hides an app for this profile only, a built-in app or one someone added.
+    /// Shows or hides an app for this profile only, a built-in app or one someone added. A system app is refused.
     @discardableResult
     func setHidden(_ id: String, _ hide: Bool) -> Bool {
+        if hide, Self.isSystemApp(id) { return false }
         let previous = hidden
         if hide { hidden.insert(id) } else { hidden.remove(id) }
         guard saveLayout() else { hidden = previous; return false }
         return true
     }
 
-    /// Hide: the app leaves this profile's Home only.
+    /// Hide: the app leaves this profile's Home only. Never a system app.
     @discardableResult
     func hide(_ id: String) -> Bool {
-        guard orderedApps.contains(where: { $0.id == id }) else { return false }
+        guard !Self.isSystemApp(id), orderedApps.contains(where: { $0.id == id }) else { return false }
         return setHidden(id, true)
     }
 
@@ -292,6 +300,8 @@ final class AppLibrary {
 
     enum DeleteOutcome: Equatable {
         case deleted
+        /// Movies, Web, Settings and Add App: never deleted, nor hidden.
+        case systemApp
         /// Only an app someone added can be deleted; built-in apps can only be hidden.
         case notAdded
         /// Its files couldn't go to the Trash: everything is kept as it was.
@@ -305,6 +315,7 @@ final class AppLibrary {
     /// can't go to the Trash, nothing changes.
     @discardableResult
     func deleteForEveryone(_ id: String) -> DeleteOutcome {
+        if Self.isSystemApp(id) { return .systemApp }
         reloadAdded()
         guard !Self.isBuiltIn(id), Catalog.services.allSatisfy({ $0.id != id }), containsAddedApp(id) else { return .notAdded }
         var trashed: [(from: URL, to: URL)] = []
@@ -447,6 +458,16 @@ final class AppLibrary {
         }
         guard gathered else { return }
         for (url, _) in strays { _ = update(url) { $0.added = nil } }
+    }
+
+    /// Earlier versions let Movies and Web be hidden. Any profile's layout that hides a system app shows it
+    /// again, once: only `hidden` changes, and a file that hides none is never written. One that can't be read
+    /// is left alone.
+    private static func unhideSystemApps(in folder: URL, shared: URL) {
+        for url in [shared] + profileFiles(in: folder) {
+            guard let file = try? read(url), !file.hidden.isDisjoint(with: systemApps) else { continue }
+            _ = update(url) { $0.hidden.subtract(systemApps) }
+        }
     }
 
     private static func darkened(_ hex: String) -> String {

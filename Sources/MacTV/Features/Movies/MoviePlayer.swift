@@ -165,6 +165,8 @@ final class AVPlayback: NSObject, PlaybackEngine {
         super.init()
         playerLayer.videoGravity = .resizeAspect
         playerLayer.backgroundColor = CGColor.black
+        // HDR10, HLG and Dolby Vision brighter than white on a display that can show it (SDR is unchanged)
+        playerLayer.wantsExtendedDynamicRangeContent = true
         player.appliesMediaSelectionCriteriaAutomatically = false
         if let audible, let current = item.currentMediaSelection.selectedMediaOption(in: audible) {
             selectedAudio = audible.options.firstIndex(of: current)
@@ -259,9 +261,13 @@ final class MoviePlayer: ObservableObject {
     var onFailure: ((String) -> Void)?
     var onClose: (() -> Void)?
 
-    init(movie: Movie, engine: PlaybackEngine) {
+    /// Where the place is kept.
+    private let library: MovieLibrary
+
+    init(movie: Movie, engine: PlaybackEngine, library: MovieLibrary = .shared) {
         self.movie = movie
         self.engine = engine
+        self.library = library
         sidecars = movie.isRemote ? [] : Self.findSidecars(for: movie.url)
         if engine.subtitleOptions.isEmpty, let first = sidecars.firstIndex(where: { MediaOption.prefers($0.option.language) }) {
             // A subtitle file sitting next to the movie in your language was put there to be used.
@@ -327,7 +333,7 @@ final class MoviePlayer: ObservableObject {
 
     func save() {
         lastSaved = Date()
-        MovieLibrary.shared.record(position: engine.currentTime, duration: duration, for: movie)
+        library.record(position: engine.currentTime, duration: duration, for: movie)
     }
 
     func stop() {
