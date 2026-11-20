@@ -181,7 +181,23 @@ struct AppGrid: View {
                 }
                 .offset(x: layout.dockFrame.minX + Layout.dockPadding, y: top(ofRow: rowIndex, in: layout))
             }
+            // Press and hold Select on an app: its menu beside it, on Home, as on Apple TV.
+            if let panel = tv.organizer, panel.onHome, let menu = panel.menu, let id = panel.selectedID,
+               let index = tv.services.firstIndex(where: { $0.id == id }) {
+                let column = index % tv.columns
+                let x = layout.dockFrame.minX + Layout.dockPadding + CGFloat(column) * (Layout.tile.width + Layout.tileSpacing)
+                    + Layout.tile.width / 2
+                let reach = AppMenuCard.reach(from: Layout.tile.width)
+                AppMenuCard(tv: tv, menu: menu, id: id, name: tv.services[index].name)
+                    // Centred on the app's row: a frame with no height keeps the card's middle on its top edge.
+                    .frame(width: AppMenuCard.width, height: 0)
+                    .offset(x: (column < tv.columns - 2 ? x + reach : x - reach) - AppMenuCard.width / 2,
+                            y: top(ofRow: index / tv.columns, in: layout) + Layout.tile.height / 2)
+                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                    .zIndex(10)
+            }
         }
+        .animation(Motion.focus, value: tv.organizer)
     }
 
     private func top(ofRow row: Int, in layout: Layout) -> CGFloat {
@@ -239,6 +255,8 @@ struct AppCell: View {
                 }
             }
             .onTapGesture {
+                // With an app's menu open on Home, a click elsewhere just closes it.
+                if tv.organizer?.onHome == true { tv.organizer = nil; return }
                 tv.setFocus(.app(index))
                 tv.open(service)
             }

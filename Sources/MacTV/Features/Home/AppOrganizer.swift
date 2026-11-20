@@ -61,6 +61,10 @@ struct AppOrganizer: Equatable {
     /// return to Home; Edit Home Screen stays, with the app picked up.
     var fromHome = false
 
+    /// The menu is over Home itself, beside the app held, as on Apple TV: Arrange Apps shows only once Edit Home
+    /// Screen is chosen.
+    var onHome: Bool { fromHome && menu != nil }
+
     /// Where the D-pad goes from a place among `count` apps laid out as on Home, six to a row; nil at an edge.
     /// Down to a shorter last row lands on its last app.
     static func step(from index: Int, _ direction: RemoteCommand.Direction, count: Int) -> Int? {
@@ -451,13 +455,31 @@ struct AppOrganizerSheet: View {
             }
     }
 
-    /// Press and hold's menu, beside the app, or the question before Delete for Everyone.
+    /// Press and hold's menu, beside the app: right of it, or left of it in the last two columns.
     private func menuCard(_ menu: AppOrganizer.Menu, for id: String, name: String, at index: Int) -> some View {
-        let width: CGFloat = 470
         let center = ArrangeGrid.center(of: index)
-        let column = index % AppOrganizer.columns
-        let reach = ArrangeGrid.tile.width * 0.57 + 32 + width / 2
-        return VStack(alignment: .leading, spacing: 10) {
+        let reach = AppMenuCard.reach(from: ArrangeGrid.tile.width)
+        return AppMenuCard(tv: tv, menu: menu, id: id, name: name)
+            .position(x: index % AppOrganizer.columns < AppOrganizer.columns - 2 ? center.x + reach : center.x - reach,
+                      y: center.y)
+    }
+}
+
+/// Press and hold Select on an app: its menu (Edit Home Screen on Home, Hide, Delete for Everyone), or the question
+/// before Delete for Everyone. The same card on Home and in Arrange Apps.
+struct AppMenuCard: View {
+    @ObservedObject var tv: TVController
+    let menu: AppOrganizer.Menu
+    let id: String
+    let name: String
+
+    static let width: CGFloat = 470
+
+    /// From the middle of the app to the middle of the card beside it.
+    static func reach(from tileWidth: CGFloat) -> CGFloat { tileWidth * 0.57 + 32 + width / 2 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
             switch menu {
             case .actions(let row):
                 ForEach(Array(tv.organizerActions(for: id).enumerated()), id: \.offset) { offset, action in
@@ -490,10 +512,10 @@ struct AppOrganizerSheet: View {
             }
         }
         .padding(22)
-        .frame(width: width, alignment: .leading)
+        .frame(width: Self.width, alignment: .leading)
         .tvGlass(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
         .shadow(color: .black.opacity(0.35), radius: 30, y: 16)
-        .position(x: column < AppOrganizer.columns - 2 ? center.x + reach : center.x - reach, y: center.y)
+        .foregroundStyle(.white)
     }
 
     private func menuRow(_ title: String, systemImage: String?, focused: Bool, destructive: Bool,

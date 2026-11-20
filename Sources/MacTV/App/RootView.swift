@@ -45,7 +45,8 @@ struct RootView: View {
                     Wallpaper().ignoresSafeArea()
                     TVCanvas { HomeView(tv: tv) }
                         .ignoresSafeArea()
-                        .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
+                        // A Home Screen app's menu is on Home itself (see AppOrganizer.onHome): Home takes its clicks.
+                        .allowsHitTesting((tv.activeSheet == nil || tv.organizer?.onHome == true) && !tv.screensaver)
                         .accessibilityHidden(tv.activeSheet != nil || tv.screensaver)
                 }
             }
@@ -79,7 +80,8 @@ struct ModalSheetRouter: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ForEach(tv.sheets.open, id: \.self) { layer in
+        // Arrange Apps isn't drawn while a Home Screen app's menu is open on Home (see AppOrganizer.onHome).
+        ForEach(tv.sheets.open.filter { $0 != .organizer || tv.organizer?.onHome != true }, id: \.self) { layer in
             TVCanvas { sheet(layer) }
                 .ignoresSafeArea()
                 .allowsHitTesting(tv.isTopSheet(layer))

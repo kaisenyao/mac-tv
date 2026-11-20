@@ -258,6 +258,8 @@ struct ArrangeAppsTests {
                 #expect(tv.organizer?.fromHome == true && tv.organizer?.menu == .actions(row: 0), "\(name)")
                 #expect(tv.organizer?.selectedID == "youtube" && tv.mode == .launcher, "\(name): nothing opened")
                 #expect(tv.organizerActions(for: "youtube") == [.editHomeScreen, .hide], "\(name)")
+                // The menu is on Home itself: Arrange Apps isn't showing until Edit Home Screen.
+                #expect(tv.organizer?.onHome == true, "\(name)")
                 tv.handle(.back)
                 #expect(tv.organizer == nil && tv.focus == .app(youtube), "\(name): Back is Home again")
             }
@@ -270,7 +272,7 @@ struct ArrangeAppsTests {
             // Edit Home Screen: Arrange Apps with the app picked up; Select puts it down, Back leaves.
             #expect(tv.holdSelect(from: .keyboard))
             tv.handle(.select)
-            #expect(tv.organizer?.fromHome == false && tv.organizer?.menu == nil)
+            #expect(tv.organizer?.fromHome == false && tv.organizer?.menu == nil && tv.organizer?.onHome == false)
             #expect(tv.organizer?.lift?.id == "youtube" && tv.activeSheet == .organizer)
             let before = tv.appOrder
             tv.handle(.move(youtube % dock == 0 ? .right : .left))
