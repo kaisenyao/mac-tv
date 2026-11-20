@@ -94,6 +94,8 @@ final class BilibiliStore: ObservableObject {
         case settings
         /// 视频卡片上长按确认弹出的小菜单
         case cardMenu
+        /// 搜索页上选了"清空"：从它长出来的那张问一句的小卡片（取消 / 清空）
+        case clearConfirm
         /// UP 主主页上的关注按钮
         case follow
     }
@@ -153,6 +155,7 @@ final class BilibiliStore: ObservableObject {
     var editing: Bool { focus == .typing }
     var settingsOpen: Bool { focus == .settings }
     var cardMenu: [CardAction]? { focus == .cardMenu ? cardMenuActions : nil }
+    var clearConfirmOpen: Bool { focus == .clearConfirm }
     var followFocused: Bool { focus == .follow }
     /// UP 主页上，焦点在三个排序上
     var sortFocused: Bool { focus == .rows && upPage.map { !$0.browsing } == true }
@@ -233,7 +236,7 @@ final class BilibiliStore: ObservableObject {
         case .typing: return horizontal ? .off : aboveContent
         case .searchField: return horizontal ? .picker : aboveContent   // 搜索框：一个固定的东西
         case .settings: return horizontal ? .off : .picker               // 设置：固定的几行
-        case .cardMenu, .accountMenu: return .picker                      // 菜单：固定的几项
+        case .cardMenu, .accountMenu, .clearConfirm: return .picker       // 菜单：固定的几项
         // 左边栏是从左边拉出来的抽屉（像 Mac 右边的通知中心）：往右滑拉出来，往左滑推回去，再往右滑不动；
         // 在里面上下是挑一项（光标）
         case .sidebar: return horizontal ? .drawer : .picker
@@ -316,6 +319,7 @@ final class BilibiliStore: ObservableObject {
             + "-\(player.panelVisible)-\(player.panelIndex)-\(String(describing: player.panelList))-\(player.panelListIndex)"
             + "-\(player.shelf)-\(player.episodeFocus)"
             + "-\(settingIndex)-\(String(describing: settingList))-\(settingListIndex)-\(accountIndex)-\(cardMenuIndex)"
+            + "-\(clearChoice.rawValue)"
             // 左边栏的高亮（上下滑时先动它，停一下才换页）、UP 主页的排序、往下到没到视频
             + "-\(sidebarTab.rawValue)-\(upPage?.sort.rawValue ?? -1)-\(upPage?.browsing ?? false)"
             // 看视频时键盘左右是快进快退十秒：进度也算，这样每一下都有声音
@@ -374,8 +378,12 @@ final class BilibiliStore: ObservableObject {
 
     private var trends: [BiliTrend] = []
     private var trendsAt = Date.distantPast
-    /// "清空"按过一次了：再按一次才真的清
-    @Published private(set) var clearArmed = false
+    /// 测试用：当作热搜刚取过、就是这几条（搜索页不去联网）
+    func pretendTrends(_ list: [BiliTrend]) { trends = list; trendsAt = Date() }
+
+    /// 清空搜索历史之前问的那一句里的两项："取消"在上面，打开时停在它上面
+    enum ClearChoice: Int { case cancel, clear }
+    @Published private(set) var clearChoice = ClearChoice.cancel
 
     /// 这一排是热搜（两条一排，按 1、2、3……的顺序左右走）
     private func isHotRow(_ index: Int) -> Bool {
@@ -391,7 +399,6 @@ final class BilibiliStore: ObservableObject {
 
     /// 搜索历史一排（最近的六个，后面一个"清空"），热搜两列五行。热搜十分钟内取过就不再取
     func showLanding() {
-        clearArmed = false
         replaceRows(landingRows(), for: .search)
         guard Date().timeIntervalSince(trendsAt) > 600 else { return }
         Task { @MainActor in
@@ -692,6 +699,7 @@ final class BilibiliStore: ObservableObject {
         case .searchField: handleSearchField(command)
         case .settings: handleSettings(command)
         case .cardMenu: handleCardMenu(command)
+        case .clearConfirm: handleClearConfirm(command)
         case .accountMenu(let menu): handleAccountMenu(command, menu)
         case .account: handleAccount(command)
         case .follow: handleFollow(command)
@@ -739,6 +747,38 @@ final class BilibiliStore: ObservableObject {
         case .back, .move(.left), .move(.right): withAnimation(Motion.focus) { focus = .rows }
         default: break
         }
+    }
+
+    /// 清空搜索历史的那一问：上下在"取消""清空"之间走，确认选它，返回是取消
+    private func handleClearConfirm(_ command: RemoteCommand) {
+        switch command {
+        case .move(.up): withAnimation(Motion.focus) { clearChoice = .cancel }
+        case .move(.down): withAnimation(Motion.focus) { clearChoice = .clear }
+        case .select: chooseClear(clearChoice)
+        case .back: chooseClear(.cancel)
+        default: break
+        }
+    }
+
+    /// 用鼠标点了那一问里的一项
+    func tapClearChoice(_ choice: ClearChoice) {
+        guard focus == .clearConfirm else { return }
+        clearChoice = choice
+        chooseClear(choice)
+    }
+
+    /// 点了那一问后面压暗的地方：同"取消"
+    func dismissClearConfirm() {
+        guard focus == .clearConfirm else { return }
+        chooseClear(.cancel)
+    }
+
+    /// 那一问收起，焦点回到"清空"上；选的是"清空"就真的清掉，搜索页重新摆
+    private func chooseClear(_ choice: ClearChoice) {
+        withAnimation(Motion.focus) { focus = .rows }
+        guard choice == .clear else { return }
+        BiliSearchHistory.clear()
+        showLanding()
     }
 
     private func handleAccountMenu(_ command: RemoteCommand, _ menu: AccountMenu) {
@@ -887,7 +927,7 @@ final class BilibiliStore: ObservableObject {
         if let login { return login.canMove(direction) }                  // 登录页：只在表单里上下走，不转回二维码
         switch focus {
         case .typing, .searchField, .account, .follow: return false
-        case .settings, .cardMenu, .accountMenu, .sidebar: return true    // 一列固定的选项，到头自己停
+        case .settings, .cardMenu, .accountMenu, .clearConfirm, .sidebar: return true   // 一列固定的选项，到头自己停
         case .rows:
             guard let page = upPage, sortFocused else { return flickCanMove(direction) }   // 视频排：到第一张就停，不进左边栏
             switch direction {
@@ -904,7 +944,7 @@ final class BilibiliStore: ObservableObject {
         if login != nil { return false }                            // 登录表单：从上往下一样一样走
         switch focus {
         // 设置、菜单、左边栏是竖的；头像、关注按钮往下回到内容
-        case .settings, .cardMenu, .accountMenu, .sidebar, .account, .follow: return false
+        case .settings, .cardMenu, .accountMenu, .clearConfirm, .sidebar, .account, .follow: return false
         case .rows, .searchField, .typing: return true            // 视频排、三个排序
         }
     }
@@ -959,7 +999,6 @@ final class BilibiliStore: ObservableObject {
 
     private func setColumn(_ value: Int) {
         guard rows.indices.contains(row) else { return }
-        if clearArmed { clearArmed = false }
         let clamped = max(0, min(rows[row].items.count - 1, value))
         guard clamped != column else { return }
         withAnimation(BiliMotion.step()) { columns[rows[row].id] = clamped }
@@ -1030,12 +1069,13 @@ final class BilibiliStore: ObservableObject {
     }
 
     private func perform(_ item: Item) {
-        guard let tv else { return }
+        // 别的几样要放视频、开登录页、联网，得有 tv；"清空"只是在这一页上先问一句
+        guard tv != nil || item == .clearHistory else { return }
         switch item {
         case .video(let video) where video.endedRoom > 0:
             // 看过的直播、现在没在播：进主播的主页（他最近发了什么、在不在播）
             if video.ownerMid > 0 { openUp(BiliUser(mid: video.ownerMid, name: video.owner, face: video.face)) }
-            else { tv.showToast("主播未开播") }
+            else { tv?.showToast("主播未开播") }
         case .video(let video):
             player.play(video)
         case .user(let user):
@@ -1053,14 +1093,8 @@ final class BilibiliStore: ObservableObject {
             query = trend.keyword
             submitSearch()
         case .clearHistory:
-            // 清空之前先确认：第一次按变成"再按一次清空"，再按才清
-            if clearArmed {
-                BiliSearchHistory.clear()
-                clearArmed = false
-                showLanding()
-            } else {
-                withAnimation(Motion.focus) { clearArmed = true }
-            }
+            // 清空之前先问一句（和 iOS 的"清除历史记录"一样）：从"清空"长出一张小卡片，默认停在"取消"上
+            withAnimation(Motion.focus) { clearChoice = .cancel; focus = .clearConfirm }
         }
     }
 
@@ -1259,7 +1293,6 @@ final class BilibiliStore: ObservableObject {
         loadingTabs = []
         columns = [:]
         query = ""
-        clearArmed = false
         cookieWaker = nil   // 唤醒的是上一个人的网页数据
         savedAccounts = BiliAccounts.list()
         hiddenTabs = BiliSidebar.hidden
@@ -1626,6 +1659,17 @@ final class BilibiliStore: ObservableObject {
         guard !editing else { return }
         switchTab(to: .search, focusContent: false)
         withAnimation(Motion.focus) { focus = .searchField }
+    }
+
+    /// 用鼠标、触控板点了搜索页上的搜索框：开始打字，和选中它再按确认一样（不管焦点刚才在这一页的哪里）。
+    /// 已经在打字时什么也不做
+    func tapSearchField() {
+        guard player.current == nil, login == nil, tab == .search, upPage == nil, !editing else { return }
+        // 左边栏里的高亮还没停住就点了：留在搜索页，不再换过去
+        sidebarCommit?.cancel()
+        sidebarCommit = nil
+        sidebarTab = tab
+        withAnimation(Motion.focus) { focus = .typing }
     }
 
     /// 退出输入：搜索框还是选中的（亮着），再按确认接着打

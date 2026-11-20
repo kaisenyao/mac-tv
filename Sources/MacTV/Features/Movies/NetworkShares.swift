@@ -6,7 +6,7 @@ import Security
 /// Shared folders on a NAS or another computer (SMB), added once and kept connected: at launch,
 /// after waking, when the network comes back, and every couple of minutes while one is offline.
 /// Passwords live in the Mac's Keychain. A connected share is an ordinary drive under /Volumes, so
-/// Movies, the player, IINA and the phone's Finder all use it as they would any folder.
+/// Movies, the player, IINA and the phone's Files all use it as they would any folder.
 @MainActor
 final class NetworkShares: ObservableObject {
     static let shared = NetworkShares()

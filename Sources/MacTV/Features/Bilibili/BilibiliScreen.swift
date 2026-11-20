@@ -21,6 +21,12 @@ struct BilibiliRoot: View {
     }
 }
 
+/// 搜索页上"清空"那个胶囊在哪：清空搜索历史的那一问从它长出来
+private struct ClearChipAnchor: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
+}
+
 /// 哔哩哔哩的电视式页面。
 ///
 /// 左边一列很淡的小图标是导航（搜索、首页、关注、直播、我的），焦点移过去才展开成带文字的面板；
@@ -97,6 +103,10 @@ struct BilibiliScreen: View {
             cardMenu
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+        // 清空搜索历史的那一问：从"清空"那个胶囊长出来
+        .overlayPreferenceValue(ClearChipAnchor.self) { chip in
+            GeometryReader { proxy in clearConfirmLayer(chip, proxy) }
+        }
         .background(Color.black)
     }
 
@@ -386,6 +396,9 @@ struct BilibiliScreen: View {
                     .strokeBorder(.white.opacity(store.editing ? 0 : (fieldFocused ? 0.95 : 0.2)), lineWidth: fieldFocused ? 5 : 1.5)
             }
             .scaleEffect(fieldFocused ? 1.02 : 1, anchor: .leading)
+            // 用鼠标、触控板点一下：开始打字（同选中它按确认）。打字时点它是输入框自己的（挪光标），这里不管
+            .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .gesture(TapGesture().onEnded { store.tapSearchField() }, including: store.editing ? .subviews : .all)
             .environment(\.colorScheme, store.editing ? .light : .dark)
             .onChange(of: store.editing) { _, editing in typing = editing }
         }
@@ -503,6 +516,71 @@ struct BilibiliScreen: View {
         .animation(BiliMotion.slide, value: store.cardMenuIndex)
     }
 
+    /// 清空搜索历史的那一问（和主屏上"Delete for Everyone"前问的那一句同一种样子）：一句话，下面"取消"（默认）和红色的"清空"。
+    /// 贴在"清空"那个胶囊下面，出不了屏幕；屏幕压暗，点暗处同"取消"
+    private static let confirmWidth: CGFloat = 380
+    /// 大约多高（问的那一句、两项各 66、中间的间隔和四边的边距）：只用来让它待在屏幕里
+    private static let confirmHeight: CGFloat = 250
+
+    private func clearConfirmLayer(_ chip: Anchor<CGRect>?, _ proxy: GeometryProxy) -> some View {
+        let open = store.clearConfirmOpen
+        return ZStack(alignment: .topLeading) {
+            if open {
+                DimBackdrop(close: { store.dismissClearConfirm() })
+                    .transition(.opacity)
+            }
+            if open, let chip {
+                let rect = proxy[chip]
+                let screen = proxy.size
+                let x = min(max(rect.minX, 40), screen.width - Self.confirmWidth - 40)
+                let below = rect.maxY + 20
+                let y = below + Self.confirmHeight <= screen.height - 40 ? below : max(40, rect.minY - 20 - Self.confirmHeight)
+                clearConfirmCard
+                    .padding(.leading, x)
+                    .padding(.top, y)
+                    // 摆好位置以后整块铺满屏幕：以"清空"的中间为中心长出来、缩回去
+                    .frame(width: screen.width, height: screen.height, alignment: .topLeading)
+                    .transition(.growing(from: UnitPoint(x: rect.midX / max(1, screen.width), y: rect.midY / max(1, screen.height))))
+            }
+        }
+        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        .animation(Motion.slide, value: open)
+    }
+
+    private var clearConfirmCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("清空搜索历史？")
+                .font(.tv(.callout, emphasized: true))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 8)
+            clearConfirmRow("取消", systemImage: nil, choice: .cancel, destructive: false)
+            clearConfirmRow("清空", systemImage: "trash", choice: .clear, destructive: true)
+        }
+        .padding(22)
+        .frame(width: Self.confirmWidth, alignment: .leading)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
+        .foregroundStyle(.white)
+        .animation(Motion.focus, value: store.clearChoice)
+    }
+
+    private func clearConfirmRow(_ title: String, systemImage: String?, choice: BilibiliStore.ClearChoice,
+                                 destructive: Bool) -> some View {
+        let focused = store.clearChoice == choice
+        return HStack(spacing: 16) {
+            if let systemImage { Image(systemName: systemImage).frame(width: 34) }
+            Text(title)
+            Spacer(minLength: 0)
+        }
+        .font(.tv(.body, emphasized: true))
+        .foregroundStyle(destructive ? Color.destructive : (focused ? .black : .white))
+        .padding(.horizontal, 22)
+        .frame(height: 66)
+        .focusPlatter(RoundedRectangle(cornerRadius: 18, style: .continuous), focused: focused, glass: false)
+        .contentShape(Rectangle())
+        .onTapGesture { store.tapClearChoice(choice) }
+    }
+
     private func hint(for item: BilibiliStore.Item) -> String {
         switch item {
         case .login: "登录"
@@ -523,7 +601,8 @@ struct BilibiliScreen: View {
 
     private var searchLanding: some View {
         let rows = store.rows
-        let active = store.focus == .rows
+        // 清空的那一问开着时，"清空"还亮着：卡片是从它长出来的
+        let active = store.focus == .rows || store.clearConfirmOpen
         let columnWidth = (canvas.width - margin - 96 - 40) / 2
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
@@ -557,7 +636,6 @@ struct BilibiliScreen: View {
         .frame(width: canvas.width, alignment: .topLeading)
         .animation(Motion.focus, value: store.row)
         .animation(Motion.focus, value: store.columns)
-        .animation(Motion.focus, value: store.clearArmed)
         .transition(.opacity)
     }
 
@@ -571,21 +649,21 @@ struct BilibiliScreen: View {
     /// 一个搜过的词（或者最后那个"清空"）：圆角胶囊，选中时变白、放大一点
     private func historyChip(_ item: BilibiliStore.Item, focused: Bool) -> some View {
         let clear = item == .clearHistory
-        let armed = clear && store.clearArmed
         return HStack(spacing: 10) {
             if clear { Image(systemName: "trash").font(.system(size: 22, weight: .semibold)) }
-            Text(armed ? "再按一次清空" : hint(for: item)).lineLimit(1)
+            Text(hint(for: item)).lineLimit(1)
         }
         .font(.tv(.callout, emphasized: focused))
-        .foregroundStyle(focused ? (armed ? .white : .black) : .white.opacity(clear ? 0.6 : 0.88))
+        .foregroundStyle(focused ? .black : .white.opacity(clear ? 0.6 : 0.88))
         .padding(.horizontal, 30)
         .frame(maxWidth: 260)
         .frame(height: 66)
         .fixedSize(horizontal: true, vertical: false)
         .background {
-            Capsule().fill(focused ? (armed ? Color.destructive : .white) : .white.opacity(clear ? 0.05 : 0.1))
+            Capsule().fill(focused ? Color.white : .white.opacity(clear ? 0.05 : 0.1))
             PillOutline().strokeBorder(.white.opacity(focused ? 0 : 0.12))
         }
+        .anchorPreference(key: ClearChipAnchor.self, value: .bounds) { clear ? $0 : nil }
         .scaleEffect(focused ? 1.08 : 1)
         .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 18, y: 10)
         .hoverLift()

@@ -182,7 +182,9 @@ extension TVController {
     }
 
     func iconPNG(for id: String) -> Data? {
-        if id == Icons.finderID { return Icons.finderPNG }
+        if id == Icons.filesID {
+            return Bundle.main.url(forResource: "files.png", withExtension: nil, subdirectory: "Icons").flatMap { try? Data(contentsOf: $0) }
+        }
         return services.first { $0.id == id }.flatMap { Icons.png(for: $0) }
     }
 }

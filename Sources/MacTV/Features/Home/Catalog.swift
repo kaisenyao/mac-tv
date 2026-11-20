@@ -135,21 +135,8 @@ enum Icons {
         return tile
     }
 
-    /// The phone's Finder (the Mac's files, to play one on the TV): Finder's own icon, from this Mac's system, so it's
-    /// always the one this macOS draws.
-    static let finderID = "finder"
-    static let finderPNG: Data? = {
-        let icon = NSWorkspace.shared.icon(forFile: "/System/Library/CoreServices/Finder.app")
-        let side = 256
-        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8,
-                                            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
-        icon.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
-        NSGraphicsContext.restoreGraphicsState()
-        return bitmap.representation(using: .png, properties: [:])
-    }()
+    /// The phone's Files (the Mac's files, to play one on the TV), drawn as an iPhone's Files app is: Icons/files.png.
+    static let filesID = "files"
 
     /// 手机遥控器应用列表里的图标。有专门的手机图标（phoneIcon，官方的正方形图标）就用它，
     /// 否则和电视主屏用同一张
