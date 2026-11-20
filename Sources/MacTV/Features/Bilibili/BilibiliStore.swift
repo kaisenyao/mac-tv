@@ -1621,6 +1621,13 @@ final class BilibiliStore: ObservableObject {
 
     // MARK: 搜索
 
+    /// Siri 键按一下：到搜索页，搜索框选中（还没打字），接着按住 Siri 键就是往里听写
+    func focusSearch() {
+        guard !editing else { return }
+        switchTab(to: .search, focusContent: false)
+        withAnimation(Motion.focus) { focus = .searchField }
+    }
+
     /// 退出输入：搜索框还是选中的（亮着），再按确认接着打
     func stopEditing() {
         guard editing else { return }

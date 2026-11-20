@@ -77,6 +77,7 @@ final class ControllerInput {
             hold(home, .home)
         }
         press(pad.buttonX, .playPause)
+        siri(pad.buttonY)
         press(pad.leftShoulder, .seek(forward: false))
         press(pad.rightShoulder, .seek(forward: true))
         pad.dpad.valueChangedHandler = { [weak self] _, x, y in MainActor.assumeIsolated { self?.steer(x: x, y: y) } }
@@ -99,6 +100,16 @@ final class ControllerInput {
             MainActor.assumeIsolated {
                 guard let presses = self?.tv?.inputPresses else { return }
                 if pressed { presses.down(key, from: .controller) } else { presses.up(key, from: .controller) }
+            }
+        }
+    }
+
+    /// Y is the Siri button: down and up go to InputPresses, which times them (see Jasmine).
+    private func siri(_ button: GCControllerButtonInput) {
+        button.pressedChangedHandler = { [weak self] _, _, pressed in
+            MainActor.assumeIsolated {
+                guard let presses = self?.tv?.inputPresses else { return }
+                if pressed { presses.siriDown(from: .controller) } else { presses.siriUp(from: .controller) }
             }
         }
     }

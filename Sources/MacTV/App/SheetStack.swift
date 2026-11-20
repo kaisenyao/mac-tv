@@ -9,7 +9,7 @@ struct SheetStack {
     /// Bottom to top.
     enum Layer: Int, CaseIterable, Comparable {
         case controlCenter, settings, organizer, pairing, addApp, topShelfPreferences, audioPicker, appSwitcher
-        case profilePicker, setup
+        case search, profilePicker, setup
 
         static func < (lhs: Layer, rhs: Layer) -> Bool { lhs.rawValue < rhs.rawValue }
 
@@ -28,6 +28,7 @@ struct SheetStack {
             case .topShelfPreferences: "top-shelf"
             case .audioPicker: "audio-picker"
             case .appSwitcher: "app-switcher"
+            case .search: "search"
             case .profilePicker: "profiles"
             case .setup: "setup"
             }
@@ -48,6 +49,8 @@ struct SheetStack {
     var audioPicker: AudioPickerPanel?
     /// Home pressed twice: the apps in the background (see AppQuit).
     var appSwitcher: AppSwitcher?
+    /// Mac TV's Search (the Siri button pressed on Home; see SystemSearch).
+    var search: SystemSearch?
     /// "Who's watching?"
     var profilePicker: ProfilePicker?
     /// First-run setup.
@@ -63,6 +66,7 @@ struct SheetStack {
         case .topShelfPreferences: topShelfPreferences != nil
         case .audioPicker: audioPicker != nil
         case .appSwitcher: appSwitcher != nil
+        case .search: search != nil
         case .profilePicker: profilePicker != nil
         case .setup: setup != nil
         }
@@ -84,6 +88,7 @@ struct SheetStack {
         case .topShelfPreferences: topShelfPreferences = nil
         case .audioPicker: audioPicker = nil
         case .appSwitcher: appSwitcher = nil
+        case .search: search = nil
         case .profilePicker: profilePicker = nil
         case .setup: setup = nil
         }

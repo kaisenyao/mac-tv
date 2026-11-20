@@ -41,6 +41,8 @@
 	<string>Mac TV opens and controls its own Brave window for streaming websites.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Mac TV listens while you hold the Siri button, to dictate text and to talk to Jasmine.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Mac TV runs a remote control page that your phone opens over your Wi-Fi.</string>
 </dict>

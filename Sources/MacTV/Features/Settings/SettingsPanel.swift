@@ -33,6 +33,8 @@ struct SettingsPanel: Equatable {
         /// Remove Profile, Remove Photo, Remove Device or a movie source's Remove, asked about first: Cancel, then the
         /// removal. Focus starts on Cancel, so a stray press removes nothing.
         case confirmRemoval(Row)
+        /// General › Jasmine and the pages below it (JasmineSettings.swift).
+        case jasmine(JasminePage)
     }
 
     /// One row on a page.
@@ -70,6 +72,8 @@ struct SettingsPanel: Equatable {
         case version, source, report, update, autoUpdate
         // A removal's confirmation
         case cancelRemoval, acceptRemoval
+        // General › Jasmine (JasmineSettings.swift)
+        case jasmine(JasmineRow)
     }
 
     /// A page opened below another, and the row on the page above to land on when it closes.
@@ -98,6 +102,8 @@ struct SettingsPanel: Equatable {
     var caret = 0
     /// What's typed into Add Network Share… or Sign In to Jellyfin….
     var form = SourceForm()
+    /// What's typed into an API key's field (Jasmine's): never described.
+    var secret = SecretText()
     /// Connect a Remote: the same pages on a sheet of their own, whose first page is Remotes and Devices
     /// and whose Back on that page closes it.
     var connectRemote = false
@@ -122,6 +128,7 @@ struct SettingsPanel: Equatable {
         switch page {
         case .profileName: row == 0
         case .addNetworkShare, .addJellyfinServer: row < SourceForm.fields.count
+        case .jasmine(.key): row == 0
         default: false
         }
     }
@@ -156,7 +163,7 @@ extension SettingsPanel.Section {
     /// out the rows this Mac has no use for.
     @MainActor var rows: [SettingsPanel.Row] {
         switch self {
-        case .general: return [.twentyFourHour, .sleepTimer, .launchAtLogin, .autoSkip, .autoNext, .websitePlayer]
+        case .general: return [.twentyFourHour, .sleepTimer, .launchAtLogin, .autoSkip, .autoNext, .websitePlayer, .jasmine(.open)]
         case .videoAndAudio: return [.dedicatedTV, .preferredDisplay, .audioOutput, .feedback]
         case .screenSaver:
             let wallpaper = ScreenSaverSettings.wallpaper
@@ -184,6 +191,7 @@ extension SettingsPanel.Row {
         case .sleepTimer, .autoSkip, .autoNext, .websitePlayer, .wallpaper, .aerialCategory, .saverDelay, .saverClock,
              .feedback, .dedicatedTV, .preferredDisplay, .launchAtLogin, .keepMacAwake, .lidOverride, .autoUpdate,
              .phoneAccess, .twentyFourHour: true
+        case .jasmine(let row): row.adjustable
         default: false
         }
     }
@@ -194,6 +202,7 @@ extension SettingsPanel.Row {
         case .siriRemote, .iPhone, .otherControllers, .pairedDevice, .profile, .addProfile, .profileName, .movies,
              .movieFolder, .networkShare, .jellyfinServer, .addNetworkShare, .addJellyfinServer, .about, .softwareUpdates,
              .userGuide, .guideSection: true
+        case .jasmine(let row): row.opensPage
         default: false
         }
     }
@@ -218,6 +227,7 @@ extension SettingsPanel.Row {
         case .userGuide, .about, .softwareUpdates: "MAC TV"
         case .guideSection: "CONTENTS"
         case .keepMacAwake, .lidOverride, .screenOff: "POWER"
+        case .jasmine(let row): row.group
         case .pairedDevice: "PAIRED DEVICES"
         case .movieFolder, .addMovieFolder: "FOLDERS"
         case .networkShare, .addNetworkShare: "NETWORK SHARES"
@@ -344,6 +354,7 @@ extension TVController {
         case .guideSection: return []
         case .softwareUpdates: return [.update, .autoUpdate]
         case .confirmRemoval: return [.cancelRemoval, .acceptRemoval]
+        case .jasmine(let page): return jasmineRows(page)
         }
     }
 
@@ -407,6 +418,7 @@ extension TVController {
             let section = UserGuide.sections.indices.contains(index) ? UserGuide.sections[index] : nil
             return (section?.title ?? UserGuide.title, section?.symbol ?? "book.fill", nil)
         case .softwareUpdates: return ("Software Updates", "arrow.down.circle", nil)
+        case .jasmine(let page): return jasmineHero(page)
         case .confirmRemoval(let removal):
             // The question, over the picture of the page it asks about.
             let below = panel.pageBelow, hero = settingsHero(below)
@@ -530,6 +542,7 @@ extension TVController {
             return Content(title: settingsContent(removal, panel: panel.pageBelow, focused: false).title, warning: true)
         case .formAddress, .formUser, .formPassword, .formSubmit:
             return formContent(row, panel: panel, focused: focused)
+        case .jasmine(let row): return jasmineContent(row, panel: panel, focused: focused)
         case .userGuide: return Content(title: "User Guide", accessory: .chevron)
         case .guideSection(let index):
             let section = UserGuide.sections.indices.contains(index) ? UserGuide.sections[index] : nil
@@ -615,6 +628,9 @@ extension TVController {
             return
         case .addNetworkShare, .addJellyfinServer:
             typeInForm(command, panel)
+            return
+        case .jasmine(.key):
+            typeJasmineKey(command, panel)
             return
         case .guideSection:
             readGuide(command, panel)
@@ -703,6 +719,7 @@ extension TVController {
         panel.typed = ""
         panel.caret = 0
         panel.form = SourceForm()
+        panel.secret = SecretText()
     }
 
     /// Puts focus on a row of the page showing, if it's there.
@@ -788,6 +805,7 @@ extension TVController {
         case .update: updater.activate()
         case .autoUpdate: updater.automatic.toggle()
         case .report: DiagnosticReport.copy(from: self)
+        case .jasmine(let row): activateJasmine(row, panel)
         }
     }
 
@@ -823,6 +841,8 @@ extension TVController {
             guard let page = below.page else { return }
             removeMovieSource(page)
             closeSettingsPage()
+        case .jasmine(.keyRemove):
+            removeJasmineKey(below: below)
         default:
             break
         }
@@ -855,6 +875,7 @@ extension TVController {
         case .lidOverride: lidOverride = forward
         case .autoUpdate: updater.automatic = forward
         case .phoneAccess: pairingGuest = forward   // left Full Access, right Guest
+        case .jasmine(let row): adjustJasmine(row, forward: forward); return
         default: return
         }
         // 值真变了才响（到头了、开关本来就是这样的，不响）

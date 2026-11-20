@@ -93,9 +93,9 @@ struct SiriRemoteTests {
         #expect(r.press(.mute, at: 1) == [.mute])
         #expect(r.press(.power, at: 2) == [])               // Power is a button with a hold (see PressTiming)
         #expect(r.release(.power, at: 2.1) == [.press(.power, .tap)])
-        #expect(r.press(.siri, at: 3) == [])          // Siri: nothing yet, pressed or held
-        #expect(r.advance(to: 4) == [])
-        #expect(r.release(.siri, at: 4) == [])
+        #expect(r.press(.siri, at: 3) == [.siri(.down)])   // Siri: down at once, then a hold (see JasmineTests)
+        #expect(r.advance(to: 4) == [.siri(.hold)])
+        #expect(r.release(.siri, at: 4) == [.siri(.release)])
         #expect(r.nextDeadline == nil)
     }
 

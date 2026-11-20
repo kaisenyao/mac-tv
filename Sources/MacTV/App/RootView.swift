@@ -59,6 +59,7 @@ struct RootView: View {
             }
 
             NoticesOverlay(notices: tv.notices)
+            JasmineOverlay(jasmine: tv.jasmine)
         }
         .environment(\.colorScheme, .dark)
         .background(Color.black.ignoresSafeArea())
@@ -101,6 +102,7 @@ struct ModalSheetRouter: View {
         case .topShelfPreferences: TopShelfPreferencesSheet(tv: tv)
         case .audioPicker: AudioPickerSheet(tv: tv)
         case .appSwitcher: AppSwitcherView(tv: tv)
+        case .search: SystemSearchSheet(tv: tv)
         case .profilePicker: ProfilesScreen(tv: tv)
         case .setup: SetupScreen(tv: tv)
         }

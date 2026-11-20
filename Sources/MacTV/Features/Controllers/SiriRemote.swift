@@ -57,6 +57,8 @@ enum SiriRemoteAction: Equatable {
     case wheel(Int)
     /// A light tap on the clickpad, without pressing it (see SiriRemoteTouch)
     case tap
+    /// The Siri button: down at once, then a tap, or a hold and its release (see Jasmine)
+    case siri(SiriPhase)
     /// 在触控面上滑：和手机遥控器触控板上的双指滑动一样
     /// （phase：began、changed、ended、momentum、momentumEnd；单位是点，手指往左 / 往上为负）
     case swipe(dx: Double, dy: Double, phase: String)
@@ -69,12 +71,14 @@ enum SiriRemoteAction: Equatable {
 /// - The clickpad (directions and centre), Back, TV and Power are timed by PressTiming, as every input's are:
 ///   tap / hold / alive / release (InputTiming). What they mean is PhonePresses' job, the same as the phone's.
 /// - Volume acts on press and repeats while held (after 0.45 s, every 0.16 s), like the phone's volume keys.
-/// - Play/Pause and Mute act on press. Siri does nothing: no command, no activity, no wake.
+/// - Play/Pause and Mute act on press. Siri reports down at once, then a tap or a hold and its release (SiriPress).
+/// The Siri Remote's own microphone isn't used: Jasmine hears through the Mac's.
 struct SiriRemoteButtons {
     static let volumeDelay: TimeInterval = 0.45
     static let volumeInterval: TimeInterval = 0.16
 
     private var keys = PressTiming()
+    private var siri = SiriPress(holdAfter: InputTiming.hold)
     /// Volume buttons held, and when each repeats next; the other buttons that act on press, while down.
     private var volume: [SiriRemoteButton: TimeInterval] = [:]
     private var down: Set<SiriRemoteButton> = []
@@ -82,7 +86,9 @@ struct SiriRemoteButtons {
     var isClickpadDown: Bool { down.contains { $0.isClickpad } }
 
     /// The next time `advance(to:)` has something to do, if any.
-    var nextDeadline: TimeInterval? { ([keys.nextDeadline] + volume.values.map(Optional.some)).compactMap { $0 }.min() }
+    var nextDeadline: TimeInterval? {
+        ([keys.nextDeadline, siri.nextDeadline] + volume.values.map(Optional.some)).compactMap { $0 }.min()
+    }
 
     mutating func press(_ button: SiriRemoteButton, at time: TimeInterval) -> [SiriRemoteAction] {
         guard down.insert(button).inserted else { return [] }
@@ -96,13 +102,15 @@ struct SiriRemoteButtons {
             return [Self.volume(button)]
         case .playPause: return [.playPause]
         case .mute: return [.mute]
-        default: return []      // Siri: nothing
+        case .siri: return siri.press(at: time).map(SiriRemoteAction.siri)
+        default: return []
         }
     }
 
     mutating func release(_ button: SiriRemoteButton, at time: TimeInterval) -> [SiriRemoteAction] {
         guard down.remove(button) != nil else { return [] }
         volume[button] = nil
+        if button == .siri { return siri.release(at: time).map(SiriRemoteAction.siri) }
         guard let key = Self.key(button), let phase = keys.release(key) else { return [] }
         return [.press(key, phase)]
     }
@@ -110,6 +118,7 @@ struct SiriRemoteButtons {
     /// Fires holds, "still held" and volume repeats that are due. A late timer gives one, not a burst.
     mutating func advance(to time: TimeInterval) -> [SiriRemoteAction] {
         var actions = keys.advance(to: time).map { SiriRemoteAction.press($0.0, $0.1) }
+        actions += siri.advance(to: time).map(SiriRemoteAction.siri)
         for button in SiriRemoteButton.allCases {
             guard let next = volume[button], next <= time + 0.001 else { continue }
             actions.append(Self.volume(button))
@@ -122,7 +131,7 @@ struct SiriRemoteButtons {
     mutating func reset() -> [SiriRemoteAction] {
         down = []
         volume = [:]
-        return keys.reset().map { .press($0.0, $0.1) }
+        return keys.reset().map { .press($0.0, $0.1) } + siri.reset().map(SiriRemoteAction.siri)
     }
 
     private static func key(_ button: SiriRemoteButton) -> PhonePresses.Key? {
@@ -715,6 +724,7 @@ extension TVController {
         case .mute: handle(.mute, from: .siriRemote)
         case .wheel(let step): handle(.wheel(step), from: .siriRemote)
         case .tap: handle(.touchTap, from: .siriRemote)
+        case .siri(let phase): handle(.siri(phase), from: .siriRemote)
         // 和手机点按区上的滑动一样交给 TrackpadGestures：焦点跟着手指走（像 Apple TV），弹出的面板里也是那里管（一次滑动走一格）
         case .swipe(let dx, let dy, let phase):
             handle(.swipe(dx: dx, dy: dy, phase: phase, focusFollowsFinger: true), from: .siriRemote)

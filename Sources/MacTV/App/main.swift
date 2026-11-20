@@ -385,6 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             guard let self else { return event }
             if event.charactersIgnoringModifiers?.lowercased() == "q" { tv.quitKeyUp() }
+            if event.keyCode == 96, tv.inputPresses.siriUp(from: .keyboard) { return nil }   // F5 (🎤): the Siri button
             guard let key = Self.button(event) else { return event }
             if key == .home, commandHDown, event.keyCode != 115 { commandHDown = false }
             return tv.inputPresses.up(key, from: .keyboard) ? nil : event
@@ -443,6 +444,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
                 if composing { return event }
                 tv.inputPresses.down(.back, from: .keyboard)
+                return nil
+            }
+            // F5 (🎤 on a Mac keyboard, when macOS's own Dictation doesn't take it) is the Siri button: pressed, Search;
+            // held, Jasmine, or dictation into the field with focus (see Jasmine)
+            if event.keyCode == 96, mods.isEmpty {
+                if !event.isARepeat { tv.inputPresses.siriDown(from: .keyboard) }
                 return nil
             }
             // The Home key (Fn-Left Arrow on a Mac keyboard) is the TV button too, as ⌘H
@@ -532,7 +539,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard tv.mode == .launcher || tv.mode == .movie || tv.activeSheet != nil else { return event }
             // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.
             // So does naming a new profile.
-            if tv.adder != nil || tv.profilePicker?.naming != nil || tv.settings?.typing == true || tv.movies?.shareForm != nil {
+            if tv.adder != nil || tv.profilePicker?.naming != nil || tv.settings?.typing == true || tv.movies?.shareForm != nil
+                || (tv.activeSheet == .search && tv.systemSearch?.row == 0) {
                 if mods == [.command], event.charactersIgnoringModifiers == "v",
                    let pasted = NSPasteboard.general.string(forType: .string) {
                     tv.handle(.text(pasted))

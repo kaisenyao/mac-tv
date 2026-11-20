@@ -135,6 +135,8 @@ final class PhonePresses {
 final class InputPresses {
     private weak var tv: TVController?
     private var timing: [Feedback.Source: PressTiming] = [:]
+    /// The Siri button on inputs that only say down and up: the keyboard's F5 (🎤), a controller's Y (see Jasmine).
+    private var siri: [Feedback.Source: SiriPress] = [:]
     private var timer: Timer?
     /// Keys whose release may never arrive as an event (H while ⌘ is held: AppKit doesn't deliver that keyUp).
     /// While one is down its physical state is checked every `watchInterval`, and it's let go as soon as it's up.
@@ -164,11 +166,30 @@ final class InputPresses {
         return true
     }
 
+    /// The Siri button went down: Jasmine hears from now, whether it turns out a press or a hold.
+    func siriDown(from source: Feedback.Source, at time: TimeInterval? = nil) {
+        let phases = siri[source, default: SiriPress(holdAfter: InputTiming.hold)].press(at: time ?? now())
+        for phase in phases { tv?.handle(.siri(phase), from: source) }
+        schedule()
+    }
+
+    /// The Siri button came up. False when it wasn't down here.
+    @discardableResult
+    func siriUp(from source: Feedback.Source, at time: TimeInterval? = nil) -> Bool {
+        guard let phases = siri[source]?.release(at: time ?? now()), !phases.isEmpty else { return false }
+        for phase in phases { tv?.handle(.siri(phase), from: source) }
+        schedule()
+        return true
+    }
+
     /// Holds and "still held" that are due by `time`.
     func advance(to time: TimeInterval) {
         for source in Array(timing.keys) {
             guard let due = timing[source]?.advance(to: time) else { continue }
             for (key, phase) in due { tv?.handle(.press(key, phase), from: source) }
+        }
+        for source in Array(siri.keys) {
+            for phase in siri[source]?.advance(to: time) ?? [] { tv?.handle(.siri(phase), from: source) }
         }
         schedule()
     }
@@ -180,6 +201,11 @@ final class InputPresses {
             let released = timing[each]?.reset() ?? []
             timing[each] = nil
             for (key, phase) in released { tv?.handle(.press(key, phase), from: each) }
+        }
+        for each in Array(siri.keys) where source == nil || each == source {
+            let cancelled = siri[each]?.reset() ?? []
+            siri[each] = nil
+            for phase in cancelled { tv?.handle(.siri(phase), from: each) }
         }
         schedule()
     }
@@ -212,7 +238,7 @@ final class InputPresses {
     private func schedule() {
         timer?.invalidate()
         timer = nil
-        guard let next = timing.values.compactMap(\.nextDeadline).min() else { return }
+        guard let next = (timing.values.map(\.nextDeadline) + siri.values.map(\.nextDeadline)).compactMap({ $0 }).min() else { return }
         let timer = Timer(timeInterval: max(0, next - now()), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { guard let self else { return }; self.advance(to: self.now()) }
         }

@@ -275,6 +275,8 @@ final class TVController: NSObject, ObservableObject {
     let browserPreferences: BrowserPreferences
     /// Toasts, the volume indicator and controller banners.
     let notices = Notices()
+    /// Jasmine (小茗同学) and the Siri button (Features/Assistant).
+    lazy var jasmine = Jasmine(tv: self)
     /// The connected game controller, if any.
     @Published var controller: ControllerInfo?
 
@@ -527,6 +529,7 @@ final class TVController: NSObject, ObservableObject {
         case .profilePicker: handleProfiles(command); return
         case .audioPicker: handleAudioPicker(command); return
         case .appSwitcher: handleAppSwitcher(command); return
+        case .search: handleSystemSearch(command); return
         case .topShelfPreferences: handleTopShelfPreferences(command); return
         case .addApp: handleAdder(command); return
         case .pairing: handlePairing(command); return
@@ -601,6 +604,12 @@ final class TVController: NSObject, ObservableObject {
             if command.wakesFromStandby { wakeFromStandby() }
             return
         }
+        // The Siri button (Jasmine, dictation, Search), and Back while Jasmine shows. Not over the screen saver.
+        if case .siri(let phase) = command {
+            if !screensaver { jasmine.siri(phase) }
+            return
+        }
+        if jasmine.takes(command) { return }
         if source == .remote || source == .siriRemote, !command.entersStandby {
             RemoteActivity.note()   // someone is using the Mac (it keeps macOS from dimming the display)
             if displaysSleeping { wakeDisplays() }   // macOS dimmed it on its own: the press wakes it and acts too

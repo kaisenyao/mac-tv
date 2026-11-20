@@ -36,6 +36,8 @@ enum RemoteCommand {
     case setting(String, Bool)
     /// 手机遥控器上的一个快捷键（见 RemoteShortcuts）：在这里不能用、现在什么都做不了的不理
     case shortcut(String)
+    /// The Siri button, from any input: down, then a tap, or a hold and its release (see Jasmine)
+    case siri(SiriPhase)
 
     init?(json: [String: Any]) {
         guard let action = json["a"] as? String else { return nil }
@@ -87,6 +89,9 @@ enum RemoteCommand {
         case "setting":
             guard let key = json["k"] as? String, let value = json["v"] as? Bool else { return nil }
             self = .setting(key, value)
+        case "siri":
+            guard let phase = (json["p"] as? String).flatMap(SiriPhase.init(rawValue:)) else { return nil }
+            self = .siri(phase)
         case "shortcut":
             guard let id = json["id"] as? String, !id.isEmpty, id.count <= 64 else { return nil }
             self = .shortcut(id)

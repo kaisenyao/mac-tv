@@ -839,6 +839,16 @@ final class NeteaseStore: ObservableObject {
 
     func stopEditing() { endEditing() }
 
+    /// Siri 键按一下：顶上的搜索选中（typing：直接开始打字，听写的字要进来）。有页面、设置盖着时不动
+    func focusSearch(typing: Bool) {
+        guard naming == nil, page == nil, !settingsOpen else { return }
+        withAnimation(Motion.focus) {
+            nowPlayingVisible = false
+            topFocus = .search
+            if typing { editing = true }
+        }
+    }
+
     private func endEditing() {
         guard typing else { return }
         editing = false

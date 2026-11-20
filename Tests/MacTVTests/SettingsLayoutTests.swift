@@ -39,7 +39,7 @@ import Testing
             tv.handleSettings(.select)
             // 24-Hour Time first; Website Player only when there's Brave to choose.
             let general: [SettingsPanel.Row] = [.twentyFourHour, .sleepTimer, .launchAtLogin, .autoSkip, .autoNext]
-            #expect(rows(tv) == general + (tv.braveInstalled ? [.websitePlayer] : []))
+            #expect(rows(tv) == general + (tv.braveInstalled ? [.websitePlayer] : []) + [.jasmine(.open)])
             let panel = try #require(tv.settings)
             #expect(rows(tv).map { tv.settingsContent($0, panel: panel, focused: false).title }.prefix(5)
                     == ["24-Hour Time", "Sleep Timer", "Open at Login", "Skip Intros, Recaps and Ads", "Autoplay Next Episode"])
