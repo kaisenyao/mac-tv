@@ -53,21 +53,13 @@ struct HomeView: View {
                 // An expanded banner takes the whole screen; the dock slides away, off the bottom.
                 .offset(y: gridOffset)
 
-            if !tv.inGrid && !shelfFocused && tv.shelfCount > 0 {
-                Image(systemName: "chevron.compact.up")
-                    .font(.system(size: 40, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .position(x: canvas.width / 2, y: layout.dockFrame.minY - 30)
-                    .transition(.opacity)
-            }
-
             // The status row: always the same pills, Control Center or not. Up from the Top Shelf focuses it;
             // Left and Right move along it, skipping the clock.
             GlassGroup { HStack(spacing: 14) {
                 // While the Mac can't sleep with its lid closed, say so where it's always seen.
                 if tv.lidSleepOff {
                     let focused = tv.focus == .status(.lid)
-                    Label("Lid sleep off", systemImage: "moon.zzz")
+                    Label("Lid Sleep Off", systemImage: "moon.zzz")
                         .font(.tv(.caption2))
                         .padding(.horizontal, 20)
                         .frame(height: 50)
@@ -76,9 +68,6 @@ struct HomeView: View {
                         .contentShape(Capsule())
                         .onTapGesture { tv.activateStatus(.lid) }
                         .tvGlassID("lid", in: pills)
-                }
-                if let controller = tv.controller {
-                    ControllerHints(info: controller).tvGlassID("controller", in: pills)
                 }
                 // Control Center: white while it's open or focused, like Apple TV's.
                 let lit = tv.focus == .status(.controlCenter) || tv.controlCenter != nil
@@ -99,7 +88,6 @@ struct HomeView: View {
             } }
                 .animation(Motion.focus, value: tv.focus)
                 .animation(Motion.appear, value: tv.lidSleepOff)
-                .animation(Motion.appear, value: tv.controller)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.trailing, 96)
                 .padding(.top, 56)
@@ -211,7 +199,7 @@ struct AppCell: View {
                         .padding(9)
                         .background(.black.opacity(0.7), in: Circle())
                         .padding(10)
-                        .accessibilityLabel("Favourite")
+                        .accessibilityLabel("Favorite")
                         .allowsHitTesting(false)
                 }
             }
@@ -331,24 +319,20 @@ struct AppTile: View {
                     .frame(width: 126, height: 126)
                     .clipShape(RoundedRectangle(cornerRadius: 23, style: .continuous))
             }
+        } else if service.id == DedaoStore.appID, let owl = DedaoTile.owl {
+            // 得到那只完整的猫头鹰（耳朵、翅膀、爪子都在；Icons/dedao-owl.png，去掉了底色），
+            // 直接站在得到的那种橙色上，看不出边界
+            ZStack {
+                LinearGradient(colors: [Color(hex: "#FF8A1C"), Color(hex: "#F26C00")], startPoint: .top, endPoint: .bottom)
+                Image(nsImage: owl).resizable().interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .padding(.vertical, 9)
+            }
         } else if service.id == NeteaseStore.appID, let art = Icons.image(for: service) {
             // 你给的红底白标图：铺满卡片，多出来的红边裁掉
             Color(hex: "#E60012")
                 .overlay { Image(nsImage: art).resizable().interpolation(.high).aspectRatio(contentMode: .fill) }
                 .clipped()
-        } else if service.id == NeteaseStore.appID, let icon = NeteaseStore.appIcon {
-            // 本机网易云音乐的应用图标，四周用它的红色补满
-            ZStack {
-                Color(hex: "#E60012")
-                Image(nsImage: icon).resizable().interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 150, height: 150)
-            }
-        } else if service.id == NeteaseStore.appID {
-            ZStack {
-                LinearGradient(colors: [Color(hex: "#F5323C"), Color(hex: "#C20C0C")], startPoint: .top, endPoint: .bottom)
-                Image(systemName: "music.note").font(.system(size: 78, weight: .bold)).foregroundStyle(.white)
-            }
         } else if let tile = Icons.tile(for: service) {
             Image(nsImage: tile).resizable().interpolation(.high)
         } else {
@@ -361,3 +345,10 @@ struct AppTile: View {
 }
 
 // MARK: Top Shelf
+
+/// 得到在主屏上的那只猫头鹰（去掉了底色的，见上面的卡片）
+@MainActor
+enum DedaoTile {
+    static let owl: NSImage? = Bundle.main.url(forResource: "dedao-owl.png", withExtension: nil, subdirectory: "Icons")
+        .flatMap(NSImage.init(contentsOf:))
+}

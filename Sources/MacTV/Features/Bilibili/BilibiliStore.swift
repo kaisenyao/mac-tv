@@ -3,47 +3,97 @@ import Combine
 import SwiftUI
 import WebKit
 
-/// 哔哩哔哩原生页面的状态：顶部几个标签、每个标签下的几排内容、焦点位置、登录情况。
+/// 哔哩哔哩原生页面的状态：左边栏的几页、每一页的几排内容、焦点位置、登录情况。
 ///
-/// 结构学的是 Apple TV 自家的应用：顶部一行文字标签，下面是一排排大卡片。
-/// 内容够用但不堆：首页只放最常看的三排，其余按"关注 / 发现 / 我的"分开。
+/// 结构学的是 Apple TV 自家的应用：左边一列导航，右边是一排排大卡片。
+/// 首页是继续观看、推荐、热门和几个榜单；关注、直播、我的各是一页，搜索单独一页。
 @MainActor
 final class BilibiliStore: ObservableObject {
     static let appID = "bilibili"
     static let loginID = "bilibili-login"
 
     enum Tab: String, CaseIterable, Identifiable {
-        case search, home, following, discover, mine
+        case search, home, following, live, mine
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .search: "magnifyingglass"
             case .home: "house.fill"
             case .following: "person.2.fill"
-            case .discover: "flame.fill"
+            case .live: "dot.radiowaves.left.and.right"
             case .mine: "person.crop.circle.fill"
             }
         }
         var title: String {
             switch self {
             case .home: "首页"
-            case .following: "关注"
-            case .discover: "发现"
+            case .following: "动态"
+            case .live: "直播"
             case .mine: "我的"
             case .search: "搜索"
             }
         }
     }
 
+    /// 卡片排里的一项
     enum Item: Hashable {
         case video(BiliVideo)
-        case login, refresh, settings, logout
-        /// 退出登录的确认：先问一次，默认停在"取消"上
-        case keepLogin, confirmLogout
         /// 一个 UP 主（搜索结果里），按确认进他的主页
         case user(BiliUser)
+        /// 没登录时占位的"扫码登录"、没有关注时的"刷新"
+        case login, refresh
         /// 这一排暂时没有内容时占位的一张卡片，只显示一句话，按了没反应
         case empty(String)
+        /// 搜索页下面：一个搜过的词、一条热搜、"清空"搜索历史
+        case keyword(String)
+        case trend(BiliTrend)
+        case clearHistory
+
+        /// 内容刷新后按它找回原来选中的那一项（视频的播放数、进度会变，不能整个比）
+        var id: String {
+            switch self {
+            case .video(let video): "video-\(video.bvid)"
+            case .user(let user): "user-\(user.mid)"
+            case .login: "login"
+            case .refresh: "refresh"
+            case .empty(let text): "empty-\(text)"
+            case .keyword(let word): "keyword-\(word)"
+            case .trend(let trend): "trend-\(trend.keyword)"
+            case .clearHistory: "clear-history"
+            }
+        }
+    }
+
+    /// 右上角头像菜单里的一项
+    enum AccountAction: Hashable {
+        case login, refresh, settings, logout
+        /// "切换账号"：菜单换成登录过的账号列表；选一个就换过去，"添加账号"登录一个新的
+        case switchAccount, useAccount(Int), addAccount
+        /// 退出登录的确认：先问一次，默认停在"取消"上
+        case keepLogin, confirmLogout
+    }
+
+    /// 头像菜单的哪一层：平常那几项、登录过的账号列表、退出登录的确认
+    enum AccountMenu: Hashable { case main, accounts, confirmLogout }
+
+    /// 焦点在哪。同一时刻只在一处（以前是好几个各管各的开关，会凑出"搜索框和卡片同时选中"这样不可能的组合）
+    enum Focus: Hashable {
+        /// 下面的卡片排。在 UP 主的主页里是三个排序或下面的视频（看 UpPage.browsing）
+        case rows
+        /// 左边栏（在最左一张卡片上再按左）
+        case sidebar
+        /// 右上角的头像（在最上面一排再按上），以及它下面打开的菜单
+        case account
+        case accountMenu(AccountMenu)
+        /// 搜索框：选中了还没打字 / 正在输入（键盘交给输入框，这样中文输入法才能用）
+        case searchField
+        case typing
+        /// 设置页（头像菜单里的"设置"）
+        case settings
+        /// 视频卡片上长按确认弹出的小菜单
+        case cardMenu
+        /// UP 主主页上的关注按钮
+        case follow
     }
 
     struct Row: Identifiable, Hashable {
@@ -53,16 +103,52 @@ final class BilibiliStore: ObservableObject {
     }
 
     @Published private(set) var tab: Tab = .home
-    /// 焦点在左边栏上（在最左一张卡片上再按左）
-    @Published private(set) var headerFocused = false
-    /// 焦点在右上角的头像上（在最上面一排再按上）
-    @Published private(set) var accountFocused = false
-    /// 头像下面的账号菜单开着，以及选中了第几项
-    @Published private(set) var accountMenuOpen = false { didSet { if !accountMenuOpen { confirmingLogout = false } } }
+    @Published private(set) var focus: Focus = .rows {
+        didSet {
+            guard focus != oldValue else { return }
+            // 离开输入框：键盘还给页面
+            if oldValue == .typing { tv?.window?.makeFirstResponder(nil) }
+            // 离开关注按钮："再按一次取消关注"作废；到了关注按钮上，上半屏是 UP 主的头像和排序（不是视频的标题）
+            if oldValue == .follow { upPage?.armed = false }
+            if focus == .follow { upPage?.browsing = false }
+            if case .accountMenu(let level) = focus { accountMenuShown = level }
+        }
+    }
+    /// 头像菜单最近一次开着的是哪一层：收起的动画里还照它画，不会在收起的途中变成另外几项
+    private var accountMenuShown = AccountMenu.main
+    /// 头像菜单里选中了第几项
     @Published private(set) var accountIndex = 0
-    var accountActions: [Item] { account == nil ? [.login] : (confirmingLogout ? [.keepLogin, .confirmLogout] : [.refresh, .settings, .logout]) }
-    /// 头像菜单换成了"取消 / 退出登录"两项（菜单一收起就回到原样）
-    @Published private(set) var confirmingLogout = false
+    /// 头像菜单里现在的几项（菜单一直画着，收着时是收起之前的那几项）
+    var accountActions: [AccountAction] {
+        let menu: AccountMenu = if case .accountMenu(let level) = focus { level } else { accountMenuShown }
+        switch menu {
+        case .accounts: return savedAccounts.map { .useAccount($0.mid) } + [.addAccount]
+        case .confirmLogout: return [.keepLogin, .confirmLogout]
+        case .main:
+            // 没登录：扫码登录，下面是登录过的账号（点一下直接换过去）
+            guard account != nil else { return [.login] + savedAccounts.map { .useAccount($0.mid) } }
+            return [.refresh, .switchAccount, .settings, .logout]
+        }
+    }
+    /// 登录过的账号（名字、头像；登录信息在钥匙串里，见 BiliAccounts）
+    @Published private(set) var savedAccounts = BiliAccounts.list()
+    /// 左边栏里藏起来的几页（设置里的"左边栏显示"；首页一直都在）
+    @Published private(set) var hiddenTabs = BiliSidebar.hidden
+    /// 左边栏里显示的几页，按顺序
+    var visibleTabs: [Tab] { Tab.allCases.filter { !hiddenTabs.contains($0) } }
+
+    // 给页面用的几个问法，都从 focus 来
+    var sidebarFocused: Bool { focus == .sidebar }
+    /// 头像亮着：选中了它，或者它下面的菜单开着
+    var accountFocused: Bool { focus == .account || accountMenuOpen }
+    var accountMenuOpen: Bool { if case .accountMenu = focus { true } else { false } }
+    var searchFocused: Bool { focus == .searchField }
+    var editing: Bool { focus == .typing }
+    var settingsOpen: Bool { focus == .settings }
+    var cardMenu: [CardAction]? { focus == .cardMenu ? cardMenuActions : nil }
+    var followFocused: Bool { focus == .follow }
+    /// UP 主页上，焦点在三个排序上
+    var sortFocused: Bool { focus == .rows && upPage.map { !$0.browsing } == true }
 
     /// 正在看的某个 UP 主的主页（从搜索结果或卡片菜单进来）。它盖在当前这一页上，按 Esc 回去。
     /// 关注按钮在页面上方、名字旁边（第一排再按上才到），不放在视频那一排里，免得误触。
@@ -80,27 +166,33 @@ final class BilibiliStore: ObservableObject {
         var row = 0
         var loading = true
         var sort = Sort.latest
-        var sortFocused = true
+        /// 往下到了视频那一排（焦点在卡片排上时：false 是在三个排序上）
         var browsing = false
+        /// 取到过的几种排法（取失败的不记，下次换过去再取）
         var lists: [Sort: [BiliVideo]] = [:]
-        /// 焦点在关注按钮上；armed = 已经按过一次"取消关注"，再按一次才真的取消
-        var followFocused = false
+        /// 已经在关注按钮上按过一次"取消关注"，再按一次才真的取消
         var armed = false
         /// 从看视频时右边的面板进来的：返回时回到这个视频（带着刚才看到的位置）接着放
         var returnTo: BiliVideo?
+        /// 他现在正在直播：这一排最前面放他的直播间（从看过的直播进来，能直接接着看）
+        var live: BiliVideo?
     }
-    @Published private(set) var upPage: UpPage?
+    @Published private(set) var upPage: UpPage? {
+        didSet {
+            // 主页收起来了：焦点不能还停在它的关注按钮上
+            if upPage == nil, focus == .follow { focus = contentFocus }
+        }
+    }
 
     /// 在视频卡片上长按确认弹出的小菜单
     enum CardAction: Hashable { case upPage, favorite, watchLater }
-    @Published private(set) var cardMenu: [CardAction]?
+    /// 菜单里有哪几项、选中了第几项（只在 focus 是 .cardMenu 时有意义）
+    @Published private(set) var cardMenuActions: [CardAction] = []
     @Published private(set) var cardMenuIndex = 0
     /// 菜单是为哪个视频打开的（执行时用它，不用"当前焦点"，免得列表在后台刷新后加错视频）
     private var cardMenuVideo: BiliVideo?
     private var emptyPages: [String: Int] = [:]
     private var signingKey: (key: String, at: Date)?
-    /// 正在输入搜索词：键盘交给输入框（这样中文输入法才能用）
-    @Published private(set) var editing = false
     @Published var query = ""
     @Published private(set) var content: [Tab: [Row]] = [:]
     @Published private(set) var rowIndex: [Tab: Int] = [:]
@@ -108,6 +200,9 @@ final class BilibiliStore: ObservableObject {
     @Published private(set) var loadingTabs: Set<Tab> = []
     @Published private(set) var failedTabs: Set<Tab> = []
     @Published private(set) var account: BiliAccount?
+    /// 每次清掉登录（退出、切换账号、换了 Mac TV 的用户）就加一。在路上的请求回来时对一下：
+    /// 不一样了就是上一个账号的东西，扔掉，不写进页面、不记到别的账号名下
+    private var loginEpoch = 0
 
     weak var tv: TVController? { didSet { wirePlayer() } }
     // MARK: 交互区域（规则见 TVController.Module）
@@ -122,18 +217,27 @@ final class BilibiliStore: ObservableObject {
             if player.relatedVisible { return .strip }
             return player.qualityMenuVisible ? .picker : .scrub
         }
-        if editing { return horizontal ? .off : .drawer }
-        if settingsOpen { return horizontal ? .off : .picker }                  // 设置：固定的几行
-        if cardMenu != nil || accountMenuOpen { return .picker }               // 菜单：固定的几项
+        // 头像、搜索框的上下跟着它们下面那一块走（一去一回方向相反）：下面是搜索页的搜索历史和热搜（光标）时，
+        // 往上滑上去、往下滑回来；下面是视频排（内容跟着手走）时，往下滑上去、往上滑回来
+        let aboveContent: TVController.Module = showingLanding ? .picker : .drawer
+        switch focus {
+        case .typing: return horizontal ? .off : aboveContent
+        case .searchField: return horizontal ? .picker : aboveContent   // 搜索框：一个固定的东西
+        case .settings: return horizontal ? .off : .picker               // 设置：固定的几行
+        case .cardMenu, .accountMenu: return .picker                      // 菜单：固定的几项
         // 左边栏是从左边拉出来的抽屉（像 Mac 右边的通知中心）：往右滑拉出来，往左滑推回去，再往右滑不动；
         // 在里面上下是挑一项（光标）
-        if headerFocused { return horizontal ? .drawer : .picker }
-        // 右上角头像、UP 主页的关注按钮和三个排序：和下面的视频排在同一列里，上下跟视频排一样是"内容跟着手走"——
-        // 往下滑上到头像，往上滑回到视频（一去一回方向相反，和底下的视频排对称）。
-        // 头像、关注按钮往右滑是把左边栏拉出来；三个排序左右是挑一个
-        if accountFocused || upPage?.followFocused == true { return .drawer }
-        if let page = upPage, page.sortFocused, !page.browsing { return horizontal ? .picker : .drawer }
-        return horizontal ? .strip : .drawer                                    // 视频排：横着是长条，上下换排
+        case .sidebar: return horizontal ? .drawer : .picker
+        // 右上角头像、UP 主页的关注按钮：往右滑是把左边栏拉出来；上下见上面（关注按钮下面是三个排序，和视频排一样）
+        case .account: return horizontal ? .drawer : aboveContent
+        case .follow: return .drawer
+        case .rows:
+            // UP 主页的三个排序：左右是挑一个；上下和视频排一样（往下滑上到关注按钮）
+            if sortFocused { return horizontal ? .picker : .drawer }
+            // 搜索页的搜索历史和热搜：选项不动、白色高亮在动，两个方向都是挑一个
+            if showingLanding { return .picker }
+            return horizontal ? .strip : .drawer                                    // 视频排：横着是长条，上下换排
+        }
     }
 
     func flickCanMove(_ direction: RemoteCommand.Direction) -> Bool {
@@ -147,10 +251,11 @@ final class BilibiliStore: ObservableObject {
             default: return false
             }
         }
-        guard !headerFocused, !accountFocused, cardMenu == nil, rows.indices.contains(row) else { return false }
+        guard focus == .rows, !sortFocused, rows.indices.contains(row) else { return false }
         switch direction {
-        case .left: return column > 0                              // 到第一张就停，不进左边栏
-        case .right: return column < rows[row].items.count - 1
+        // 到第一张就停，不进左边栏；热搜是一条接一条的（1 到 10），在一排的两头也能接着走
+        case .left: return column > 0 || (isHotRow(row) && isHotRow(row - 1))
+        case .right: return column < rows[row].items.count - 1 || (isHotRow(row) && isHotRow(row + 1))
         default: return false
         }
     }
@@ -177,28 +282,30 @@ final class BilibiliStore: ObservableObject {
     var column: Int { rows.indices.contains(row) ? column(of: rows[row]) : 0 }
     /// 这一排选中的是第几个（内容被刷新变短时不会越界）
     func column(of row: Row) -> Int { max(0, min(columns[row.id] ?? 0, row.items.count - 1)) }
+    /// 焦点所在的那张卡片（焦点在卡片排上才有；UP 主页上要往下到了视频那一排）
     var focused: Item? {
-        guard !headerFocused, !accountFocused, upPage?.followFocused != true, upPage?.browsing != false,
-              rows.indices.contains(row), rows[row].items.indices.contains(column) else { return nil }
-        return rows[row].items[column]
+        guard focus == .rows, !sortFocused else { return nil }
+        return highlighted
     }
     /// 当前这一排选中的那一项，不管焦点是不是暂时去了左边栏（上半屏的标题和背景用它，免得一开栏就换内容）
     var highlighted: Item? {
         guard rows.indices.contains(row), rows[row].items.indices.contains(column) else { return nil }
         return rows[row].items[column]
     }
-    /// 给按键音用：焦点变了才出声
+    /// 回到右边的内容时焦点去哪：搜索页上还没有内容（只有一个搜索框）就停在搜索框上
+    private var contentFocus: Focus { tab == .search && upPage == nil && rows.isEmpty ? .searchField : .rows }
+    /// 看起来焦点在哪：刚按了搜索、结果还没出来时，焦点已经在（还空着的）结果上，看起来选中的还是搜索框
+    var shownFocus: Focus { focus == .rows && contentFocus == .searchField ? .searchField : focus }
+    /// 给按键音和震动用：看得见的焦点动了一格，它就变一次（走不动、看不出变化时不变，不出声）
     var focusKey: String {
-        "\(tab.rawValue)-\(headerFocused)-\(row)-\(column)-\(rows.count)-\(player.current?.bvid ?? "")"
+        "\(tab.rawValue)-\(shownFocus)-\(row)-\(column)-\(rows.count)-\(player.current?.bvid ?? "")"
             // 播放器里的清晰度栏、底下那排视频也算：在里面左右走才有按键声
             + "-\(player.qualityMenuVisible)-\(player.qualityIndex)-\(player.relatedVisible)-\(player.relatedIndex)"
             + "-\(player.panelVisible)-\(player.panelIndex)-\(String(describing: player.panelList))-\(player.panelListIndex)"
             + "-\(player.shelf)-\(player.episodeFocus)"
-            + "-\(settingsOpen)-\(settingIndex)-\(String(describing: settingList))-\(settingListIndex)"
-            + "-\(accountFocused)-\(accountMenuOpen)-\(accountIndex)-\(confirmingLogout)-\(cardMenu?.count ?? 0)-\(cardMenuIndex)"
-            // 左边栏的高亮（上下滑时先动它，停一下才换页）、UP 主页的排序和关注、搜索框
-            + "-\(sidebarTab.rawValue)-\(editing)-\(upPage?.sort.rawValue ?? -1)-\(upPage?.sortFocused ?? false)"
-            + "-\(upPage?.followFocused ?? false)-\(upPage?.browsing ?? false)"
+            + "-\(settingIndex)-\(String(describing: settingList))-\(settingListIndex)-\(accountIndex)-\(cardMenuIndex)"
+            // 左边栏的高亮（上下滑时先动它，停一下才换页）、UP 主页的排序、往下到没到视频
+            + "-\(sidebarTab.rawValue)-\(upPage?.sort.rawValue ?? -1)-\(upPage?.browsing ?? false)"
             // 看视频时键盘左右是快进快退十秒：进度也算，这样每一下都有声音
             + "-\(Int(player.time))"
     }
@@ -244,41 +351,104 @@ final class BilibiliStore: ObservableObject {
     /// 把每一页的内容都提前取好（应用启动时、每次进哔哩哔哩时）。
     /// 已经有内容的页先照旧显示，后台悄悄换成新的，所以切换左边栏时不用等。
     func preload() {
-        for tab in Tab.allCases where isStale(tab) { load(tab) }
+        for tab in visibleTabs where isStale(tab) { load(tab) }   // 左边栏里藏起来的页不取
+        if !hiddenTabs.contains(.search), content[.search]?.isEmpty ?? true { showLanding() }
+    }
+
+    // MARK: 搜索页：搜索历史、热搜
+
+    private var trends: [BiliTrend] = []
+    private var trendsAt = Date.distantPast
+    /// "清空"按过一次了：再按一次才真的清
+    @Published private(set) var clearArmed = false
+
+    /// 这一排是热搜（两条一排，按 1、2、3……的顺序左右走）
+    private func isHotRow(_ index: Int) -> Bool {
+        showingLanding && rows.indices.contains(index) && rows[index].id.hasPrefix("hot-")
+    }
+
+    /// 搜索页现在摆的是搜索历史和热搜（不是搜索结果）
+    var showingLanding: Bool {
+        tab == .search && upPage == nil && (content[.search]?.first.map { Self.isLandingRow($0.id) } ?? false)
+    }
+
+    private static func isLandingRow(_ id: String) -> Bool { id == "search-history" || id.hasPrefix("hot-") }
+
+    /// 搜索历史一排（最近的六个，后面一个"清空"），热搜两列五行。热搜十分钟内取过就不再取
+    func showLanding() {
+        clearArmed = false
+        replaceRows(landingRows(), for: .search)
+        guard Date().timeIntervalSince(trendsAt) > 600 else { return }
+        Task { @MainActor in
+            let found = await BiliAPI.trending(cookie: await self.cookieHeader())
+            guard !found.isEmpty else { return }
+            self.trends = found
+            self.trendsAt = Date()
+            // 搜索页上摆的还是搜索历史和热搜（不是搜索结果，也不是正在搜）：换上新的热搜
+            let rows = self.content[.search] ?? []
+            guard !self.loadingTabs.contains(.search), rows.first.map({ Self.isLandingRow($0.id) }) ?? true else { return }
+            self.replaceRows(self.landingRows(), for: .search)
+        }
+    }
+
+    private func landingRows() -> [Row] {
+        var rows: [Row] = []
+        let history = Array(BiliSearchHistory.all.prefix(6))
+        if !history.isEmpty { rows.append(Row(id: "search-history", title: "搜索历史", items: history.map(Item.keyword) + [.clearHistory])) }
+        let hot = Array(trends.prefix(10))
+        for start in stride(from: 0, to: hot.count, by: 2) {
+            rows.append(Row(id: "hot-\(start / 2)", title: start == 0 ? "热搜" : "", items: hot[start..<min(start + 2, hot.count)].map(Item.trend)))
+        }
+        return rows
     }
 
     private func isStale(_ tab: Tab) -> Bool {
         tab != .search && Date().timeIntervalSince(loadedAt[tab] ?? .distantPast) > 600
     }
 
-    func reload() {
+    /// 重新取。登录信息也重新读（刚在登录页登录完、刚换了账号，记着的那份已经不对了）。
+    /// byUser：人自己按的"刷新"，没取到时说一声（后台刷新不说）
+    func reload(byUser: Bool = false) {
+        forgetCookies()
         loadedAt = [:]
-        load(tab == .search ? .home : tab)
+        load(tab == .search ? .home : tab, byUser: byUser)
     }
 
-    private func load(_ target: Tab) {
+    private func load(_ target: Tab, byUser: Bool = false) {
         guard target != .search, !loadingTabs.contains(target) else { return }
         loadingTabs.insert(target)
         failedTabs.remove(target)
+        let epoch = loginEpoch
         Task { @MainActor in
-            let cookie = await cookieHeader()
+            let jar = await cookieJar()
+            let cookie = jar.header
             // 账号信息和内容一起取，不排队；只有第一次（还不知道是谁）才先等它
             async let me = BiliAPI.account(cookie: cookie)
             let known = self.account
-            let account = known != nil ? known : await me
-            if known == nil { self.account = account }
+            var account = known
+            if known == nil {
+                let answer = await me
+                guard epoch == self.loginEpoch else { return }
+                if case .signedIn(let fresh) = answer { self.adopt(fresh, cookies: jar.cookies); account = fresh }
+            }
             var built: [Row] = []
             func add(_ id: String, _ title: String, _ videos: [BiliVideo]) {
                 if !videos.isEmpty { built.append(Row(id: id, title: title, items: videos.map(Item.video))) }
             }
             switch target {
             case .home:
+                // 首页：继续观看、推荐、热门，接着是原来"发现"里的排行榜、每周必看、入站必刷
                 async let recent = BiliAPI.history(cookie: cookie)
                 async let picks = BiliAPI.recommended(cookie: cookie)
                 async let hot = BiliAPI.popular(cookie: cookie)
+                async let ranked = BiliAPI.ranking(cookie: cookie)
+                async let week = BiliAPI.weekly(cookie: cookie)
+                async let best = BiliAPI.classics(cookie: cookie)
                 let (history, recommended, popular) = await (recent, picks, hot)
+                let (ranking, weekly, classics) = await (ranked, week, best)
                 // 历史记录不带播放数：给"继续观看"最前面的几个补上（补不到就不显示，不影响别的）
-                var unfinished = history.filter { $0.progress != -1 }
+                // 继续观看只放视频（看过的直播间在"我的"那页的历史记录里）
+                var unfinished = history.filter { $0.progress != -1 && !$0.isRoom }
                 if let key = await currentSigningKey(cookie: cookie) {
                     let head = Array(unfinished.prefix(8))
                     let counts = await withTaskGroup(of: (String, Int).self) { group in
@@ -294,11 +464,13 @@ final class BilibiliStore: ObservableObject {
                 add("continue", "继续观看", unfinished)
                 add("recommended", "推荐", recommended)
                 add("popular", "热门", popular)
-                if built.isEmpty { self.failedTabs.insert(.home) }
+                add("ranking", "排行榜", ranking)
+                add("weekly", "每周必看", weekly)
+                add("classics", "入站必刷", classics)
             case .following:
                 // 每个关注的 UP 主一排（全部都有，不管最近更没更新），谁最近更新谁在前
                 let people = await BiliAPI.followings(mid: account?.mid ?? 0, cookie: cookie)
-                if let key = await currentSigningKey(cookie: cookie), !people.isEmpty {
+                if !people.isEmpty, let key = await currentSigningKey(cookie: cookie) {
                     var results: [(Int, String, [BiliVideo], Int)] = []
                     // 一次最多同时取 5 个人的，取太猛会被风控，结果是某些人的那一排悄悄不见
                     let list = Array(people.prefix(40))
@@ -323,20 +495,19 @@ final class BilibiliStore: ObservableObject {
                     built.append(Row(id: "following-empty", title: account == nil ? "登录后查看" : "暂无关注",
                                      items: account == nil ? [.login] : [.refresh]))
                 }
-            case .discover:
-                async let ranked = BiliAPI.ranking(cookie: cookie)
-                async let week = BiliAPI.weekly(cookie: cookie)
-                async let best = BiliAPI.classics(cookie: cookie)
-                let (ranking, weekly, classics) = await (ranked, week, best)
-                add("ranking", "排行榜", ranking)
-                add("weekly", "每周必看", weekly)
-                add("classics", "入站必刷", classics)
-                if built.isEmpty { self.failedTabs.insert(.discover) }
+            case .live:
+                // 直播：关注的主播里正在播的（登录后），再是推荐直播和各分区正热的
+                async let mine = BiliAPI.liveFollowing(cookie: cookie)
+                async let index = BiliAPI.liveIndex(cookie: cookie)
+                let (following, areas) = await (mine, index)
+                add("live-following", "关注的主播", following)
+                for (index, area) in areas.enumerated() { add("live-\(index)", area.title, area.rooms) }
             case .mine:
                 async let recent = BiliAPI.history(cookie: cookie, count: 30)
                 async let saved = BiliAPI.favorites(mid: account?.mid ?? 0, cookie: cookie)
                 async let later = BiliAPI.watchLater(cookie: cookie)
                 let (history, favorites, watchLater) = await (recent, saved, later)
+                // 历史记录：看过的视频和直播间。直播间在播的直接进去看，没在播的写"未开播"、选它进主播的主页
                 add("history", "历史记录", history)
                 // 收藏：每个收藏夹一排。"收藏"这一栏登录后一直都在，里面还没有东西时放一张占位卡片说明
                 let filled = favorites.filter { !$0.videos.isEmpty }
@@ -351,37 +522,96 @@ final class BilibiliStore: ObservableObject {
                 if account == nil { built.append(Row(id: "account", title: "登录后查看", items: [.login])) }
             case .search: break
             }
+            var signedOut = false
             if known != nil {
-                // 顺便更新登录状态。取不到不等于没登录（可能只是网络抖了一下）：登录信息还在就保持原样
-                if let fresh = await me { self.account = fresh }
-                else if !cookie.contains("SESSDATA=") { self.account = nil }
+                // 顺便更新登录状态。确实没登录了（在别处退出、过期了）才算没登录，别的页下次进去也重新取；
+                // 问不到不等于没登录（可能只是网络抖了一下），保持原样
+                let answer = await me
+                guard epoch == self.loginEpoch else { return }
+                switch answer {
+                case .signedIn(let fresh): self.adopt(fresh, cookies: jar.cookies)
+                case .signedOut:
+                    self.account = nil
+                    self.loadedAt = [:]
+                    signedOut = true
+                case .unknown: break
+                }
             }
-            if target == .home {   // 首页重新取过，翻页从头算
-                for id in ["recommended", "popular"] { self.pages[id] = 1; self.exhausted.remove(id) }
-            }
-            self.content[target] = built
-            self.loadedAt[target] = Date()
+            guard epoch == self.loginEpoch else { return }   // 取的途中退出、换了账号：这些是上一个账号的
             self.loadingTabs.remove(target)
+            if !signedOut, Self.hasVideos(self.content[target] ?? []), !Self.hasVideos(built) {
+                // 刷新什么都没取到（多半是网络抖了一下）：原来的留着，下次进来再取
+                if byUser, self.tv?.bilibiliOpen == true, self.tab == target, self.upPage == nil { self.tv?.showToast("无法刷新") }
+            } else {
+                if target == .home {   // 首页重新取过，翻页从头算
+                    for id in ["recommended", "popular"] { self.pages[id] = 1; self.exhausted.remove(id) }
+                }
+                // 第一次取到：一排排渐渐出来；后台刷新：原地换上，不动
+                let first = (self.content[target] ?? []).isEmpty
+                withAnimation(first ? Motion.navigate : nil) { self.replaceRows(built, for: target) }
+                if built.isEmpty { self.failedTabs.insert(target) } else { self.loadedAt[target] = Date() }
+            }
             self.warmFocused()
+        }
+    }
+
+    private static func hasVideos(_ rows: [Row]) -> Bool {
+        rows.contains { $0.items.contains { if case .video = $0 { true } else { false } } }
+    }
+
+    /// 换上新取到的几排。焦点留在原来那一排、原来那一项上：按编号找，不按第几排第几个
+    /// （新内容里排的顺序、个数可能变了，比如刚看过的视频挪到了"继续观看"的最前面）
+    private func replaceRows(_ rows: [Row], for target: Tab) {
+        let old = content[target] ?? []
+        let at = min(rowIndex[target] ?? 0, max(0, old.count - 1))
+        let focusedRow = old.indices.contains(at) ? old[at] : nil
+        let focusedItem = focusedRow.flatMap { row in row.items.isEmpty ? nil : row.items[column(of: row)] }
+        content[target] = rows
+        guard let focusedRow, let index = rows.firstIndex(where: { $0.id == focusedRow.id }) else {
+            rowIndex[target] = min(at, max(0, rows.count - 1))
+            return
+        }
+        rowIndex[target] = index
+        if let focusedItem, let column = rows[index].items.firstIndex(where: { $0.id == focusedItem.id }) {
+            columns[focusedRow.id] = column
         }
     }
 
     /// 请求签名用的密钥，半小时内重复用同一个
     private func currentSigningKey(cookie: String) async -> String? {
         if let cached = signingKey, Date().timeIntervalSince(cached.at) < 1800 { return cached.key }
+        let epoch = loginEpoch
         guard let key = await BiliAPI.signingKey(cookie: cookie) else { return nil }
-        signingKey = (key, Date())
+        if epoch == loginEpoch { signingKey = (key, Date()) }
         return key
     }
 
-    /// 读到的登录信息记一会儿：每个请求都去问网页那边要，既慢又要一直开着一个隐形网页
-    private var cookieCache: (value: String, at: Date)?
+    // MARK: 登录信息（cookie）
 
-    /// 登录状态存在这个应用自己的网页数据里（和内置网页共用）；这里只把它带给请求。
-    /// fresh = 不用记着的，现在去读（等登录、退出登录时用）
-    private func cookieHeader(fresh: Bool = false) async -> String {
-        if !fresh, let cached = cookieCache, Date().timeIntervalSince(cached.at) < 600 { return cached.value }
-        guard let profile = tv?.profile else { return "" }
+    /// 读到的哔哩哔哩 cookie：原样的（记账号时存进钥匙串）和拼好的请求头（带给请求）
+    private struct CookieJar {
+        var cookies: [HTTPCookie] = []
+        var header: String { cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ") }
+    }
+
+    /// 读到的登录信息记一会儿：每个请求都去问网页那边要，既慢又要一直开着一个隐形网页
+    private var cookieCache: (jar: CookieJar, at: Date)?
+    /// 每次作废记着的登录信息就加一：作废之前就开始读的，读回来也不再记（读到的可能是作废之前的样子）
+    private var cookieGeneration = 0
+
+    private func forgetCookies() {
+        cookieCache = nil
+        cookieGeneration += 1
+    }
+
+    private func cookieHeader(fresh: Bool = false) async -> String { await cookieJar(fresh: fresh).header }
+
+    /// 登录状态存在这个应用自己的网页数据里（和内置网页共用）；这里只把哔哩哔哩的那几个带给请求。
+    /// fresh = 不用记着的，现在去读（等登录、换账号时用）
+    private func cookieJar(fresh: Bool = false) async -> CookieJar {
+        if !fresh, let cached = cookieCache, Date().timeIntervalSince(cached.at) < 600 { return cached.jar }
+        guard let profile = tv?.profile else { return CookieJar() }
+        let generation = cookieGeneration
         let store = profile.websiteDataStore.httpCookieStore
         var cookies = await store.allCookies()
         if cookies.isEmpty {
@@ -398,24 +628,25 @@ final class BilibiliStore: ObservableObject {
                 cookies = await store.allCookies()
             }
         }
-        var mine = cookies.filter { $0.domain.hasSuffix("bilibili.com") }
-        if mine.isEmpty, profile.websiteDataStore == WKWebsiteDataStore.default() {
+        var jar = CookieJar(cookies: cookies.filter(\.isBilibili))
+        if jar.cookies.isEmpty, profile.websiteDataStore == WKWebsiteDataStore.default() {
             // 默认数据仓库和系统的 cookie 存储是同一份文件，直接从那里读
-            mine = (HTTPCookieStorage.shared.cookies ?? []).filter { $0.domain.hasSuffix("bilibili.com") }
+            jar.cookies = (HTTPCookieStorage.shared.cookies ?? []).filter(\.isBilibili)
         }
-        let value = mine.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-        if !value.isEmpty {
-            cookieCache = (value, Date())
+        if !jar.cookies.isEmpty, generation == cookieGeneration {
+            cookieCache = (jar, Date())
             cookieWaker = nil   // 读到了就把隐形网页关掉，不让它一直占着一个网页进程
         }
-        return value
+        return jar
     }
 
-    /// 焦点落在哪个视频上，就提前把它准备好
+    /// 焦点落在哪个视频上，就提前把它准备好。焦点不在卡片上（左边栏、搜索框、菜单、设置页）就不准备——
+    /// 设置页里改了清晰度，回去点开的不能还是按旧清晰度准备好的那个
     private func warmFocused() {
         guard tv?.bilibiliOpen == true else { return }   // 还没进哔哩哔哩时只取列表，不准备视频
-        // 设置页盖在上面时不准备（不然改了清晰度，回去点开的还是按旧清晰度准备好的那个）
-        if !editing, !settingsOpen, case .video(let video) = focused { player.warm(video) } else { player.warm(nil) }
+        // 直播不提前准备（挂上去就是在拉直播流）
+        if case .video(let video) = focused, !video.isRoom { player.warm(video) }
+        else { player.warm(nil) }
     }
 
     // MARK: 按键
@@ -426,145 +657,212 @@ final class BilibiliStore: ObservableObject {
             return
         }
         defer { warmFocused() }
-        if editing {
-            // 键盘打字直接进输入框，这里只处理手机遥控器发来的文字和确认 / 返回
-            switch command {
-            case .text(let text): query += text
-            case .deleteBackward: if !query.isEmpty { query.removeLast() }
-            case .select: submitSearch()
-            case .back: stopEditing()
-            default: break
-            }
-            return
+        switch focus {
+        case .typing: handleTyping(command)
+        case .searchField: handleSearchField(command)
+        case .settings: handleSettings(command)
+        case .cardMenu: handleCardMenu(command)
+        case .accountMenu(let menu): handleAccountMenu(command, menu)
+        case .account: handleAccount(command)
+        case .follow: handleFollow(command)
+        case .sidebar: handleSidebar(command)
+        case .rows: if sortFocused { handleSort(command) } else { handleRows(command) }
         }
-        if settingsOpen {
-            handleSettings(command)
-            return
+    }
+
+    /// 正在输入：键盘打字直接进输入框，这里只处理手机遥控器发来的文字和确认 / 返回
+    private func handleTyping(_ command: RemoteCommand) {
+        switch command {
+        case .text(let text): query += text
+        case .deleteBackward: if !query.isEmpty { query.removeLast() }
+        case .select: submitSearch()
+        // 不打了：退出输入，搜索框还是选中的（键盘的方向键在输入框里给输入法用，这里只有手机遥控器的上下）
+        case .back, .move(.up): stopEditing()
+        case .move(.down): withAnimation(Motion.navigate) { focus = rows.isEmpty ? .searchField : .rows }
+        default: break
         }
-        if let menu = cardMenu {
-            switch command {
-            case .move(.up): withAnimation(Motion.focus) { cardMenuIndex = max(0, cardMenuIndex - 1) }
-            case .move(.down): withAnimation(Motion.focus) { cardMenuIndex = min(menu.count - 1, cardMenuIndex + 1) }
-            case .select:
-                let chosen = menu.indices.contains(cardMenuIndex) ? menu[cardMenuIndex] : nil
-                withAnimation(Motion.focus) { cardMenu = nil }
-                if let chosen { run(chosen) }
-            case .back, .move(.left), .move(.right): withAnimation(Motion.focus) { cardMenu = nil }
-            default: break
-            }
-            return
+    }
+
+    /// 搜索框选中了、还没打字：按确认才开始打字；方向键照常走，不会一挪上来就被输入框占住
+    private func handleSearchField(_ command: RemoteCommand) {
+        switch command {
+        case .select: withAnimation(Motion.focus) { focus = .typing }
+        case .text(let text):
+            // 手机遥控器上直接打字：开始输入并接上这个字
+            withAnimation(Motion.focus) { focus = .typing }
+            query += text
+        case .move(.down): if !rows.isEmpty { withAnimation(Motion.navigate) { focus = .rows } }
+        case .move(.up): withAnimation(Motion.focus) { focus = .account }
+        case .move(.left), .back: withAnimation(Motion.focus) { focus = .sidebar }
+        default: break
         }
-        if accountMenuOpen {
-            let actions = accountActions
-            switch command {
-            case .move(.up): withAnimation(Motion.focus) { accountIndex = max(0, accountIndex - 1) }
-            case .move(.down): withAnimation(Motion.focus) { accountIndex = min(actions.count - 1, accountIndex + 1) }
-            case .select:
-                let chosen = actions.indices.contains(accountIndex) ? actions[accountIndex] : nil
-                withAnimation(Motion.focus) { accountMenuOpen = false; accountFocused = false }
-                if let chosen { perform(chosen) }
-            case .back, .move(.left): withAnimation(Motion.focus) { accountMenuOpen = false }
-            default: break
-            }
-            return
+    }
+
+    private func handleCardMenu(_ command: RemoteCommand) {
+        let menu = cardMenuActions
+        switch command {
+        case .move(.up): withAnimation(Motion.focus) { cardMenuIndex = max(0, cardMenuIndex - 1) }
+        case .move(.down): withAnimation(Motion.focus) { cardMenuIndex = min(menu.count - 1, cardMenuIndex + 1) }
+        case .select:
+            withAnimation(Motion.focus) { focus = .rows }
+            if menu.indices.contains(cardMenuIndex) { run(menu[cardMenuIndex]) }
+        case .back, .move(.left), .move(.right): withAnimation(Motion.focus) { focus = .rows }
+        default: break
         }
-        if accountFocused {
-            switch command {
-            case .select: withAnimation(Motion.focus) { accountIndex = 0; accountMenuOpen = true }
-            case .move(.down), .back:
-                // 在 UP 主的主页里，头像下面是关注按钮；别的页直接回到内容
-                withAnimation(Motion.focus) { accountFocused = false; if upPage != nil { upPage?.followFocused = true } }
-            case .move(.left): withAnimation(Motion.focus) { accountFocused = false; headerFocused = true }
-            default: break
-            }
-            return
+    }
+
+    private func handleAccountMenu(_ command: RemoteCommand, _ menu: AccountMenu) {
+        let actions = accountActions
+        switch command {
+        case .move(.up): withAnimation(Motion.focus) { accountIndex = max(0, accountIndex - 1) }
+        case .move(.down): withAnimation(Motion.focus) { accountIndex = min(actions.count - 1, accountIndex + 1) }
+        case .select: if actions.indices.contains(accountIndex) { perform(actions[accountIndex]) }
+        // 账号列表、退出登录的确认里返回：回到头像菜单，停在进来的那一项上
+        case .back where menu == .accounts: showAccountMenu(at: .switchAccount)
+        case .back where menu == .confirmLogout: showAccountMenu(at: .logout)
+        case .back, .move(.left): withAnimation(Motion.focus) { focus = .account }
+        default: break
         }
-        if upPage?.followFocused == true {
-            switch command {
-            case .select: toggleFollow()
-            case .move(.down): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; upPage?.sortFocused = true }
-            case .move(.up): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; accountFocused = true }
-            case .move(.left): withAnimation(Motion.focus) { upPage?.followFocused = false; upPage?.armed = false; headerFocused = true }
-            case .back: leaveUpPage()
-            default: break
-            }
-            return
+    }
+
+    /// 回到头像菜单的第一层，停在 action 那一项上
+    private func showAccountMenu(at action: AccountAction) {
+        withAnimation(Motion.focus) {
+            focus = .accountMenu(.main)
+            accountIndex = accountActions.firstIndex(of: action) ?? 0
         }
-        if let page = upPage, page.sortFocused, !page.browsing, !headerFocused {
-            switch command {
-            case .move(.left):
-                if page.sort.rawValue > 0 { setSort(UpPage.Sort(rawValue: page.sort.rawValue - 1) ?? .latest) }
-                else { withAnimation(Motion.focus) { headerFocused = true } }
-            case .move(.right): if let next = UpPage.Sort(rawValue: page.sort.rawValue + 1) { setSort(next) }
-            case .move(.up): withAnimation(Motion.focus) { upPage?.sortFocused = false; upPage?.followFocused = true }
-            case .move(.down), .select:
-                if !rows.isEmpty {
-                    withAnimation(Motion.navigate) { upPage?.sortFocused = false; upPage?.browsing = true }
-                    warmFocused()
-                }
-            case .back: leaveUpPage()
-            default: break
-            }
-            return
+    }
+
+    private func handleAccount(_ command: RemoteCommand) {
+        switch command {
+        case .select: withAnimation(Motion.focus) { accountIndex = 0; focus = .accountMenu(.main) }
+        // 在 UP 主的主页里，头像下面是关注按钮；搜索页上是搜索框；别的页直接回到内容
+        case .move(.down), .back:
+            withAnimation(Motion.focus) { focus = upPage != nil ? .follow : (tab == .search ? .searchField : .rows) }
+        case .move(.left): withAnimation(Motion.focus) { focus = .sidebar }
+        default: break
         }
-        if headerFocused {
-            switch command {
-            case .move(.up): step(-1)
-            case .move(.down): step(1)
-            case .move(.right), .select:
-                commitSidebar()
-                if tab == .search {
-                    // 搜索页：左边栏收起，输入框直接可以打字。已有结果时按右是去结果，按确认才是重新输入。
-                    if case .move = command, !rows.isEmpty { withAnimation(Motion.focus) { headerFocused = false } }
-                    else { withAnimation(Motion.focus) { headerFocused = false; editing = true } }
-                } else if !rows.isEmpty {
-                    withAnimation(Motion.focus) { headerFocused = false }
-                }
-            // 左边栏是盖在右边内容之上的二级菜单：按一下 Esc 永远是收起它、回到右边
-            //（哪怕右边暂时只有一个搜索框）。离开哔哩哔哩要长按 Esc。
-            case .back:
-                commitSidebar()
-                withAnimation(Motion.focus) { headerFocused = false }
-            default: break
-            }
-            return
+    }
+
+    private func handleFollow(_ command: RemoteCommand) {
+        switch command {
+        case .select: toggleFollow()
+        case .move(.down): withAnimation(Motion.focus) { focus = .rows }   // 下面是三个排序
+        case .move(.up): withAnimation(Motion.focus) { focus = .account }
+        case .move(.left): withAnimation(Motion.focus) { focus = .sidebar }
+        case .back: leaveUpPage()
+        default: break
         }
+    }
+
+    /// UP 主页的三个排序：左右换排序（下面那排视频跟着换），往下到视频，往上到关注按钮
+    private func handleSort(_ command: RemoteCommand) {
+        guard let page = upPage else { return }
         switch command {
         case .move(.left):
-            if column > 0 { setColumn(column - 1) } else { withAnimation(Motion.focus) { headerFocused = true } }
-        case .move(.right): setColumn(column + 1)
-        case .move(.up):
-            if row > 0 { withAnimation(Motion.navigate) { setRow(row - 1) } }
-            else if upPage != nil {   // UP 主页：第一排再按上，回到三个排序那里
-                player.warm(nil)
-                withAnimation(Motion.navigate) { upPage?.browsing = false; upPage?.sortFocused = true }
+            if let previous = UpPage.Sort(rawValue: page.sort.rawValue - 1) { setSort(previous) }
+            else { withAnimation(Motion.focus) { focus = .sidebar } }
+        case .move(.right): if let next = UpPage.Sort(rawValue: page.sort.rawValue + 1) { setSort(next) }
+        case .move(.up): withAnimation(Motion.focus) { focus = .follow }
+        case .move(.down), .select: if !rows.isEmpty { withAnimation(Motion.navigate) { upPage?.browsing = true } }
+        case .back: leaveUpPage()
+        default: break
+        }
+    }
+
+    private func handleSidebar(_ command: RemoteCommand) {
+        switch command {
+        case .move(.up): step(-1)
+        case .move(.down): step(1)
+        case .move(.right), .select:
+            commitSidebar()
+            // 搜索页：左边栏收起，焦点停在搜索框上（选中、不打字），再按一下确认才开始打字。
+            // 别的页（包括盖在搜索页上的 UP 主页），哪怕右边暂时还没有内容也收起
+            withAnimation(Motion.focus) { focus = tab == .search && upPage == nil ? .searchField : .rows }
+        // 左边栏是盖在右边内容之上的二级菜单：按一下 Esc 永远是收起它、回到右边
+        //（哪怕右边暂时只有一个搜索框）。离开哔哩哔哩要长按 Esc。
+        case .back:
+            commitSidebar()
+            withAnimation(Motion.focus) { focus = contentFocus }
+        default: break
+        }
+    }
+
+    /// 卡片排：左右在一排里走，上下换排；最上面一排再按上是头像（搜索页上是搜索框，UP 主页上是三个排序）
+    private func handleRows(_ command: RemoteCommand) {
+        switch command {
+        case .move(.left):
+            if column > 0 { setColumn(column - 1) }
+            else if isHotRow(row), isHotRow(row - 1) {
+                // 热搜按顺序往回走：3 再往左是 2（上一行的最后一个）
+                let previous = row - 1
+                withAnimation(Motion.focus) { columns[rows[previous].id] = rows[previous].items.count - 1; setRow(previous) }
             }
-            else if tab == .search { withAnimation(Motion.focus) { editing = true } }   // 从结果往上回到输入框
-            else { withAnimation(Motion.focus) { accountFocused = true } }               // 最上面一排再按上：到右上角的头像
-        case .move(.down): if row < rows.count - 1 { withAnimation(Motion.navigate) { setRow(row + 1) } }
+            else { withAnimation(Motion.focus) { focus = .sidebar } }
+        case .move(.right):
+            if isHotRow(row), isHotRow(row + 1), column == rows[row].items.count - 1 {
+                // 热搜按顺序往下走：2 再往右是 3（下一行的第一个），一直到 10
+                let next = row + 1
+                withAnimation(Motion.focus) { columns[rows[next].id] = 0; setRow(next) }
+            } else {
+                setColumn(column + 1)
+            }
+        case .move(.up):
+            if row > 0 {
+                // 热搜是两列的格子：上下换行保持在同一列（4 按上是 2），不用那一行上次停的位置
+                if isHotRow(row), isHotRow(row - 1) { columns[rows[row - 1].id] = min(column, rows[row - 1].items.count - 1) }
+                withAnimation(Motion.navigate) { setRow(row - 1) }
+            }
+            else if upPage != nil { withAnimation(Motion.navigate) { upPage?.browsing = false } }   // UP 主页：第一排再按上，回到三个排序
+            else if tab == .search { withAnimation(Motion.focus) { focus = .searchField } }      // 从结果往上回到搜索框（选中，不打字）
+            else { withAnimation(Motion.focus) { focus = .account } }                            // 最上面一排再按上：到右上角的头像
+        case .move(.down):
+            if row < rows.count - 1 {
+                if isHotRow(row), isHotRow(row + 1) { columns[rows[row + 1].id] = min(column, rows[row + 1].items.count - 1) }
+                withAnimation(Motion.navigate) { setRow(row + 1) }
+            }
         case .select:
-            if tab == .search, rows.isEmpty { withAnimation(Motion.focus) { editing = true } }   // 焦点在搜索框上
+            // 搜索页还没有结果（刚按了搜索、还在取）：这时看起来选中的是搜索框，按确认接着改搜索词
+            if tab == .search, upPage == nil, rows.isEmpty { withAnimation(Motion.focus) { focus = .typing } }
             else { activate() }
         case .back:
             // 在某个 UP 主的主页里：Esc 回到进来之前的那一页。其他时候在内容里短按 Esc 不做任何事。
             if upPage != nil { leaveUpPage() }
-            // 搜索结果的上一级是搜索框：Esc 收起结果，回到搜索框（搜索词留着，按确认可以接着改）
-            else if tab == .search, !rows.isEmpty {
-                player.warm(nil)
-                withAnimation(Motion.navigate) { content[.search] = [] }
-            }
+            // 搜索结果的上一级是搜索页本身（搜索历史、热搜）
+            else if tab == .search, !showingLanding, !rows.isEmpty { withAnimation(Motion.navigate) { showLanding() } }
         case .playPause: if case .video = focused { activate() }
         default: break
         }
     }
 
+    /// 转盘只在焦点所在的这一排 / 这一列里走：走到头就停，不会转进左边栏、头像这些别的地方
+    /// （要去那里得按一下方向键）。转得猛了也不会一下子把左边栏拉出来
+    func wheelCanMove(_ direction: RemoteCommand.Direction) -> Bool {
+        if player.current != nil {
+            if player.relatedVisible { return flickCanMove(direction) }   // 选集、相关视频：到第一张就停
+            return true                                                    // 清晰度栏、右边面板：在里面走，到头自己停
+        }
+        switch focus {
+        case .typing, .searchField, .account, .follow: return false
+        case .settings, .cardMenu, .accountMenu, .sidebar: return true    // 一列固定的选项，到头自己停
+        case .rows:
+            guard let page = upPage, sortFocused else { return flickCanMove(direction) }   // 视频排：到第一张就停，不进左边栏
+            switch direction {
+            case .left: return page.sort.rawValue > 0                                       // 第一个排序再往左是左边栏
+            case .right: return page.sort.rawValue < UpPage.Sort.allCases.count - 1
+            default: return false
+            }
+        }
+    }
+
     /// 转盘沿着哪个方向走（见 TVController.wheelRunsHorizontally）
     var wheelRunsHorizontally: Bool {
-        if player.current != nil { return !player.panelVisible }                // 相关视频、清晰度栏是横的；右边的面板是竖的
-        if settingsOpen { return false }                                        // 设置是竖的
-        if cardMenu != nil || accountMenuOpen || headerFocused { return false }  // 菜单、左边栏是竖的
-        if accountFocused || upPage?.followFocused == true { return false }     // 头像、关注按钮：往下回到内容
-        return true                                                             // 视频排、三个排序
+        if player.current != nil { return !player.panelVisible }   // 相关视频、清晰度栏是横的；右边的面板是竖的
+        switch focus {
+        // 设置、菜单、左边栏是竖的；头像、关注按钮往下回到内容
+        case .settings, .cardMenu, .accountMenu, .sidebar, .account, .follow: return false
+        case .rows, .searchField, .typing: return true            // 视频排、三个排序
+        }
     }
 
     /// 左边栏里高亮停在哪一项。上下滑时先只移动它，停下来一会儿才换右边的内容——换一页要重画好几排卡片、
@@ -572,8 +870,9 @@ final class BilibiliStore: ObservableObject {
     @Published private(set) var sidebarTab: Tab = .home
     private var sidebarCommit: Task<Void, Never>?
 
+    /// 在左边栏里上下走一格（藏起来的页跳过）
     private func step(_ delta: Int) {
-        let all = Tab.allCases
+        let all = visibleTabs
         guard let index = all.firstIndex(of: sidebarTab), all.indices.contains(index + delta) else { return }
         withAnimation(Motion.focus) { sidebarTab = all[index + delta] }
         sidebarCommit?.cancel()
@@ -591,25 +890,35 @@ final class BilibiliStore: ObservableObject {
         if sidebarTab != tab { select(sidebarTab) }
     }
 
+    /// 换到这一页（用鼠标点了左边栏，或者在左边栏里停住了）。在左边栏里上下走时焦点留在左边栏；
+    /// 用鼠标点的，焦点到新的这一页的内容上（在搜索页上点搜索，正在输入的接着输入）
     func select(_ target: Tab) {
-        cardMenu = nil
-        accountMenuOpen = false
-        accountFocused = false
-        if settingsOpen { withAnimation(Motion.navigate) { settingsOpen = false; settingList = nil } }
-        if editing, target != .search { stopEditing() }
+        guard !hiddenTabs.contains(target) else { return }
+        let keep = focus == .sidebar || (target == .search && (focus == .typing || focus == .searchField))
+        switchTab(to: target, focusContent: !keep)
+    }
+
+    /// 右边换成这一页。focusContent：焦点也到这一页的内容上（不然留在原处：左边栏、设置页）
+    private func switchTab(to target: Tab, focusContent: Bool) {
         sidebarCommit?.cancel()
         sidebarCommit = nil
         sidebarTab = target
-        withAnimation(Motion.navigate) { tab = target; upPage = nil }
+        withAnimation(Motion.navigate) {
+            tab = target
+            upPage = nil
+            if focusContent { focus = .rows }
+        }
+        if target == .search, content[.search]?.isEmpty ?? true || showingLanding { showLanding() }
         if content[target] == nil || isStale(target) { load(target) }
         warmFocused()
     }
 
     private func setColumn(_ value: Int) {
         guard rows.indices.contains(row) else { return }
+        if clearArmed { clearArmed = false }
         let clamped = max(0, min(rows[row].items.count - 1, value))
         guard clamped != column else { return }
-        withAnimation(stepMotion()) { columns[rows[row].id] = clamped }
+        withAnimation(BiliMotion.step()) { columns[rows[row].id] = clamped }
         // 往后几张的封面先下好：甩着翻会一下走好几张，不然翻过去是一排空的灰块
         for case .video(let video) in rows[row].items.dropFirst(clamped + 1).prefix(12) {
             if let url = video.cover, BiliImageCache.shared.image(for: url) == nil {
@@ -617,14 +926,6 @@ final class BilibiliStore: ObservableObject {
             }
         }
         loadMoreIfNeeded()
-    }
-
-    private var lastStep = Date.distantPast
-    /// 单按一下用平常的动画；连着走（按住方向键、双指一甩）时换一条短的，不然每一下都重新起一段弹簧，忽快忽慢
-    private func stepMotion() -> Animation {
-        let now = Date()
-        defer { lastStep = now }
-        return now.timeIntervalSince(lastStep) < 0.2 ? .smooth(duration: 0.16) : Motion.focus
     }
 
     /// 快翻到一排的末尾时，悄悄再取一批接在后面，所以可以一直往后翻
@@ -636,6 +937,7 @@ final class BilibiliStore: ObservableObject {
         fetchingMore.insert(id)
         let next = (pages[id] ?? 1) + 1
         let keyword = lastKeyword
+        let epoch = loginEpoch
         Task { @MainActor in
             let cookie = await cookieHeader()
             let more: [BiliVideo]
@@ -644,6 +946,7 @@ final class BilibiliStore: ObservableObject {
             case "popular": more = await BiliAPI.popular(cookie: cookie, page: next)
             default: more = await BiliAPI.search(keyword, cookie: cookie, page: next)
             }
+            guard epoch == self.loginEpoch else { return }   // 这期间退出、换了账号：这一批是上一个账号的推荐
             self.fetchingMore.remove(id)
             guard var list = self.content[owner], let index = list.firstIndex(where: { $0.id == id }) else { return }
             if id == "search", keyword != self.lastKeyword { return }   // 这期间换了搜索词
@@ -665,13 +968,16 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
-    func focus(row r: Int, column c: Int) {
+    /// 用鼠标点了一张卡片（搜过的词、热搜也是）：焦点过去（不管刚才在哪：左边栏、头像、搜索框……），打开它
+    func tapItem(row r: Int, column c: Int) {
         guard rows.indices.contains(r) else { return }
         withAnimation(Motion.focus) {
-            headerFocused = false; accountFocused = false
-            if upPage != nil { upPage?.browsing = true; upPage?.sortFocused = false; upPage?.followFocused = false; upPage?.armed = false }
-            setRow(r); columns[rows[r].id] = c
+            focus = .rows
+            if upPage != nil { upPage?.browsing = true }
+            setRow(r)
+            columns[rows[r].id] = c
         }
+        activate()
     }
 
     func activate() {
@@ -682,63 +988,190 @@ final class BilibiliStore: ObservableObject {
     private func perform(_ item: Item) {
         guard let tv else { return }
         switch item {
+        case .video(let video) where video.endedRoom > 0:
+            // 看过的直播、现在没在播：进主播的主页（他最近发了什么、在不在播）
+            if video.ownerMid > 0 { openUp(BiliUser(mid: video.ownerMid, name: video.owner, face: video.face)) }
+            else { tv.showToast("主播未开播") }
         case .video(let video):
             player.play(video)
-        case .login:
-            let url = URL(string: "https://passport.bilibili.com/login")!
-            let service = Service(id: Self.loginID, name: "哔哩哔哩", kind: .web(url), accent: "#FB7299", deep: "#3A0F1E")
-            tv.playbackCoordinator.playWeb(service, url: url)
-            watchForLogin()
-        case .empty:
-            break
         case .user(let user):
             openUp(user)
+        case .login:
+            openLogin()
         case .refresh:
-            reload()
+            reload(byUser: true)
+        case .empty:
+            break
+        case .keyword(let word):
+            query = word
+            submitSearch()
+        case .trend(let trend):
+            query = trend.keyword
+            submitSearch()
+        case .clearHistory:
+            // 清空之前先确认：第一次按变成"再按一次清空"，再按才清
+            if clearArmed {
+                BiliSearchHistory.clear()
+                clearArmed = false
+                showLanding()
+            } else {
+                withAnimation(Motion.focus) { clearArmed = true }
+            }
+        }
+    }
+
+    /// 头像菜单里选了一项
+    private func perform(_ action: AccountAction) {
+        guard tv != nil else { return }
+        switch action {
+        case .login:
+            closeAccountMenu()
+            openLogin()
+        case .refresh:
+            closeAccountMenu()
+            reload(byUser: true)
         case .settings:
             openSettings()
+        case .switchAccount:
+            // 菜单换成登录过的账号列表，停在现在这个账号上
+            withAnimation(Motion.focus) {
+                focus = .accountMenu(.accounts)
+                accountIndex = savedAccounts.firstIndex { $0.mid == account?.mid } ?? 0
+            }
+        case .useAccount(let mid):
+            closeAccountMenu()
+            if mid != account?.mid { switchAccount(to: mid) }
+        case .addAccount:
+            closeAccountMenu()
+            // 先退出现在的账号（它的登录信息记进钥匙串，随时能切回来），再打开登录页
+            Task { @MainActor in
+                await self.rememberCurrent()
+                await self.clearLogin()
+                self.openLogin()
+            }
         case .logout:
             // 退出登录之前先问一次；默认停在"取消"上，误按确认不会退出
-            withAnimation(Motion.focus) {
-                accountFocused = true
-                accountMenuOpen = true
-                confirmingLogout = true
-                accountIndex = 0
-            }
+            withAnimation(Motion.focus) { focus = .accountMenu(.confirmLogout); accountIndex = 0 }
         case .keepLogin:
-            withAnimation(Motion.focus) { confirmingLogout = false; accountIndex = 2 }
+            showAccountMenu(at: .logout)   // 不退出了：回到头像菜单，停在"退出登录"上
         case .confirmLogout:
-            withAnimation(Motion.focus) { accountMenuOpen = false; accountFocused = false }
+            closeAccountMenu()
             Task { @MainActor in
-                let store = tv.profile.websiteDataStore.httpCookieStore
-                for cookie in await store.allCookies() where cookie.domain.hasSuffix("bilibili.com") {
-                    await store.deleteCookie(cookie)
-                }
-                for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.domain.hasSuffix("bilibili.com") {
-                    HTTPCookieStorage.shared.deleteCookie(cookie)
-                }
-                tv.showToast("已退出登录")
-                self.account = nil
-                self.cookieCache = nil
-                self.content = [:]
+                // 退出登录：这个账号从"登录过的账号"里去掉，钥匙串里的登录信息也删掉
+                if let mid = self.account?.mid { BiliAccounts.forget(mid) }
+                self.savedAccounts = BiliAccounts.list()
+                await self.clearLogin()
                 self.reload()
             }
         }
     }
 
-    func dismissAccount() { accountMenuOpen = false; accountFocused = false }
+    /// 头像菜单里选的这一项要离开菜单：菜单收起，焦点回到右边的内容
+    private func closeAccountMenu() {
+        withAnimation(Motion.focus) { focus = contentFocus }
+    }
 
-    /// 离开哔哩哔哩、换页、用触控板点别处时：把各种开着的小东西都收起来，下次进来是干净的
+    /// 打开扫码登录的网页；登录成功自动回来（见 watchForLogin）
+    private func openLogin() {
+        guard let tv else { return }
+        let url = URL(string: "https://passport.bilibili.com/login")!
+        let service = Service(id: Self.loginID, name: "哔哩哔哩", kind: .web(url), accent: "#FB7299", deep: "#3A0F1E")
+        tv.playbackCoordinator.playWeb(service, url: url)
+        watchForLogin()
+    }
+
+    // MARK: 多账号
+
+    /// 知道是谁了：记下这个账号和解出它的那份登录信息（钥匙串），以后能在头像菜单里切回来
+    private func adopt(_ fresh: BiliAccount, cookies: [HTTPCookie]) {
+        guard fresh != account else { return }
+        account = fresh
+        BiliAccounts.remember(fresh, cookies: cookies)
+        savedAccounts = BiliAccounts.list()
+    }
+
+    /// 现在登录着的账号连同它此刻的登录信息记进钥匙串（换账号、加账号之前，切回来时用的是最新的）
+    private func rememberCurrent() async {
+        let epoch = loginEpoch
+        let jar = await cookieJar(fresh: true)
+        guard epoch == loginEpoch, let account else { return }
+        BiliAccounts.remember(account, cookies: jar.cookies)
+        savedAccounts = BiliAccounts.list()
+    }
+
+    /// 把现在的哔哩哔哩登录清掉（网页那边和这边一起），页面回到没登录的样子
+    private func clearLogin() async {
+        guard let tv else { return }
+        let store = tv.profile.websiteDataStore.httpCookieStore
+        for cookie in await store.allCookies() where cookie.isBilibili { await store.deleteCookie(cookie) }
+        for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.isBilibili { HTTPCookieStorage.shared.deleteCookie(cookie) }
+        forgetLogin()
+    }
+
+    /// 这边记着的登录情况全部作废：账号、各页内容、签名密钥、读到的登录信息。还在路上的请求回来也不再用（见 loginEpoch）
+    private func forgetLogin() {
+        loginEpoch += 1
+        forgetCookies()
+        account = nil
+        signingKey = nil
+        // 搜索历史、热搜、搜索结果不分账号，留着
+        content = content.filter { $0.key == .search }
+        rowIndex = rowIndex.filter { $0.key == .search }
+        loadingTabs = loadingTabs.filter { $0 == .search }
+        failedTabs = []
+        loadedAt = [:]
+        pages = [:]
+        fetchingMore = []
+        exhausted = []
+        emptyPages = [:]
+        upPage = nil
+    }
+
+    /// 换到一个登录过的账号：清掉现在的登录，放上那个账号存下来的，整页按新账号重新取
+    private func switchAccount(to mid: Int) {
+        let saved = BiliAccounts.cookies(for: mid)
+        let name = savedAccounts.first { $0.mid == mid }?.name ?? "这个账号"
+        guard !saved.isEmpty, let tv else { tv?.showToast("「\(name)」的登录已过期，请重新登录"); return }
+        Task { @MainActor in
+            await self.rememberCurrent()
+            await self.clearLogin()
+            let epoch = self.loginEpoch
+            let store = tv.profile.websiteDataStore.httpCookieStore
+            for cookie in saved { await store.setCookie(cookie) }
+            let jar = await self.cookieJar(fresh: true)
+            let answer = await BiliAPI.account(cookie: jar.header)
+            guard epoch == self.loginEpoch else { return }
+            switch answer {
+            case .signedIn(let account):
+                self.adopt(account, cookies: jar.cookies)
+            case .signedOut:
+                // 存下来的登录信息不管用了（在别处退出过、过期了）：从列表里去掉
+                await self.clearLogin()
+                BiliAccounts.forget(mid)
+                self.savedAccounts = BiliAccounts.list()
+                tv.showToast("「\(name)」的登录已过期，请重新登录")
+            case .unknown:
+                // 暂时问不到（网络不通）：登录信息已经换上了，等网络好了刷新时自然知道是谁
+                break
+            }
+            self.reload()
+        }
+    }
+
+    /// 换了一个 Mac TV 的用户：每个人的哔哩哔哩登录在各自的网页数据里。这边记着的账号、内容、签名密钥、
+    /// 读到的登录信息都是上一个人的，全部作废，按新的人重新取（Profiles.switchProfile 换完人以后调用）
+    func profileChanged() {
+        player.stop()
+        player.warm(nil)
+        forgetLogin()
+        cookieWaker = nil   // 唤醒的是上一个人的网页数据
+        resetTransient()
+        preload()
+    }
+
+    /// 离开哔哩哔哩、从外面直接放一个视频时：把各种开着的小东西都收起来，下次进来焦点在内容上
     func resetTransient() {
-        if editing { editing = false; tv?.window?.makeFirstResponder(nil) }
-        cardMenu = nil
-        cardMenuVideo = nil
-        accountMenuOpen = false
-        accountFocused = false
-        headerFocused = false
-        upPage?.followFocused = false
-        upPage?.armed = false
-        settingsOpen = false
+        focus = contentFocus
         settingList = nil
     }
 
@@ -748,22 +1181,29 @@ final class BilibiliStore: ObservableObject {
         let id = "uppage-\(user.mid)"
         columns[id] = 0
         withAnimation(Motion.navigate) {
-            headerFocused = false
-            accountFocused = false
+            focus = .rows   // 进来时停在三个排序上
             upPage = UpPage(user: user, returnTo: video)
         }
+        let epoch = loginEpoch
         Task { @MainActor in
             let cookie = await cookieHeader()
             async let followed = BiliAPI.isFollowing(mid: user.mid, cookie: cookie)
             async let card = BiliAPI.userCard(mid: user.mid, name: user.name, cookie: cookie)
+            async let room = BiliAPI.liveRoomOf(mid: user.mid)
             let key = await currentSigningKey(cookie: cookie)
             let following = await followed
             let full = await card
             var uploads: [BiliVideo] = []
             if let key { uploads = await BiliAPI.uploads(mid: user.mid, name: full.name, key: key, cookie: cookie).videos }
-            guard self.upPage?.user.mid == user.mid else { return }
+            // 直播间那张卡片上写主播的名字、带头像（查直播间的接口不给）
+            let live = await room.map { video in
+                BiliVideo(bvid: video.bvid, title: video.title, cover: video.cover, duration: 0, owner: full.name, views: video.views,
+                          ownerMid: user.mid, liveRoom: video.liveRoom, face: full.face ?? user.face)
+            }
+            guard epoch == self.loginEpoch, self.upPage?.user.mid == user.mid else { return }
             withAnimation(Motion.navigate) {
-                self.upPage?.lists[.latest] = uploads
+                self.upPage?.live = live
+                if !uploads.isEmpty { self.upPage?.lists[.latest] = uploads }   // 没取到不记，换回"最新发布"时再取
                 self.upPage?.user = BiliUser(mid: user.mid, name: full.name, face: full.face ?? user.face,
                                              fans: max(full.fans, user.fans), videos: max(full.videos, user.videos))
                 self.upPage?.following = following
@@ -777,7 +1217,10 @@ final class BilibiliStore: ObservableObject {
     /// 就回到那个视频，停在刚才那一帧，按播放接着放
     private func leaveUpPage() {
         let back = upPage?.returnTo
-        withAnimation(Motion.navigate) { upPage = nil }
+        withAnimation(Motion.navigate) {
+            upPage = nil
+            focus = contentFocus
+        }
         if let back { player.play(back, startPaused: true) }
     }
 
@@ -786,7 +1229,9 @@ final class BilibiliStore: ObservableObject {
         let id = "uppage-\(mid)-\(sort.rawValue)"
         columns[id] = 0
         upPage?.row = 0
-        upPage?.rows = videos.isEmpty ? [] : [Row(id: id, title: sort.title, items: videos.map(Item.video))]
+        // 他正在直播：直播间放在最前面（不管按什么排）
+        let items = ((upPage?.live).map { [$0] } ?? []) + videos
+        upPage?.rows = items.isEmpty ? [] : [Row(id: id, title: sort.title, items: items.map(Item.video))]
     }
 
     /// 换排序：取过的直接换上，没取过的现取（取的时候先留着原来那排，不闪）
@@ -797,22 +1242,23 @@ final class BilibiliStore: ObservableObject {
             withAnimation(Motion.navigate) { showUploads(cached, sort: sort) }
             return
         }
-        let user = page.user
+        let user = page.user, epoch = loginEpoch
         Task { @MainActor in
             let cookie = await cookieHeader()
             guard let key = await currentSigningKey(cookie: cookie) else { return }
             let videos = await BiliAPI.uploads(mid: user.mid, name: user.name, key: key, cookie: cookie, order: sort.order).videos
-            guard self.upPage?.user.mid == user.mid else { return }
+            guard epoch == self.loginEpoch, self.upPage?.user.mid == user.mid else { return }
             if !videos.isEmpty { self.upPage?.lists[sort] = videos }
             if self.upPage?.sort == sort { withAnimation(Motion.navigate) { self.showUploads(videos, sort: sort) } }
         }
     }
 
+    /// 用鼠标点了一个排序：焦点过去，换成这个排序
     func tapSort(_ index: Int) {
         guard upPage != nil, let sort = UpPage.Sort(rawValue: index) else { return }
         withAnimation(Motion.focus) {
-            headerFocused = false; accountFocused = false
-            upPage?.browsing = false; upPage?.followFocused = false; upPage?.armed = false; upPage?.sortFocused = true
+            focus = .rows
+            upPage?.browsing = false
         }
         setSort(sort)
     }
@@ -835,30 +1281,66 @@ final class BilibiliStore: ObservableObject {
             }
             guard ok else { tv.showToast("操作失败"); return }
             self.loadedAt[.following] = nil   // "关注"那一页下次进去时重新取
-            tv.showToast(following ? "已取消关注 \(user.name)" : "已关注 \(user.name)")
+        }
+    }
+
+    // MARK: 手机发来的链接
+
+    /// 手机上粘贴了一个哔哩哔哩视频的链接：取到视频信息就直接放（盖在现在这一页上，返回回到这一页）。
+    /// 等的途中回了主屏、开了别的应用，就不放了
+    func openLinked(bvid: String?, aid: Int?, page: Int?) {
+        Task { @MainActor in
+            let cookie = await cookieHeader()
+            let key = await currentSigningKey(cookie: cookie)
+            let video = await BiliAPI.video(bvid: bvid, aid: aid, page: page, key: key, cookie: cookie)
+            guard tv?.bilibiliOpen == true else { return }
+            guard let video else { tv?.showToast("无法打开此视频"); return }
+            resetTransient()
+            player.play(video)
+        }
+    }
+
+    /// 手机上粘贴了一个直播间的链接：在播就直接看；没在播就说一声，进主播的主页（等的途中离开了哔哩哔哩就算了）
+    func openLinkedLive(room: Int) {
+        Task { @MainActor in
+            let (live, mid) = await BiliAPI.liveRoom(id: room)
+            guard tv?.bilibiliOpen == true else { return }
+            if let live {
+                resetTransient()
+                player.play(live)
+            } else if mid > 0 {
+                let card = await BiliAPI.userCard(mid: mid, name: "", cookie: await cookieHeader())
+                guard tv?.bilibiliOpen == true else { return }
+                tv?.showToast("主播未开播")
+                resetTransient()
+                openUp(card)
+            } else {
+                tv?.showToast("无法打开此直播间")
+            }
         }
     }
 
     // MARK: 设置页（头像菜单里的"设置"）
 
-    /// 设置项：清晰度、倍速（和看视频时右边面板里的是同一个值）、字幕（有字幕时自动打开）、弹幕
-    enum Setting: Int, CaseIterable { case quality, speed, subtitles, danmaku }
-    /// 清晰度、倍速选了以后，右边换成一列档位；弹幕选了以后换成弹幕的几项设置（按确认换下一个值）
-    enum SettingList: Hashable { case quality, speed, danmaku }
+    /// 设置项：清晰度、倍速（和看视频时右边面板里的是同一个值）、字幕（有字幕时自动打开）、弹幕、
+    /// 左边栏显示哪几页（见 BiliSidebar）、
+    /// 主屏顶部：选中哔哩哔哩的图标时，主屏上方轮播什么（关注更新、推荐、热门、直播；见 AppShelf）
+    enum Setting: Int, CaseIterable { case quality, speed, subtitles, danmaku, sidebar, shelf }
+    /// 清晰度、倍速、主屏顶部选了以后，右边换成一列档位；弹幕选了以后换成弹幕的几项设置（按确认换下一个值）；
+    /// 左边栏换成可以勾选的几页（按确认勾上 / 取消，可以勾好几个）
+    enum SettingList: Hashable { case quality, speed, danmaku, sidebar, shelf }
     /// 设置里能选的清晰度（从高到低；账号或视频没有那一档时自动用能给的最高一档）
     static let settableQualities = [120, 116, 112, 80, 64, 32]
 
-    @Published private(set) var settingsOpen = false
     @Published private(set) var settingIndex = 0
     @Published private(set) var settingList: SettingList?
     @Published private(set) var settingListIndex = 0
 
     private func openSettings() {
-        withAnimation(Motion.focus) { accountMenuOpen = false; accountFocused = false; headerFocused = false }
         settingIndex = 0
         settingList = nil
         player.warm(nil)
-        withAnimation(Motion.navigate) { settingsOpen = true }
+        withAnimation(Motion.navigate) { focus = .settings }
     }
 
     /// 设置页：上下选一行，确认改（清晰度、倍速换成一列档位，字幕直接开 / 关）；返回回到头像上
@@ -868,6 +1350,8 @@ final class BilibiliStore: ObservableObject {
             case .quality: Self.settableQualities.count
             case .speed: BilibiliNativePlayer.speeds.count
             case .danmaku: player.danmakuOptions.count
+            case .sidebar: BiliSidebar.choices.count
+            case .shelf: BiliShelfSource.allCases.count
             }
             switch command {
             case .move(.up): withAnimation(Motion.focus) { settingListIndex = max(0, settingListIndex - 1) }
@@ -882,9 +1366,7 @@ final class BilibiliStore: ObservableObject {
         case .move(.up): withAnimation(Motion.focus) { settingIndex = max(0, settingIndex - 1) }
         case .move(.down): withAnimation(Motion.focus) { settingIndex = min(Setting.allCases.count - 1, settingIndex + 1) }
         case .select: activateSetting(settingIndex)
-        case .back:
-            withAnimation(Motion.navigate) { settingsOpen = false }
-            withAnimation(Motion.focus) { accountFocused = true }   // 从头像进来的，回到头像上
+        case .back: withAnimation(Motion.navigate) { focus = .account }   // 从头像进来的，回到头像上
         default: break
         }
     }
@@ -905,6 +1387,12 @@ final class BilibiliStore: ObservableObject {
         case .danmaku:
             settingListIndex = 0
             withAnimation(Motion.focus) { settingList = .danmaku }
+        case .sidebar:
+            settingListIndex = 0
+            withAnimation(Motion.focus) { settingList = .sidebar }
+        case .shelf:
+            settingListIndex = BiliShelfSource.allCases.firstIndex(of: BiliShelfSource.current) ?? 0
+            withAnimation(Motion.focus) { settingList = .shelf }
         }
     }
 
@@ -916,10 +1404,19 @@ final class BilibiliStore: ObservableObject {
                 player.warm(nil)   // 按旧清晰度准备好的作废
             }
         case .speed: if BilibiliNativePlayer.speeds.indices.contains(index) { player.speed = BilibiliNativePlayer.speeds[index] }
+        case .shelf:
+            if BiliShelfSource.allCases.indices.contains(index), BiliShelfSource.allCases[index] != BiliShelfSource.current {
+                BiliShelfSource.current = BiliShelfSource.allCases[index]
+                tv?.appShelf.sourceChanged(Self.appID)   // 主屏顶部按新的重新取
+                objectWillChange.send()
+            }
         case .danmaku:
             withAnimation(Motion.focus) { player.cycleDanmakuOption(index) }
             objectWillChange.send()
             return   // 这一列留着，可以接着改别的
+        case .sidebar:
+            if BiliSidebar.choices.indices.contains(index) { toggleSidebar(BiliSidebar.choices[index]) }
+            return   // 可以接着勾别的
         }
         withAnimation(Motion.focus) { settingList = nil }
     }
@@ -937,27 +1434,38 @@ final class BilibiliStore: ObservableObject {
         chooseSetting(list, index)
     }
 
+    /// 左边栏里显示 / 藏起这一页，左边栏马上跟着变。藏起来的正好是现在这一页：右边回到首页（焦点留在设置页里）
+    private func toggleSidebar(_ target: Tab) {
+        var hidden = hiddenTabs
+        if hidden.contains(target) { hidden.remove(target) } else { hidden.insert(target) }
+        BiliSidebar.hidden = hidden
+        withAnimation(BiliMotion.slide) { hiddenTabs = BiliSidebar.hidden }
+        if hiddenTabs.contains(tab) { switchTab(to: .home, focusContent: false) }
+    }
+
     // MARK: 卡片菜单（在视频卡片上长按确认）
 
     /// 返回是否真的打开了菜单（不在视频卡片上就不会打开）
     @discardableResult
     func openCardMenu() -> Bool {
-        guard player.current == nil, !editing, cardMenu == nil, case .video(let video)? = focused else { return false }
+        guard player.current == nil, case .video(let video)? = focused else { return false }
         var actions: [CardAction] = []
         if video.ownerMid > 0, upPage?.user.mid != video.ownerMid { actions.append(.upPage) }
-        if account != nil {
+        // 直播间不是视频：收藏、稍后再看用不了（只留"UP 主"，进主播的主页）
+        if account != nil, !video.isRoom {
             if video.aid > 0 { actions.append(.favorite) }
             actions.append(.watchLater)
         }
         guard !actions.isEmpty else { return false }
         player.warm(nil)
         cardMenuVideo = video
-        withAnimation(Motion.focus) { cardMenuIndex = 0; cardMenu = actions }
+        cardMenuActions = actions
+        withAnimation(Motion.focus) { cardMenuIndex = 0; focus = .cardMenu }
         return true
     }
 
     func tapCardMenu(_ index: Int) {
-        guard let menu = cardMenu, menu.indices.contains(index) else { return }
+        guard focus == .cardMenu, cardMenuActions.indices.contains(index) else { return }
         cardMenuIndex = index
         handle(.select)
     }
@@ -982,15 +1490,12 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
-    /// 用触控板点头像：焦点过去并打开 / 收起菜单（不管刚才焦点在哪）
+    /// 用触控板点头像：焦点过去并打开 / 收起菜单（不管刚才焦点在哪：左边栏、搜索框、设置页……）
     func tapAccount() {
         guard player.current == nil, !editing else { return }
-        if settingsOpen { withAnimation(Motion.navigate) { settingsOpen = false; settingList = nil } }
         withAnimation(Motion.focus) {
-            headerFocused = false
-            accountFocused = true
             accountIndex = 0
-            accountMenuOpen.toggle()
+            focus = accountMenuOpen ? .account : .accountMenu(.main)
         }
     }
 
@@ -1003,22 +1508,17 @@ final class BilibiliStore: ObservableObject {
 
     // MARK: 搜索
 
-    /// 取消输入：留在右边（有结果就在结果上，没有就在搜索框上），不会跳去左边栏
+    /// 退出输入：搜索框还是选中的（亮着），再按确认接着打
     func stopEditing() {
         guard editing else { return }
-        endEditing()
-    }
-
-    private func endEditing() {
-        editing = false
-        tv?.window?.makeFirstResponder(nil)
+        focus = tab == .search ? .searchField : .rows
     }
 
     func submitSearch() {
         let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !keyword.isEmpty else { stopEditing(); return }
-        endEditing()
-        headerFocused = false
+        BiliSearchHistory.add(keyword)
+        focus = .rows   // 结果出来时焦点就在第一个结果上（还在取的时候看起来选中的是搜索框）
         loadingTabs.insert(.search)
         content[.search] = []
         lastKeyword = keyword
@@ -1035,14 +1535,13 @@ final class BilibiliStore: ObservableObject {
             self.columns["search-users"] = 0
             self.rowIndex[.search] = 0
             let videoRow = results.isEmpty ? [] : [Row(id: "search", title: "视频", items: results.map(Item.video))]
-            let userRow = users.isEmpty ? [] : [Row(id: "search-users", title: "UP 主", items: users.map(Item.user))]
+            let userRow = users.isEmpty ? [] : [Row(id: "search-users", title: "UP主", items: users.map(Item.user))]
             // 搜的像是一个人的名字（最匹配的 UP 主名字里含有搜索词），UP 主就排在前面；否则视频在前
             let personFirst = users.first.map { $0.name.localizedCaseInsensitiveContains(keyword) } ?? false
-            self.upPage = nil
-            self.content[.search] = personFirst ? userRow + videoRow : videoRow + userRow
-            let nothing = results.isEmpty && users.isEmpty
-            if self.tab == .search { withAnimation(Motion.focus) { self.headerFocused = false } }
-            if nothing { self.tv?.showToast("没有找到「\(keyword)」") }
+            // 只换搜索页自己的东西：这期间打开的 UP 主页、挪去的左边栏都不动。
+            // 结果是渐渐出来的（上半屏从搜索框换成视频标题时一起挪，不是一下子跳过去）
+            withAnimation(Motion.navigate) { self.content[.search] = personFirst ? userRow + videoRow : videoRow + userRow }
+            if results.isEmpty && users.isEmpty { self.tv?.showToast("没有找到「\(keyword)」") }
             self.warmFocused()
         }
     }
@@ -1055,10 +1554,8 @@ final class BilibiliStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled, let tv = self.tv else { return }
                 guard case .player(let service) = tv.mode, service.id == Self.loginID else { return }
-                if let account = await BiliAPI.account(cookie: await self.cookieHeader(fresh: true)) {
-                    self.cookieCache = nil
+                if case .signedIn = await BiliAPI.account(cookie: await self.cookieHeader(fresh: true)) {
                     tv.returnToBilibili()
-                    tv.showToast("已登录：\(account.name)")
                     return
                 }
             }
@@ -1076,7 +1573,10 @@ final class BilibiliStore: ObservableObject {
 extension TVController {
     func openBilibili() {
         if mode != .launcher { goHome() }   // 比如从手机上直接点开哔哩哔哩时，先把正在放的别的东西收掉
-        bilibiliStore.tv = self
+        // 别的应用收起来、停下（网易云的歌、得到的书不能和视频一起响）
+        closeNetease()
+        closeDedao()
+        closeBrowser()
         sheets.closeDismissible()
         movies = nil
         bilibiliOpen = true
@@ -1096,7 +1596,91 @@ extension TVController {
         setMode(.launcher)
         playerFailure = nil
         bilibiliOpen = true
-        bilibiliStore.reload()   // 登录状态变了，内容要重新取
+        bilibiliStore.reload()   // 登录状态变了，登录信息重新读，内容重新取
         bringToFront()
+    }
+}
+
+/// 哔哩哔哩自己的两条动画（列表页、播放器、面板共用；别的都用 Motion）
+@MainActor
+enum BiliMotion {
+    /// 从屏幕边上拉出来、收回去的东西：左边栏、头像菜单、卡片菜单、右边的面板、清晰度栏、下面那一块。带一点弹性
+    static let slide = Motion.slide
+
+    private static var lastStep = Date.distantPast
+
+    /// 在一排里走一格（列表页的卡片排、播放器里的选集和相关视频）：单按一下用平常的；
+    /// 连着走（按住方向键、双指一甩）时换一条短的，不然每一下都重新起一段弹簧，忽快忽慢
+    static func step() -> Animation {
+        let now = Date()
+        defer { lastStep = now }
+        return now.timeIntervalSince(lastStep) < 0.2 ? .smooth(duration: 0.16) : Motion.focus
+    }
+}
+
+/// 左边栏显示哪几页（设置里的"左边栏显示"）。记的是藏起来的那几页：默认全都显示，以后多了一页也是显示的。
+/// 首页一直都在，藏不掉
+enum BiliSidebar {
+    private static let key = "bilibiliSidebarHidden"
+    /// 设置里能勾选的几页（按左边栏里的顺序）
+    static let choices = BilibiliStore.Tab.allCases.filter { $0 != .home }
+
+    static var hidden: Set<BilibiliStore.Tab> {
+        get { Set((UserDefaults.standard.stringArray(forKey: key) ?? []).compactMap(BilibiliStore.Tab.init).filter(choices.contains)) }
+        set { UserDefaults.standard.set(choices.filter(newValue.contains).map(\.rawValue), forKey: key) }
+    }
+
+    /// 设置那一行右边写的："搜索 等 4 项"、"直播"、"只有首页"
+    static func summary(hidden: Set<BilibiliStore.Tab>) -> String {
+        let shown = choices.filter { !hidden.contains($0) }.map(\.title)
+        switch shown.count {
+        case 0: return "仅首页"
+        case 1: return shown[0]
+        default: return "\(shown[0]) 等 \(shown.count) 项"
+        }
+    }
+}
+
+// MARK: 主屏顶部（见 AppShelf）
+
+extension BilibiliStore {
+    /// 主屏顶部轮播的内容。关注的 UP 主最近没发视频（或没登录）时换成推荐，标签跟着写"推荐"
+    func shelfItems(_ source: BiliShelfSource) async -> (label: String, items: [AppShelfItem]) {
+        let cookie = await cookieHeader()
+        var label = source.title
+        var videos: [BiliVideo]
+        switch source {
+        case .following:
+            videos = await BiliAPI.followingFeed(cookie: cookie)
+            if videos.isEmpty {
+                videos = await BiliAPI.recommended(cookie: cookie)
+                label = BiliShelfSource.recommended.title
+            }
+        case .recommended: videos = await BiliAPI.recommended(cookie: cookie)
+        case .popular: videos = await BiliAPI.popular(cookie: cookie)
+        case .live:
+            // 关注的主播在播的在前，不够再拿推荐直播补上
+            async let mine = BiliAPI.liveFollowing(cookie: cookie)
+            async let index = BiliAPI.liveIndex(cookie: cookie)
+            let (following, areas) = await (mine, index)
+            let seen = Set(following.map(\.liveRoom))
+            videos = following + (areas.first?.rooms ?? []).filter { !seen.contains($0.liveRoom) }
+        }
+        let items = videos.prefix(AppShelf.limit).map { video -> AppShelfItem in
+            var detail: [String] = []
+            if video.isLive {
+                detail.append("直播")
+                if let area = video.note { detail.append(area) }
+                if video.views > 0 { detail.append("\(video.viewsText) 人看过") }
+            } else {
+                if let ago = AppShelf.ago(video.published) { detail.append(ago) }
+                if video.views > 0 { detail.append("\(video.viewsText)播放") }
+                if video.duration > 0 { detail.append(video.durationText) }
+            }
+            return AppShelfItem(id: "bili-\(video.bvid)", kind: .video(video), title: video.title, subtitle: video.owner,
+                                detail: detail.joined(separator: " · "), image: BiliAPI.largeCover(video.cover),
+                                thumbnail: video.cover, avatar: video.face)
+        }
+        return (label, items)
     }
 }

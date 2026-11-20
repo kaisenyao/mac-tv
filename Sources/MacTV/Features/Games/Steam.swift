@@ -178,7 +178,6 @@ extension TVController {
                 guard let self, let app, app.processIdentifier == self.steamGamePID else { return }
                 self.steamGamePID = nil
                 self.bringToFront()
-                self.showToast("Welcome back")
             }
         })
     }

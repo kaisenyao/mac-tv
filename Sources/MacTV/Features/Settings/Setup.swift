@@ -1,27 +1,19 @@
 import SwiftUI
 
-/// The first-run setup: a welcome, choosing the home screen's apps, pairing the phone remote, the
-/// anonymous-usage question, and a few tips. Shown once on a new install, driven by the D-pad, the
-/// keyboard or the mouse. An existing install sees only the usage question, once, after updating.
+/// The first-run setup: a welcome, choosing the home screen's apps and pairing the phone remote.
+/// Shown once on a new install, driven by the D-pad, the keyboard or the mouse.
 struct SetupFlow: Equatable {
     enum Step: Int, CaseIterable {
-        case welcome, apps, remote, privacy, done
+        case welcome, apps, remote
     }
 
     var step: Step = .welcome
     /// In the apps step: the focused app, or the Continue button when it's past the last app.
-    /// In the privacy step: 0 is Share, 1 is Not Now.
     var index = 0
     /// A phone opened the remote while the remote step was showing.
     var phoneConnected = false
-    /// Just the usage question, for an install that finished setup before it existed.
-    var onlyPrivacy = false
-
     /// The steps this run shows, in order.
-    @MainActor var steps: [Step] {
-        if onlyPrivacy { return [.privacy] }
-        return Step.allCases.filter { $0 != .privacy || Analytics.available }
-    }
+    var steps: [Step] { Step.allCases }
 
     static let columns = 5
 }
@@ -41,18 +33,9 @@ extension TVController {
         setup = SetupFlow()
     }
 
-    /// An install from before the usage question: ask it once, on its own.
-    func askAboutAnalytics() {
-        setup = SetupFlow(step: .privacy, onlyPrivacy: true)
-    }
-
     func finishSetup() {
-        guard let flow = setup else { return }
-        if !flow.onlyPrivacy {
-            UserDefaults.standard.set(true, forKey: "setupDone")
-            let hidden = setupChoices.filter { library.isHidden($0.id) }.count
-            Analytics.send(.setupFinished, ["phoneConnected": String(flow.phoneConnected), "appsHidden": String(hidden)])
-        }
+        guard setup != nil else { return }
+        UserDefaults.standard.set(true, forKey: "setupDone")
         setup = nil
         setFocus(.app(0))
         showStartupPairingIfReady()
@@ -66,14 +49,10 @@ extension TVController {
             if let at = steps.firstIndex(of: flow.step), at > 0 { flow.step = steps[at - 1]; flow.index = 0 }
         case .select:
             setup = flow
-            activateSetup(flow.step == .apps || flow.step == .privacy ? flow.index : 0)
+            activateSetup(flow.step == .apps ? flow.index : 0)
             return
         case .move(let direction) where flow.step == .apps:
             flow.index = movedSetupFocus(from: flow.index, direction)
-        case .move(.left) where flow.step == .privacy:
-            flow.index = 0
-        case .move(.right) where flow.step == .privacy:
-            flow.index = 1
         default:
             break
         }
@@ -91,10 +70,6 @@ extension TVController {
             library.setHidden(id, !library.isHidden(id))
             reloadServices()
             return
-        }
-        if flow.step == .privacy {
-            // Share (0) or Not Now (1). Nothing has been sent before this answer.
-            Analytics.setConsent(index == 0, context: analyticsContext)
         }
         advanceSetup()
     }
@@ -153,17 +128,13 @@ struct SetupScreen: View {
                 case .welcome: welcome
                 case .apps: apps(flow)
                 case .remote: remote(flow)
-                case .privacy: privacy(flow)
-                case .done: done
                 }
             }
             .id(flow.step)
             .transition(.opacity.combined(with: .offset(y: 24)))
             Spacer(minLength: 0)
-            if !flow.onlyPrivacy {
-                dots(flow)
-                    .padding(.bottom, 64)
-            }
+            dots(flow)
+                .padding(.bottom, 64)
         }
         .foregroundStyle(.white)
         .frame(width: canvas.width, height: canvas.height)
@@ -180,13 +151,7 @@ struct SetupScreen: View {
                 .frame(width: 200, height: 200)
                 .shadow(color: .black.opacity(0.5), radius: 30, y: 16)
             title("Welcome to Mac TV")
-            subtitle("Your streaming apps on the big screen, with your phone as the remote. Setting up takes about a minute.")
-            HStack(spacing: 18) {
-                hint("arrow.up.and.down.and.arrow.left.and.right", "Arrow keys move")
-                hint("return", "Return selects")
-                hint("escape", "Esc goes back")
-            }
-            .padding(.top, 8)
+            subtitle("Your apps on the big screen.")
             ShelfButton(title: "Get Started", focused: true, glass: false) { tv.activateSetup(0) }
                 .padding(.top, 20)
         }
@@ -196,8 +161,8 @@ struct SetupScreen: View {
         let choices = tv.setupChoices
         let rows = stride(from: 0, to: choices.count, by: SetupFlow.columns).map { Array($0..<min($0 + SetupFlow.columns, choices.count)) }
         return VStack(spacing: 28) {
-            title("Choose your apps")
-            subtitle("Pick what goes on your home screen. You can add any website, Mac app or Steam game later with Add App.")
+            title("Choose Your Apps")
+            subtitle("Choose what’s on your Home Screen.")
             VStack(spacing: 34) {
                 ForEach(rows, id: \.self) { row in
                     HStack(spacing: 40) {
@@ -215,8 +180,8 @@ struct SetupScreen: View {
 
     private func remote(_ flow: SetupFlow) -> some View {
         VStack(spacing: 28) {
-            title("Use your phone as the remote")
-            subtitle("Scan a code with your phone's camera. It opens a remote in the browser, with nothing to install. Add it to your home screen to keep it handy.")
+            title("Use Your Phone as a Remote")
+            subtitle("Scan with your phone’s camera.")
             HStack(alignment: .top, spacing: 36) {
                 if tv.remoteLinks.isEmpty {
                     RoundedRectangle(cornerRadius: 28, style: .continuous).fill(.white.opacity(0.1))
@@ -243,7 +208,7 @@ struct SetupScreen: View {
             .opacity(flow.phoneConnected ? 0.35 : 1)
             .overlay {
                 if flow.phoneConnected {
-                    Label("Remote connected", systemImage: "checkmark.circle.fill")
+                    Label("Remote Connected", systemImage: "checkmark.circle.fill")
                         .font(.tv(.body, emphasized: true))
                         .padding(.horizontal, 34).frame(height: 76)
                         .background(Capsule().fill(Color(white: 0.16)))
@@ -251,44 +216,8 @@ struct SetupScreen: View {
                 }
             }
             .animation(Motion.appear, value: flow.phoneConnected)
-            Text("Away from home, or on Wi-Fi that keeps devices apart? Use the Tailscale code.")
-                .font(.tv(.caption2)).opacity(0.55)
             ShelfButton(title: flow.phoneConnected ? "Continue" : "Skip for Now", focused: true, glass: false) { tv.advanceSetup() }
                 .padding(.top, 8)
-        }
-    }
-
-    private func privacy(_ flow: SetupFlow) -> some View {
-        // One line and two buttons, like Apple TV's own analytics question; the details are on the privacy page.
-        VStack(spacing: 28) {
-            Image(systemName: "chart.bar.xaxis")
-                .font(.system(size: 92, weight: .regular))
-            title("Help improve Mac TV?")
-            subtitle("Share which features you use, anonymously. Never what you watch.")
-            HStack(spacing: 24) {
-                ShelfButton(title: "Share", focused: flow.index == 0, glass: false) { tv.activateSetup(0) }
-                ShelfButton(title: "Don't Share", focused: flow.index == 1, glass: false) { tv.activateSetup(1) }
-            }
-            .padding(.top, 20)
-        }
-    }
-
-    private var done: some View {
-        VStack(spacing: 28) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 110))
-                .foregroundStyle(Color(hex: "#3DDC84"))
-            title("You're all set")
-            VStack(alignment: .leading, spacing: 22) {
-                tip("person.crop.circle", "Sign in to each app once", "Mac TV remembers it, like Safari. Type with your keyboard or the phone remote's keys.")
-                tip("house", "Come home any time", "Home on the phone remote, the Menu button on a controller, or ⌘⇧H.")
-                tip("arrow.up.left.and.arrow.down.right", "Fill the TV", "The green button or ⌃⌘F switches to full screen.")
-                tip("gearshape", "Change things later", "Settings has the remote's QR code, the sleep timer and power options.")
-            }
-            .frame(width: 900, alignment: .leading)
-            .padding(.top, 8)
-            ShelfButton(title: "Start Watching", focused: true, glass: false) { tv.advanceSetup() }
-                .padding(.top, 20)
         }
     }
 
@@ -305,26 +234,6 @@ struct SetupScreen: View {
             .multilineTextAlignment(.center)
             .lineSpacing(4)
             .frame(maxWidth: 1000)
-    }
-
-    private func hint(_ symbol: String, _ text: String) -> some View {
-        Label(text, systemImage: symbol)
-            .font(.tv(.caption2))
-            .padding(.horizontal, 22).frame(height: 52)
-            .foregroundStyle(.white.opacity(0.85))
-            .tvPanel(in: Capsule())
-    }
-
-    private func tip(_ symbol: String, _ heading: String, _ detail: String) -> some View {
-        HStack(alignment: .top, spacing: 22) {
-            Image(systemName: symbol)
-                .font(.system(size: 30, weight: .semibold))
-                .frame(width: 44)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(heading).font(.tv(.body, emphasized: true))
-                Text(detail).font(.tv(.caption2)).foregroundStyle(.white.opacity(0.65))
-            }
-        }
     }
 
     private func choice(_ service: Service, index: Int, focused: Bool) -> some View {

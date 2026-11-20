@@ -453,7 +453,7 @@ final class MoviePlayer: ObservableObject {
                 let cues = SubtitleCue.parse(file: file)
                 guard !cues.isEmpty else { return nil }
                 let known = MediaOption.languageCode(language).flatMap { Locale.current.localizedString(forLanguageCode: $0) } != nil
-                return (MediaOption(language: known ? language : "und", name: known ? nil : "Subtitles file", detail: nil), cues)
+                return (MediaOption(language: known ? language : "und", name: known ? nil : "Subtitle File", detail: nil), cues)
             }
     }
 }

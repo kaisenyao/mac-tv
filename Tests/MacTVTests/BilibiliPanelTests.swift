@@ -119,7 +119,7 @@ struct BilibiliPanelTests {
     @Test @MainActor
     func speedsMatchTheWebsite() {
         #expect(BilibiliNativePlayer.speeds == [2.0, 1.5, 1.25, 1.0, 0.75, 0.5])
-        #expect(BilibiliNativePlayer.speeds.map { BilibiliNativePlayer.speedName($0) } == ["2.0×", "1.5×", "1.25×", "1.0×", "0.75×", "0.5×"])
+        #expect(BilibiliNativePlayer.speeds.map { BilibiliNativePlayer.speedName($0) } == ["2×", "1.5×", "1.25×", "1×", "0.75×", "0.5×"])
     }
 
     /// 自动打开字幕时：UP 主上传的中文优先，其次自动生成的中文，都没有就第一条

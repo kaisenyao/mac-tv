@@ -25,6 +25,14 @@ enum RemotePage {
             .replacingOccurrences(of: #"<script src="remote.js"></script>"#, with: "<script>\n" + script + "</script>")
     }
 
+    /// 遥控页用到的文件（主屏幕图标；手机不出声，没有声音文件），按名字给；只给这几个，别的名字一律没有
+    static func asset(_ name: String) -> (data: Data, type: String)? {
+        let types = ["touch-icon.png": "image/png"]
+        guard let type = types[name], let folder = pageFolder,
+              let data = try? Data(contentsOf: folder.appendingPathComponent(name)) else { return nil }
+        return (data, type)
+    }
+
     /// The package's resource bundle holds `Page/`. It's in the app's Resources folder, or next to
     /// the binary in a Swift build or test run.
     private static var pageFolder: URL? {

@@ -10,7 +10,8 @@ struct Screensaver: View {
     var body: some View {
         ZStack(alignment: .top) {
             ScreenSaverBackdrop(wallpaper: ScreenSaverSettings.wallpaper, pictures: ScreenSaverSettings.playing)
-            if ScreenSaverSettings.showClock {
+            // 翻页时钟自己就是钟，上面不再叠一个
+            if ScreenSaverSettings.showClock, ScreenSaverSettings.wallpaper != .flipClock {
                 // Keeps the clock legible over bright skies.
                 LinearGradient(colors: [.black.opacity(0.35), .clear], startPoint: .top, endPoint: .center)
 

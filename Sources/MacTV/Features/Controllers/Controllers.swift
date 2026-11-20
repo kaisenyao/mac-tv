@@ -7,10 +7,6 @@ struct ControllerInfo: Equatable {
     /// 0–1, when the controller reports it.
     var battery: Float?
     var charging = false
-    /// Apple's symbols for this controller's own buttons: ✕ and ○ on PlayStation, A and B on Xbox.
-    var selectSymbol = "a.circle"
-    var backSymbol = "b.circle"
-    var menuSymbol = "line.3.horizontal.circle"
 
     var batterySymbol: String {
         if charging { return "battery.100percent.bolt" }
@@ -124,15 +120,10 @@ final class ControllerInput {
     }
 
     static func info(for controller: GCController) -> ControllerInfo {
-        var info = ControllerInfo(name: controller.vendorName ?? "Game controller")
+        var info = ControllerInfo(name: controller.vendorName ?? "Game Controller")
         if let battery = controller.battery {
             info.battery = battery.batteryLevel
             info.charging = battery.batteryState == .charging || battery.batteryState == .full
-        }
-        if let pad = controller.extendedGamepad {
-            info.selectSymbol = pad.buttonA.sfSymbolsName ?? info.selectSymbol
-            info.backSymbol = pad.buttonB.sfSymbolsName ?? info.backSymbol
-            info.menuSymbol = pad.buttonMenu.sfSymbolsName ?? info.menuSymbol
         }
         return info
     }
@@ -167,29 +158,5 @@ struct ControllerBanner: View {
         .padding(.leading, 22).padding(.trailing, 26)
         .frame(height: 76)
         .tvGlass(in: Capsule())
-    }
-}
-
-/// The controller's own buttons and what they do, shown beside the clock while one is connected.
-struct ControllerHints: View {
-    let info: ControllerInfo
-
-    var body: some View {
-        HStack(spacing: 18) {
-            hint(info.selectSymbol, "Open")
-            hint(info.backSymbol, "Back")
-            hint(info.menuSymbol, "Home")
-        }
-        .font(.tv(.caption2))
-        .padding(.horizontal, 20)
-        .frame(height: 50)
-        .tvGlass(in: Capsule())
-    }
-
-    private func hint(_ symbol: String, _ label: String) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: symbol).font(.system(size: 22, weight: .medium)).symbolRenderingMode(.hierarchical)
-            Text(label)
-        }
     }
 }

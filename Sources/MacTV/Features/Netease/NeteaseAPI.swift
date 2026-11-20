@@ -39,7 +39,8 @@ struct NeteaseLyricLine: Hashable, Sendable {
 
 struct NeteasePlaylist: Hashable, Sendable {
     /// 歌单页也用来显示歌手的热门歌曲、专辑里的歌
-    enum Kind: Hashable, Sendable { case playlist, artist, album, recent }
+    /// daily：每日推荐（从主屏顶部进来时当成一个歌单打开）
+    enum Kind: Hashable, Sendable { case playlist, artist, album, recent, daily }
     let id: Int
     let name: String
     var cover: URL? = nil
@@ -198,6 +199,11 @@ enum NeteaseAPI {
     /// 我的歌单；第一个是"我喜欢的音乐"
     static func playlists(user: Int) async -> [NeteasePlaylist] {
         ((await call("user/playlist", ["uid": user, "limit": 60, "offset": 0, "includeVideo": false]))?["playlist"] as? [[String: Any]] ?? []).compactMap(playlist)
+    }
+
+    /// 一首歌（手机发来的歌曲链接用）
+    static func song(id: Int) async -> NeteaseSong? {
+        ((await call("v3/song/detail", ["c": "[{\"id\":\(id)}]"]))?["songs"] as? [[String: Any]])?.first.flatMap(song)
     }
 
     /// 歌单里的歌（最多前 limit 首）
@@ -410,9 +416,23 @@ enum NeteaseAPI {
                                creator: (item["creator"] as? [String: Any])?["userId"] as? Int ?? item["userId"] as? Int ?? 0)
     }
 
-    /// 推荐歌单（登录后是按你的口味推荐的）
-    static func recommendedPlaylists() async -> [NeteasePlaylist] {
-        ((await call("personalized/playlist", ["limit": 30, "total": true, "n": 1000]))?["result"] as? [[String: Any]] ?? []).compactMap(playlist)
+    /// 一个歌单的名字、封面、歌数（手机发来的歌单链接用；不取歌）
+    static func playlistInfo(_ id: Int) async -> NeteasePlaylist? {
+        ((await call("v6/playlist/detail", ["id": id, "n": 0, "s": 0]))?["playlist"] as? [String: Any]).flatMap(playlist)
+    }
+
+    /// 推荐歌单，分两份：
+    /// - daily：网易云每天早上 6 点给你换的"每日推荐歌单"（和网易云 App 首页那几个一样，要登录）
+    /// - more：按口味推荐的一大池（网易云不常换这一份，每次取回来差不多是同一批；首页每次刷新从里面轮着换一批）
+    /// 两份里不重复
+    static func recommendedPlaylists() async -> (daily: [NeteasePlaylist], more: [NeteasePlaylist]) {
+        async let daily = call("v1/discovery/recommend/resource", [:])
+        async let picks = call("personalized/playlist", ["limit": 60, "total": true, "n": 1000])
+        let today = ((await daily)?["recommend"] as? [[String: Any]] ?? []).compactMap(playlist)
+        let pool = ((await picks)?["result"] as? [[String: Any]] ?? []).compactMap(playlist)
+        Log.playback.info("netease: \(today.count, privacy: .public) daily recommended playlists, \(pool.count, privacy: .public) more")
+        var seen = Set(today.map(\.id))
+        return (today, pool.filter { seen.insert($0.id).inserted })
     }
 
     /// 排行榜（飙升榜、新歌榜、热歌榜……每个榜是一个歌单）
@@ -460,7 +480,7 @@ enum NeteaseAPI {
         guard let data = await call("v1/artist/\(id)", [:]), let artist = data["artist"] as? [String: Any],
               let name = artist["name"] as? String else { return nil }
         let songs = (data["hotSongs"] as? [[String: Any]] ?? []).compactMap(song)
-        let counts = [(artist["musicSize"] as? Int).map { "\($0) 首歌" }, (artist["albumSize"] as? Int).map { "\($0) 张专辑" }]
+        let counts = [(artist["musicSize"] as? Int).map { "\($0) 首" }, (artist["albumSize"] as? Int).map { "\($0) 张专辑" }]
             .compactMap { $0 }.joined(separator: " · ")
         return (NeteasePlaylist(id: id, name: name, cover: image(artist["picUrl"] ?? artist["img1v1Url"]), count: songs.count,
                                 kind: .artist, subtitle: counts), songs)

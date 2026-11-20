@@ -63,7 +63,10 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
 
     // MARK: - Web Playback
 
-    func playWeb(_ service: Service, url: URL) {
+    /// restoring、zoom、dataStore 只有浏览器的标签页用：换回一个标签页时按记下的样子恢复（前进后退、滚到哪），
+    /// 按网站记下的缩放；无痕标签页用自己那份不落盘的网站数据（见 BrowserStore）
+    func playWeb(_ service: Service, url: URL, restoring state: Any? = nil, zoom: Double? = nil,
+                 dataStore: WKWebsiteDataStore? = nil) {
         if tv?.browserPreferences.choice(for: tv?.profile.id ?? "").rawValue == BrowserChoice.brave.rawValue {
             playInBrave(service, url: url)
             return
@@ -71,8 +74,9 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         playbackRequest = UUID()
         currentLocalMovie = nil
         tv?.playerFailure = nil
-        let web = makeWebView(for: service)
-        web.load(URLRequest(url: url))
+        let web = makeWebView(for: service, dataStore: dataStore)
+        if let zoom { web.pageZoom = zoom }
+        if let state { web.interactionState = state } else { web.load(URLRequest(url: url)) }
         webView = web
         tv?.setMode(.player(service))
         tv?.clearPointer()
@@ -96,10 +100,12 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         popups.removeAll()
     }
 
-    func makeWebView(for service: Service) -> WKWebView {
+    func makeWebView(for service: Service, dataStore: WKWebsiteDataStore? = nil) -> WKWebView {
         let config = WKWebViewConfiguration()
         // Each profile's own store keeps its sign-ins between launches.
-        if let profile = tv?.profile {
+        if let dataStore {
+            config.websiteDataStore = dataStore   // 浏览器的无痕标签页
+        } else if let profile = tv?.profile {
             config.websiteDataStore = profile.websiteDataStore
         }
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -112,6 +118,10 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         config.userContentController.addUserScript(
             WKUserScript(source: AutoPlay.script(skip: tv?.autoSkip ?? true, next: tv?.autoNext ?? true),
                          injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        if service.id == "youtube" {
+            config.userContentController.addUserScript(
+                WKUserScript(source: YouTubeTV.script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         if service.id == BilibiliStore.loginID {
             config.userContentController.addUserScript(
                 WKUserScript(source: BilibiliLoginPage.chinese, injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -120,6 +130,8 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
             config.userContentController.addUserScript(
                 WKUserScript(source: SpatialNav.script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
+        // 浏览器：视频铺满了没有、在页面最上面按上（去标签栏）、网页画出来了，告诉 BrowserStore
+        if service.id == BrowserStore.pageID, let store = tv?.browserStore { BrowserPageScript.install(in: config, store: store) }
         let web = WKWebView(frame: .zero, configuration: config)
         web.customUserAgent = service.userAgent
         web.uiDelegate = self
@@ -137,7 +149,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
                     arguments: ["action": action], contentWorld: .page)
                 guard self?.webView === web else { return }
                 if value as? String == "none" { self?.sendKey(fallback, to: web) }
-                else if value as? String == "unsupported" { self?.tv?.showToast("The website didn't accept this control. Try its on-screen player controls.") }
+                else if value as? String == "unsupported" { self?.tv?.showToast("This website doesn't support this control.") }
             } catch {
                 if self?.webView === web { self?.sendKey(fallback, to: web) }
             }
@@ -183,14 +195,15 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
                 sendKey(.escape, to: web)
             } else if web.canGoBack {
                 web.goBack()
+            } else if service.id == BrowserStore.pageID {
+                tv?.returnToBrowser()   // 浏览器里打开的网页：返回到头回到浏览器的开始页
             } else {
                 tv?.goHome()
             }
         case .playPause:
             runWebPlayback("toggle", in: web, fallback: .space)
         case .seek(let forward):
-            if service.id == "netflix" { sendKey(forward ? .right : .left, to: web) }
-            else { runWebPlayback(forward ? "forward" : "backward", in: web, fallback: forward ? .right : .left) }
+            runWebPlayback(forward ? "forward" : "backward", in: web, fallback: forward ? .right : .left)
         case .text(let text):
             for character in text {
                 sendKey(character == "\n" ? .enter : Key(code: 0, chars: String(character)), to: web)
@@ -211,6 +224,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     // MARK: - Native Movies
 
     func playMovie(_ movie: Movie, from seconds: Double) {
+        tv?.closeNetease()   // 开始放影片：后台的歌停下
         closeIINAPlayback()
         closeExternalBrowser()
         let request = UUID()
@@ -242,15 +256,11 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
                 if case .success(let engine) = opened { engine.stop() }
                 return
             }
-            let format = movie.isRemote ? "jellyfin" : movie.url.pathExtension.lowercased()
             switch opened {
             case .success(let engine):
                 if let stream { jellyfin.started(stream, movie: movie, at: seconds) }
-                Analytics.send(.moviePlayed, ["format": format, "player": engine is AVPlayback ? "system" : "matroska",
-                                              "resumed": String(seconds > 0)])
                 startMovie(movie, engine: engine, from: seconds)
             case .failure:
-                Analytics.send(.moviePlayed, ["format": format, "player": "external"])
                 openElsewhere(movie)
             }
         }
@@ -306,9 +316,9 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: vlc) {
             NSWorkspace.shared.open([movie.url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
             tv?.setLaunchedAppID(vlc)
-            tv?.showToast("Playing \(movie.title) in VLC. Home comes back here.")
+            tv?.showToast("Playing in VLC")
         } else {
-            tv?.showToast("Mac TV can't play this file. IINA, free from iina.io, can.")
+            tv?.showToast("Can't play this file. Install IINA to play it.")
         }
     }
 
@@ -434,7 +444,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
                       let bar else { continue }
                 if self.pressIINASubtitleSearch(unsafeBitCast(bar, to: AXUIElement.self), depth: 0) { return }
             }
-            self?.tv?.showToast("IINA search wasn't available. Use the phone's subtitle upload or web search.")
+            self?.tv?.showToast("IINA Subtitle Search Isn't Available")
         }
         return true
     }
@@ -469,7 +479,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         tv?.setLaunchedAppID(nil)
         let session = BraveSession()
         externalBrowser = session
-        tv?.browserFocus = 0
+        tv?.braveFocus = 0
         externalBrowserService = service
         tv?.setMode(.player(service))
         tv?.displayCoordinator.holdPlaybackKeepAwake(reason: "Watching \(service.name) in Brave")
@@ -532,7 +542,6 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         } catch {
             externalBrowserError = error.localizedDescription
             Log.playback.failure("Brave", error)
-            tv?.showToast(error.localizedDescription)
         }
     }
 
@@ -557,7 +566,6 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         catch {
             externalBrowserError = error.localizedDescription
             Log.playback.failure("Brave", error)
-            tv?.showToast(error.localizedDescription)
         }
     }
 }
@@ -567,6 +575,8 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
 extension PlaybackCoordinator: WKUIDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // 浏览器里"在新窗口打开"的链接：开成一个新标签页（写了大小的登录小窗口还是照旧弹出来）
+        if tv?.browserStore.opensAsNewTab(navigationAction, features: windowFeatures, from: webView) == true { return nil }
         let popup = WKWebView(frame: NSRect(x: 0, y: 0, width: 520, height: 700), configuration: configuration)
         popup.customUserAgent = webView.customUserAgent
         popup.uiDelegate = self
@@ -606,6 +616,8 @@ extension PlaybackCoordinator: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if webView === self.webView {
             tv?.playerFailure = nil
+            // 浏览器里看的页面：载好以后把真正的标题和地址记进"最近浏览"和这个标签页
+            tv?.browserStore.pageLoaded(webView)
         }
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {

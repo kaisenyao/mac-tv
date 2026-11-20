@@ -3,9 +3,37 @@ import Foundation
 import Testing
 @testable import MacTV
 
-/// 网易云音乐里不用联网、不用播放器就能测的那几块：平衡音量、听歌记录、记住进度
+/// 网易云音乐里不用联网、不用播放器就能测的那几块：平衡音量、听歌记录、记住进度、推荐歌单换一批
 @Suite
 struct NeteaseTests {
+    // MARK: 推荐歌单换一批
+
+    private func lists(_ ids: ClosedRange<Int>) -> [NeteasePlaylist] { ids.map { NeteasePlaylist(id: $0, name: "\($0)") } }
+
+    @Test
+    func refreshRotatesThroughThePoolABatchAtATime() {
+        let pool = lists(1...30)
+        let batch = NeteaseStore.picksBatch
+        #expect(NeteaseStore.batch(of: pool, turn: 0).map(\.id) == Array(1...batch))
+        #expect(NeteaseStore.batch(of: pool, turn: 1).map(\.id) == Array(batch + 1...2 * batch))
+        // 轮到头接着从头来，每批都是满的
+        #expect(NeteaseStore.batch(of: pool, turn: 2).map(\.id) == Array(2 * batch + 1...30) + Array(1...(3 * batch - 30)))
+        // 池子不够一批：全摆，刷新也不变
+        #expect(NeteaseStore.batch(of: lists(1...5), turn: 3).map(\.id) == Array(1...5))
+    }
+
+    @Test
+    func homeShelfSharesItsRoomBetweenTheTwoListKinds() {
+        // 默认（每日推荐、我喜欢的音乐、每日歌单、推荐歌单）：两种各 3 个，一共 8 个
+        #expect(NeteaseShelfSource.listsPerGroup(NeteaseShelfSource.defaults) == 3)
+        // 只勾了一种：最多 4 个
+        #expect(NeteaseShelfSource.listsPerGroup([.daily, .playlists]) == 4)
+        // 全勾：各 2 个，正好放满
+        let all = NeteaseShelfSource.allCases
+        #expect(all.count - 2 + 2 * NeteaseShelfSource.listsPerGroup(all) <= AppShelf.limit)
+        #expect(NeteaseShelfSource.listsPerGroup([.daily, .liked]) == 0)
+    }
+
     // MARK: 平衡音量
 
     @Test

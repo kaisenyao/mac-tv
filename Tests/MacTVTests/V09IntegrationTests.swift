@@ -21,13 +21,13 @@ import Testing
             let b = other.add(name: "Video", url: url, bundleID: nil)
             #expect(a.id != b.id)
             #expect(first.setPinned("youtube", true))
-            #expect(other.setPinned("netflix", true))
-            #expect(first.move("hotstar", by: -1))
+            #expect(other.setPinned("netease", true))
+            #expect(first.move("movies", by: -1))
             let expected = first.services().map(\.id)
             #expect(AppLibrary(folder: folder).services().map(\.id) == expected)
             #expect(!other.isPinned("youtube"))
-            #expect(!first.isPinned("netflix"))
-            #expect(AppLibrary(profileID: "other", folder: folder).isPinned("netflix"))
+            #expect(!first.isPinned("netease"))
+            #expect(AppLibrary(profileID: "other", folder: folder).isPinned("netease"))
         }
     }
 
@@ -42,10 +42,10 @@ import Testing
             #expect(tv.profile.id == second.id)
             #expect(tv.library.storageFolder == folder)
             #expect(!tv.isPinned("youtube"))
-            #expect(tv.setPinned("netflix", true))
+            #expect(tv.setPinned("netease", true))
             tv.switchProfile(to: Profile.mainID)
             #expect(tv.isPinned("youtube"))
-            #expect(!tv.isPinned("netflix"))
+            #expect(!tv.isPinned("netease"))
         }
     }
 
@@ -64,7 +64,7 @@ import Testing
             #expect(tv.settings?.section == .apps)
             #expect(SettingsPanel.Section.watching.rows.contains(.playbackCheck))
             tv.setFocus(.status(.profile))
-            #expect(tv.setPinned("spotify", true))
+            #expect(tv.setPinned("movies", true))
             #expect(tv.focus == .status(.profile))
         }
     }

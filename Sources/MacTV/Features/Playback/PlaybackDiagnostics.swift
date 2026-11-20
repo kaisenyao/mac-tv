@@ -52,7 +52,7 @@ extension TVController {
         else { Log.playback.error("Streaming page stopped responding") }
         playerFailure = PlayerFailure(message: error == nil
             ? "The streaming page stopped responding."
-            : "The streaming page couldn't load. Check the connection, then try again.")
+            : "The streaming page couldn’t load. Check the connection, then try again.")
     }
     func handlePlayerFailure(_ command: RemoteCommand) {
         guard var panel = playerFailure else { return }
@@ -77,7 +77,7 @@ extension TVController {
             else if case .web(let original) = service.kind { url = original }
             else { url = nil }
             guard let url, let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") else {
-                showToast("Safari isn't available. Retry or return Home."); return
+                showToast("Safari Isn’t Available"); return
             }
             NSWorkspace.shared.open([url], withApplicationAt: safari, configuration: NSWorkspace.OpenConfiguration())
             goHome()
@@ -90,10 +90,10 @@ struct PlaybackFailureView: View {
     @ObservedObject var tv: TVController
     var body: some View {
         VStack(spacing: 28) {
-            Text("Playback needs attention").font(.system(size: 42, weight: .bold))
+            Text("Can’t Play").font(.system(size: 42, weight: .bold))
             Text(tv.playerFailure?.message ?? "").font(.system(size: 26)).multilineTextAlignment(.center)
             HStack(spacing: 24) {
-                ForEach(Array(["Retry", "Open in Safari", "Home"].enumerated()), id: \.offset) { index, label in
+                ForEach(Array(["Try Again", "Open in Safari", "Home"].enumerated()), id: \.offset) { index, label in
                     Button(label) { tv.performPlayerRecovery(index) }
                         .buttonStyle(.plain).font(.system(size: 26, weight: .semibold)).padding(24)
                         .foregroundStyle(tv.playerFailure?.selected == index ? .black : .white)
@@ -120,7 +120,7 @@ private struct PlaybackCheckContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
-                Text("Playback check").font(.system(size: 44, weight: .bold))
+                Text("Playback Check").font(.system(size: 44, weight: .bold))
                 Spacer()
                 Button("Done", action: close).buttonStyle(.plain).font(.system(size: 26)).padding(16)
                     .background(.white.opacity(0.15), in: Capsule())
@@ -130,9 +130,6 @@ private struct PlaybackCheckContent: View {
             Text(check.result).font(.system(size: 19, design: .monospaced)).textSelection(.enabled)
             Text("These checks detect capabilities. Actual resolution, HDR and HDCP are not verified.")
                 .font(.system(size: 23, weight: .semibold))
-            Text("Netflix: check your plan, Safari compatibility and the display/cable requirements. Other services may limit embedded players. If a title fails, try Safari. Sign-in and subscription checks remain with each service.")
-                .font(.system(size: 22)).foregroundStyle(.white.opacity(0.75))
-            Text("Back closes this screen.").font(.system(size: 20))
         }.padding(50).frame(width: 1380).tvGlass(in: RoundedRectangle(cornerRadius: 40))
             .foregroundStyle(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
     }

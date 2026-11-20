@@ -18,7 +18,7 @@ struct BilibiliRoot: View {
 
 /// 哔哩哔哩的电视式页面。
 ///
-/// 左边一列很淡的小图标是导航（搜索、首页、关注、发现、我的），焦点移过去才展开成带文字的面板；
+/// 左边一列很淡的小图标是导航（搜索、首页、关注、直播、我的），焦点移过去才展开成带文字的面板；
 /// 右边上半屏是当前选中视频的大标题和封面背景，下半屏是一排排大卡片。
 /// 按 1920×1080 的电视画布排版，三米外能看清；全程只用方向键、确认、返回。
 struct BilibiliScreen: View {
@@ -32,10 +32,12 @@ struct BilibiliScreen: View {
     private let cardWidth: CGFloat = 416
     private let cardGap: CGFloat = 40
     private let rowHeight: CGFloat = 470
-    /// 卡片区从多高开始。搜索页里焦点不在视频上时（输入框、"UP 主"那一排），上面只有搜索框，
-    /// 结果整体往上挪；焦点到了视频上，就和别的页一样，上面是大标题。
+    /// 卡片区从多高开始。搜索页里焦点在搜索框上、或者选中的不是视频（"UP 主"那一排、搜索历史和热搜），
+    /// 上面只有搜索框，结果整体往上挪；焦点到了视频上，就和别的页一样，上面是大标题。
     private var rowsTop: CGFloat { searchPage ? 316 : 470 }
-    private var searchPage: Bool { store.tab == .search && store.upPage == nil && focusedVideo == nil }
+    private var searchPage: Bool {
+        store.tab == .search && store.upPage == nil && (store.searchFocused || store.editing || focusedVideo == nil)
+    }
     private let pink = Color(hex: "#FB7299")
     @Namespace private var sortSpace
     /// 粉色的 bilibili 字标（Icons/bilibili-logo.png，透明底）
@@ -46,7 +48,9 @@ struct BilibiliScreen: View {
         ZStack(alignment: .topLeading) {
             backdrop
             Group {
-                rows
+                Group {
+                    if store.showingLanding { searchLanding } else { rows }
+                }
                     .frame(width: canvas.width, height: canvas.height - rowsTop, alignment: .topLeading)
                     .clipped()
                     // 卡片往左滑的途中，越靠近左边那列图标越淡：淡出是跟着位置走的，所以和滑动严丝合缝。
@@ -62,9 +66,9 @@ struct BilibiliScreen: View {
                 details
                 if store.rows.isEmpty { status }
             }
-            .offset(x: store.headerFocused ? sidebarShift : (store.settingsOpen ? -50 : 0))
-            .opacity(store.settingsOpen ? 0 : (store.headerFocused ? 0.4 : 1))
-            .animation(Self.slide, value: store.headerFocused)
+            .offset(x: store.sidebarFocused ? sidebarShift : (store.settingsOpen ? -50 : 0))
+            .opacity(store.settingsOpen ? 0 : (store.sidebarFocused ? 0.4 : 1))
+            .animation(BiliMotion.slide, value: store.sidebarFocused)
             .animation(.easeOut(duration: 0.2), value: store.settingsOpen)
             // 设置页：列表先往左退一点淡出，设置页随后从右边进来（和网易云进设置一样）
             if store.settingsOpen {
@@ -78,7 +82,6 @@ struct BilibiliScreen: View {
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
         .background(Color.black)
-        .animation(Motion.focus, value: store.headerFocused)
     }
 
     // MARK: 左边栏
@@ -87,9 +90,9 @@ struct BilibiliScreen: View {
     /// 展开时，玻璃底板和文字从左边滑出来把图标"接住"；收起时，底板和文字往左吸走，图标留在原地变淡。
     /// 所以是同一样东西在两种状态之间过渡，而不是两层东西一隐一现。
     private var sidebar: some View {
-        let open = store.headerFocused
+        let open = store.sidebarFocused
         return VStack(alignment: .leading, spacing: 10) {
-            ForEach(BilibiliStore.Tab.allCases) { tab in
+            ForEach(store.visibleTabs) { tab in
                 let current = tab == store.sidebarTab
                 HStack(spacing: 20) {
                     Image(systemName: tab.symbol)
@@ -104,7 +107,7 @@ struct BilibiliScreen: View {
                         .clipped()
                 }
                 .foregroundStyle(open && current ? Color.black : Color.white.opacity(current ? 1 : (open ? 0.78 : 0.38)))
-                .animation(open ? Self.slide : .easeOut(duration: 0.16), value: open)
+                .animation(open ? BiliMotion.slide : .easeOut(duration: 0.16), value: open)
                 .padding(.horizontal, 22)
                 .frame(width: open ? 292 : 88, height: 78, alignment: .leading)
                 .contentShape(Rectangle())
@@ -115,7 +118,7 @@ struct BilibiliScreen: View {
         .background(alignment: .topLeading) {
             // 当前项的白色高亮：展开时是一整条；收起时不跟底板走，而是自己收缩成一个小白点，
             // 停在当前图标的左边，当作"现在在哪一页"的指示。再展开时从这个小白点长回去。
-            let index = CGFloat(BilibiliStore.Tab.allCases.firstIndex(of: store.sidebarTab) ?? 0)
+            let index = CGFloat(store.visibleTabs.firstIndex(of: store.sidebarTab) ?? 0)
             RoundedRectangle(cornerRadius: open ? 22 : 5, style: .continuous)
                 .fill(.white)
                 .frame(width: open ? 292 : 10, height: open ? 78 : 10)
@@ -135,12 +138,10 @@ struct BilibiliScreen: View {
         }
         .padding(.leading, open ? 30 : 26)
         .frame(height: canvas.height, alignment: .center)
-        .animation(Self.slide, value: open)
-        .animation(Self.slide, value: store.tab)
+        .animation(BiliMotion.slide, value: open)
+        .animation(BiliMotion.slide, value: store.tab)
     }
 
-    /// 左边栏滑出 / 吸回，以及右边内容让开 / 回位，共用这一条带一点弹性的曲线
-    private static let slide = Animation.spring(response: 0.42, dampingFraction: 0.84)
 
     // MARK: 背景：选中视频的封面，放大、模糊、压暗
 
@@ -155,8 +156,7 @@ struct BilibiliScreen: View {
             if let cover = focusedVideo?.cover {
                 // 背景只是一片色彩，用很小的一张图就够：先在小尺寸上模糊，再放大铺满。
                 // 直接对全屏大图做大半径模糊，每一帧都很贵，会拖慢别的动画。
-                let small = URL(string: cover.absoluteString.replacingOccurrences(of: "@800w_450h_1c", with: "@160w_90h_1c")) ?? cover
-                BiliImage(url: small)
+                BiliImage(url: BiliAPI.resized(cover, to: "160w_90h_1c"))
                     .frame(width: 160, height: 90)
                     .blur(radius: 7)
                     .scaleEffect(x: canvas.width / 160 * 1.16, y: canvas.height / 90 * 1.16)
@@ -223,8 +223,11 @@ struct BilibiliScreen: View {
                 let focused = index == store.accountIndex
                 HStack(spacing: 18) {
                     Image(systemName: symbol(for: action)).font(.system(size: 26, weight: .semibold)).frame(width: 36)
-                    Text(hint(for: action)).font(.tv(.callout, emphasized: focused))
+                    Text(title(for: action)).font(.tv(.callout, emphasized: focused)).lineLimit(1)
                     Spacer(minLength: 0)
+                    if action == .switchAccount {   // 进下一层（登录过的账号）
+                        Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.5)
+                    }
                 }
                 .foregroundStyle(focused ? (action == .confirmLogout ? .white : .black) : .white.opacity(0.8))
                 .padding(.horizontal, 22)
@@ -252,20 +255,33 @@ struct BilibiliScreen: View {
         .offset(y: open ? 0 : -26)
         .opacity(open ? 1 : 0)
         .allowsHitTesting(open)
-        .animation(Self.slide, value: open)
-        .animation(Self.slide, value: store.accountIndex)
+        .animation(BiliMotion.slide, value: open)
+        .animation(BiliMotion.slide, value: store.accountIndex)
     }
 
-    private func symbol(for item: BilibiliStore.Item) -> String {
-        switch item {
+    private func symbol(for action: BilibiliStore.AccountAction) -> String {
+        switch action {
         case .login: "qrcode.viewfinder"
         case .refresh: "arrow.clockwise"
         case .settings: "gearshape"
+        case .switchAccount: "person.2"
+        case .useAccount(let mid): mid == store.account?.mid ? "checkmark" : "person.crop.circle"   // 现在这个打勾
+        case .addAccount: "plus"
         case .logout, .confirmLogout: "rectangle.portrait.and.arrow.right"
         case .keepLogin: "xmark"
-        case .empty: "star"
-        case .user: "person.fill"
-        case .video: "play.fill"
+        }
+    }
+
+    private func title(for action: BilibiliStore.AccountAction) -> String {
+        switch action {
+        case .login: "扫码登录"
+        case .refresh: "刷新"
+        case .settings: "设置"
+        case .switchAccount: "切换账号"
+        case .useAccount(let mid): store.savedAccounts.first { $0.mid == mid }?.name ?? "账号"
+        case .addAccount: "添加账号"
+        case .logout, .confirmLogout: "退出登录"
+        case .keepLogin: "取消"
         }
     }
 
@@ -294,20 +310,28 @@ struct BilibiliScreen: View {
                         .frame(maxWidth: 1250, alignment: .leading)
                         .shadow(color: .black.opacity(0.5), radius: 14, y: 4)
                     HStack(spacing: 22) {
-                        if !video.owner.isEmpty { Label(video.owner, systemImage: "person.fill") }
-                        if video.views > 0 { Label(video.viewsText, systemImage: "play.rectangle.fill") }
-                        if video.duration > 0 { Label(video.durationText, systemImage: "clock.fill") }
+                        if video.isLive {
+                            // 直播间：分区、主播、看过的人数
+                            Label("直播", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(pink)
+                            if let area = video.note { Label(area, systemImage: "square.grid.2x2.fill") }
+                            if !video.owner.isEmpty { Label(video.owner, systemImage: "person.fill") }
+                            if video.views > 0 { Label("\(video.viewsText) 人看过", systemImage: "eye.fill") }
+                        } else if video.endedRoom > 0 {
+                            // 看过的直播间、现在没在播：选它进主播的主页
+                            Label("未开播", systemImage: "moon.zzz.fill")
+                            if let area = video.note { Label(area, systemImage: "square.grid.2x2.fill") }
+                            if !video.owner.isEmpty { Label(video.owner, systemImage: "person.fill") }
+                        } else {
+                            if !video.owner.isEmpty { Label(video.owner, systemImage: "person.fill") }
+                            if video.views > 0 { Label(video.viewsText, systemImage: "play.rectangle.fill") }
+                            if video.duration > 0 { Label(video.durationText, systemImage: "clock.fill") }
+                        }
                     }
                     .font(.tv(.body))
                     .foregroundStyle(.white.opacity(0.72))
                 }
                 .id(video.id)
                 .transition(.opacity)
-            } else if let item = store.highlighted {
-                Text(hint(for: item))
-                    .font(.tv(.headline))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(maxWidth: 1250, alignment: .leading)
             } else {
                 Text(store.upPage?.user.name ?? store.tab.title)
                     .font(.tv(.title2, emphasized: true))
@@ -321,10 +345,9 @@ struct BilibiliScreen: View {
         .animation(.easeInOut(duration: 0.22), value: store.tab)
     }
 
-    /// 焦点停在搜索框上、但还没开始打字
-    private var fieldFocused: Bool {
-        store.tab == .search && !store.headerFocused && !store.editing && store.rows.isEmpty
-    }
+    /// 焦点停在搜索框上、但还没开始打字（选中：亮一点、加白框；按确认才变白开始打字）。
+    /// 刚按了搜索、结果还没出来时也算（见 shownFocus）
+    private var fieldFocused: Bool { store.shownFocus == .searchField }
 
     /// 搜索页上方的大输入框：按确认后才真正进入输入（系统输入框，中文输入法可用）
     private var searchField: some View {
@@ -361,7 +384,7 @@ struct BilibiliScreen: View {
 
     /// UP 主页的上方：头像、名字、粉丝数，名字旁边是关注按钮（第一排再按上才会选中它）
     private func upHeader(_ page: BilibiliStore.UpPage) -> some View {
-        let focused = page.followFocused
+        let focused = store.followFocused
         return HStack(alignment: .center, spacing: 30) {
             ZStack {
                 Circle().fill(.white.opacity(0.08))
@@ -405,7 +428,7 @@ struct BilibiliScreen: View {
 
     /// UP 主页的三个排序。焦点左右移到哪个，下面那排视频就换成哪个。
     private func sortBar(_ page: BilibiliStore.UpPage) -> some View {
-        let active = page.sortFocused && !store.headerFocused && !store.accountFocused
+        let active = store.sortFocused
         return HStack(spacing: 14) {
             ForEach(BilibiliStore.UpPage.Sort.allCases, id: \.rawValue) { sort in
                 let chosen = sort == page.sort
@@ -431,10 +454,10 @@ struct BilibiliScreen: View {
 
     /// 长按确认后的小菜单：出现在选中的那张卡片上，和头像菜单同一种玻璃、同一条曲线
     private var cardMenu: some View {
-        let actions = store.cardMenu ?? []
+        let actions = store.cardMenuActions   // 收起时也留着，收起的动画里还看得到
         let open = store.cardMenu != nil
         let focusedColumn = store.rows.indices.contains(store.row) ? store.column(of: store.rows[store.row]) : 0
-        let labels: [BilibiliStore.CardAction: (String, String)] = [.upPage: ("person.crop.circle", "UP 主主页"),
+        let labels: [BilibiliStore.CardAction: (String, String)] = [.upPage: ("person.crop.circle", "UP主主页"),
                                                                     .favorite: ("star", "收藏"),
                                                                     .watchLater: ("clock", "稍后再看")]
         return VStack(alignment: .leading, spacing: 8) {
@@ -471,21 +494,124 @@ struct BilibiliScreen: View {
         .allowsHitTesting(open)
         // 选中的卡片在第一或第二个位置上；菜单压在它的左上角里面一点
         .offset(x: margin + (focusedColumn > 0 ? cardWidth + cardGap : 0) + 36, y: rowsTop + 110)
-        .animation(Self.slide, value: open)
-        .animation(Self.slide, value: store.cardMenuIndex)
+        .animation(BiliMotion.slide, value: open)
+        .animation(BiliMotion.slide, value: store.cardMenuIndex)
     }
 
     private func hint(for item: BilibiliStore.Item) -> String {
         switch item {
         case .login: "扫码登录"
         case .refresh: "刷新"
-        case .settings: "设置"
-        case .logout, .confirmLogout: "退出登录"
-        case .keepLogin: "取消"
         case .empty(let text): text
         case .user(let user): user.name
         case .video: ""
+        case .keyword(let word): word
+        case .trend(let trend): trend.title
+        case .clearHistory: "清空"
         }
+    }
+
+    // MARK: 搜索页：搜索历史、热搜
+    //
+    // 内容和网页版一样（搜过的词、十条热搜），样子按电视来：搜过的词是一排圆角的胶囊，热搜是两列五行，
+    // 选中的那一个是和别处一样的白色高亮（放大一点、黑字）。左右在一排里走，上下换排，最上面再按上回到搜索框
+
+    private var searchLanding: some View {
+        let rows = store.rows
+        let active = store.focus == .rows
+        let columnWidth = (canvas.width - margin - 96 - 40) / 2
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                let focusedColumn = store.column(of: row)
+                if row.id == "search-history" {
+                    sectionTitle(row.title, current: index == store.row)
+                    HStack(spacing: 18) {
+                        ForEach(Array(row.items.enumerated()), id: \.offset) { column, item in
+                            historyChip(item, focused: active && index == store.row && column == focusedColumn)
+                                .onTapGesture { store.tapItem(row: index, column: column) }
+                        }
+                    }
+                    .padding(.bottom, 54)
+                } else {
+                    if !row.title.isEmpty { sectionTitle(row.title, current: rows.firstIndex { $0.id.hasPrefix("hot-") }.map { store.row >= $0 } ?? false) }
+                    HStack(spacing: 40) {
+                        ForEach(Array(row.items.enumerated()), id: \.offset) { column, item in
+                            if case .trend(let trend) = item {
+                                trendLine(trend, focused: active && index == store.row && column == focusedColumn)
+                                    .frame(width: columnWidth, alignment: .leading)
+                                    .onTapGesture { store.tapItem(row: index, column: column) }
+                            }
+                        }
+                    }
+                    .padding(.bottom, 6)
+                }
+            }
+        }
+        .padding(.leading, margin)
+        .padding(.top, 36)
+        .frame(width: canvas.width, alignment: .topLeading)
+        .animation(Motion.focus, value: store.row)
+        .animation(Motion.focus, value: store.columns)
+        .animation(Motion.focus, value: store.clearArmed)
+        .transition(.opacity)
+    }
+
+    private func sectionTitle(_ title: String, current: Bool) -> some View {
+        Text(title)
+            .font(.tv(.headline, emphasized: true))
+            .foregroundStyle(.white.opacity(current ? 1 : 0.7))
+            .padding(.bottom, 22)
+    }
+
+    /// 一个搜过的词（或者最后那个"清空"）：圆角胶囊，选中时变白、放大一点
+    private func historyChip(_ item: BilibiliStore.Item, focused: Bool) -> some View {
+        let clear = item == .clearHistory
+        let armed = clear && store.clearArmed
+        return HStack(spacing: 10) {
+            if clear { Image(systemName: "trash").font(.system(size: 22, weight: .semibold)) }
+            Text(armed ? "再按一次清空" : hint(for: item)).lineLimit(1)
+        }
+        .font(.tv(.callout, emphasized: focused))
+        .foregroundStyle(focused ? (armed ? .white : .black) : .white.opacity(clear ? 0.6 : 0.88))
+        .padding(.horizontal, 30)
+        .frame(maxWidth: 260)
+        .frame(height: 66)
+        .fixedSize(horizontal: true, vertical: false)
+        .background {
+            Capsule().fill(focused ? (armed ? Color(hex: "#E5484D") : .white) : .white.opacity(clear ? 0.05 : 0.1))
+            Capsule().strokeBorder(.white.opacity(focused ? 0 : 0.12))
+        }
+        .scaleEffect(focused ? 1.08 : 1)
+        .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 18, y: 10)
+        .hoverLift()
+    }
+
+    /// 一条热搜：排名（前三是粉色）、词、哔哩哔哩自己的"热""新"小标
+    private func trendLine(_ trend: BiliTrend, focused: Bool) -> some View {
+        HStack(spacing: 22) {
+            Text("\(trend.rank)")
+                .font(.system(size: 30, weight: .heavy).monospacedDigit())
+                .foregroundStyle(focused ? .black : (trend.rank <= 3 ? pink : .white.opacity(0.4)))
+                .frame(width: 44, alignment: .trailing)
+            Text(trend.title)
+                .font(.tv(.callout, emphasized: focused))
+                .foregroundStyle(focused ? .black : .white.opacity(0.9))
+                .lineLimit(1)
+            if let icon = trend.icon {
+                BiliImage(url: icon).frame(width: 30, height: 30).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .frame(height: 74)
+        // 选中只换成白色高亮，不放大：一列里的排名和字永远在同一条竖线上（鼠标移上去也只是亮一点，不动）
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(focused ? Color.white : .clear)
+                .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 18, y: 10)
+        }
+        .contentShape(Rectangle())
+        .hoverLift(scale: 1, brighten: 0.1)
     }
 
     // MARK: 下半屏：一排排卡片
@@ -505,8 +631,7 @@ struct BilibiliScreen: View {
 
     private func rowView(_ row: BilibiliStore.Row, index: Int) -> some View {
         let focusedColumn = store.column(of: row)
-        let active = index == store.row && !store.headerFocused && !store.editing && !store.accountFocused
-            && store.upPage?.followFocused != true && store.upPage?.browsing != false
+        let active = index == store.row && store.focus == .rows && !store.sortFocused
         // UP 主页里焦点还在排序上时，这一排的标题就是选中的那个排序，不重复写
         let titled = store.upPage?.browsing != false
         // 焦点卡片保持在第二个位置，前面露出一张，知道左边还有
@@ -523,14 +648,10 @@ struct BilibiliScreen: View {
                     if abs(column - focusedColumn) <= 6 {
                         card(item, focused: active && column == focusedColumn)
                             .hoverLift()
-                            .onTapGesture {
-                                store.focus(row: index, column: column)
-                                store.activate()
-                            }
-                            // 只留焦点前面露出的那一张；再往左的直接隐去，左边那列图标旁边不留任何残影
-                            // 淡出、略微缩小，和整排滑动用同一条曲线、同样的时长：是"滑着滑着淡掉"，不是突然没了
+                            .onTapGesture { store.tapItem(row: index, column: column) }
+                            // 只留焦点前面露出的那一张；再往左的直接隐去，左边那列图标旁边不留任何残影。
+                            // 淡出和整排的滑动是同一个动画（走一格的那一条，见 BiliMotion.step）：是"滑着滑着淡掉"，不是突然没了
                             .opacity(column < focusedColumn - 1 ? 0 : 1)
-                            .animation(.easeInOut(duration: 0.42), value: focusedColumn)
                     } else {
                         Color.clear.frame(width: cardWidth, height: 1)
                     }
@@ -551,6 +672,43 @@ struct BilibiliScreen: View {
                     Color.white.opacity(0.06)
                     BiliImage(url: video.cover)
                     .frame(width: cardWidth, height: cardWidth * 9 / 16)
+                    if video.isLive {
+                        // 直播间：左上角一个粉色的"直播"，右下角看过的人数
+                        VStack {
+                            HStack {
+                                HStack(spacing: 7) {
+                                    Circle().fill(.white).frame(width: 9, height: 9)
+                                    Text("直播").font(.system(size: 22, weight: .bold))
+                                }
+                                .padding(.horizontal, 12).padding(.vertical, 5)
+                                .background(pink, in: Capsule())
+                                Spacer()
+                            }
+                            Spacer()
+                            if video.views > 0 {
+                                HStack {
+                                    Spacer()
+                                    Label(video.viewsText, systemImage: "eye.fill")
+                                        .font(.system(size: 21, weight: .semibold).monospacedDigit())
+                                        .padding(.horizontal, 12).padding(.vertical, 5)
+                                        .background(.black.opacity(0.66), in: Capsule())
+                                }
+                            }
+                        }
+                        .padding(12)
+                    } else if video.endedRoom > 0 {
+                        // 看过的直播间、现在没在播：左上角一个灰色的"未开播"
+                        VStack {
+                            HStack {
+                                Text("未开播").font(.system(size: 22, weight: .bold))
+                                    .padding(.horizontal, 12).padding(.vertical, 5)
+                                    .background(.black.opacity(0.66), in: Capsule())
+                                Spacer()
+                            }
+                            Spacer()
+                        }
+                        .padding(12)
+                    }
                     if video.duration > 0 {
                         HStack {
                             Spacer()
@@ -570,9 +728,6 @@ struct BilibiliScreen: View {
                     }
                 case .login: action("qrcode.viewfinder", "扫码登录")
                 case .refresh: action("arrow.clockwise", "刷新")
-                case .settings: action("gearshape", "设置")
-                case .logout, .confirmLogout: action("rectangle.portrait.and.arrow.right", "退出登录")
-                case .keepLogin: action("xmark", "取消")
                 case .user(let user):
                     ZStack {
                         Color.white.opacity(0.06)
@@ -581,6 +736,8 @@ struct BilibiliScreen: View {
                             .clipShape(Circle())
                             .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 2))
                     }
+                case .keyword, .trend, .clearHistory:
+                    action("magnifyingglass", hint(for: item))
                 case .empty(let text):
                     ZStack {
                         Color.white.opacity(0.05)
@@ -646,11 +803,10 @@ struct BilibiliScreen: View {
         VStack(spacing: 22) {
             if store.loading {
                 ProgressView().controlSize(.large)
-                Text("正在载入…").font(.tv(.callout))
             } else if store.failed {
                 Image(systemName: "wifi.exclamationmark").font(.system(size: 72))
-                Text("载入失败").font(.tv(.headline, emphasized: true))
-                Text("按确认键重试").font(.tv(.body)).opacity(0.7)
+                Text("无法载入").font(.tv(.headline, emphasized: true))
+                Text("按确认重试").font(.tv(.body)).opacity(0.7)
             }
         }
         .foregroundStyle(.white)

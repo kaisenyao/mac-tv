@@ -47,7 +47,7 @@ struct BiliDanmaku: Hashable, Sendable {
 struct BiliDanmakuStyle: Equatable, Sendable {
     enum Area: Int, CaseIterable, Sendable {
         case quarter, half, threeQuarters, full
-        var title: String { ["1/4", "半屏", "3/4", "满屏"][rawValue] }
+        var title: String { ["1/4屏", "半屏", "3/4屏", "满屏"][rawValue] }
         var fraction: Double { [0.25, 0.5, 0.75, 1.0][rawValue] }
     }
     enum Size: Int, CaseIterable, Sendable {
@@ -151,41 +151,55 @@ struct BiliDanmakuLayout: Equatable, Sendable {
             : Self.topInset + Double(entry.lane) * laneHeight
     }
 
+    /// 一次排好一整个视频的弹幕（按时间排好的）
     func place(_ items: [BiliDanmaku], screen: Double = screenWidth) -> [Placed] {
-        var scrolling: [(time: Double, width: Double)?] = Array(repeating: nil, count: lanes)
-        var top: [Double] = Array(repeating: -.infinity, count: lanes)
-        var bottom: [Double] = Array(repeating: -.infinity, count: lanes)
-        var placed: [Placed] = []
-        placed.reserveCapacity(items.count)
-        for item in items {
-            let width = self.width(of: item.text, size: item.size)
+        var lanes = Lanes(self, screen: screen)
+        return items.compactMap { lanes.place($0) }
+    }
+
+    /// 每一行现在被谁占着：一条一条地排（视频是一次排完，直播是来一条排一条）
+    struct Lanes: Sendable {
+        let layout: BiliDanmakuLayout
+        let screen: Double
+        private var scrolling: [(time: Double, width: Double)?]
+        private var top: [Double]
+        private var bottom: [Double]
+
+        init(_ layout: BiliDanmakuLayout, screen: Double = BiliDanmakuLayout.screenWidth) {
+            self.layout = layout
+            self.screen = screen
+            scrolling = Array(repeating: nil, count: layout.lanes)
+            top = Array(repeating: -.infinity, count: layout.lanes)
+            bottom = Array(repeating: -.infinity, count: layout.lanes)
+        }
+
+        /// 给这一条找一行（比前面排过的都晚出现）；放不下是 nil，这条不显示
+        mutating func place(_ item: BiliDanmaku) -> Placed? {
+            let width = layout.width(of: item.text, size: item.size)
+            let duration = layout.scrollDuration
             switch item.kind {
             case .scroll:
-                let speed = (screen + width) / scrollDuration
+                let speed = (screen + width) / duration
                 let lane = scrolling.firstIndex { last in
                     guard let last else { return true }
-                    let lastSpeed = (screen + last.width) / scrollDuration
-                    let tailIn = item.time >= last.time + (last.width + Self.spacing) / lastSpeed
-                    let neverCatches = item.time + screen / speed >= last.time + scrollDuration
+                    let lastSpeed = (screen + last.width) / duration
+                    let tailIn = item.time >= last.time + (last.width + BiliDanmakuLayout.spacing) / lastSpeed
+                    let neverCatches = item.time + screen / speed >= last.time + duration
                     return tailIn && neverCatches
                 }
-                if let lane {
-                    scrolling[lane] = (item.time, width)
-                    placed.append(Placed(item: item, lane: lane, width: width))
-                }
+                guard let lane else { return nil }
+                scrolling[lane] = (item.time, width)
+                return Placed(item: item, lane: lane, width: width)
             case .top:
-                if let lane = top.firstIndex(where: { $0 <= item.time }) {
-                    top[lane] = item.time + Self.fixedDuration
-                    placed.append(Placed(item: item, lane: lane, width: width))
-                }
+                guard let lane = top.firstIndex(where: { $0 <= item.time }) else { return nil }
+                top[lane] = item.time + BiliDanmakuLayout.fixedDuration
+                return Placed(item: item, lane: lane, width: width)
             case .bottom:
-                if let lane = bottom.firstIndex(where: { $0 <= item.time }) {
-                    bottom[lane] = item.time + Self.fixedDuration
-                    placed.append(Placed(item: item, lane: lane, width: width))
-                }
+                guard let lane = bottom.firstIndex(where: { $0 <= item.time }) else { return nil }
+                bottom[lane] = item.time + BiliDanmakuLayout.fixedDuration
+                return Placed(item: item, lane: lane, width: width)
             }
         }
-        return placed
     }
 
     /// 这一刻在屏幕上的那几条（从排好的列表里按时间二分找，不用每一帧从头扫）
@@ -206,13 +220,26 @@ struct BiliDanmakuLayout: Equatable, Sendable {
 /// "跟着视频时间走的动画层"（AVSynchronizedLayer）：动画按视频的时间轴排好，暂停就停、倍速就跟着快、
 /// 拖进度就跳到对的位置，全由系统在显卡上合成——不用每一帧自己重画整个屏幕（那样会卡，也不顺）。
 /// 只给"前后几秒内"的弹幕建图层，走过去的就拿掉，图层数量一直很少。
-struct BilibiliDanmakuSurface: NSViewRepresentable {
+struct BilibiliDanmakuSurface: View {
     @ObservedObject var player: BilibiliNativePlayer
+
+    var body: some View { BiliDanmakuLayer(player: player, track: player.danmaku) }
+}
+
+/// 排好的弹幕。放在单独的对象里，只有画弹幕的那一层看着它：直播间一秒来好几条，整个播放界面不跟着重画
+@MainActor
+final class BiliDanmakuTrack: ObservableObject {
+    @Published var placed: [BiliDanmakuLayout.Placed] = []
+}
+
+private struct BiliDanmakuLayer: NSViewRepresentable {
+    @ObservedObject var player: BilibiliNativePlayer
+    @ObservedObject var track: BiliDanmakuTrack
 
     func makeNSView(context: Context) -> BiliDanmakuView { BiliDanmakuView() }
 
     func updateNSView(_ view: BiliDanmakuView, context: Context) {
-        view.update(player: player.player, placed: player.danmaku, layout: player.danmakuLayout,
+        view.update(player: player.player, placed: track.placed, layout: player.danmakuLayout,
                     opacity: player.danmakuStyle.opacity.value, visible: player.danmakuOn && player.showing)
     }
 }
@@ -221,7 +248,8 @@ final class BiliDanmakuView: NSView {
     private let sync = AVSynchronizedLayer()
     private var placed: [BiliDanmakuLayout.Placed] = []
     private var grid = BiliDanmakuLayout()
-    private var layers: [Int: CALayer] = [:]
+    /// 建好的图层，按是哪一条弹幕记（不按第几条：直播时前面的会被拿掉，后面一直有新的接上）
+    private var layers: [BiliDanmakuLayout.Placed: CALayer] = [:]
     private weak var player: AVPlayer?
     private weak var item: AVPlayerItem?
     private var timer: Timer?
@@ -255,15 +283,17 @@ final class BiliDanmakuView: NSView {
 
     func update(player: AVPlayer, placed: [BiliDanmakuLayout.Placed], layout: BiliDanmakuLayout, opacity: Double, visible: Bool) {
         self.player = player
-        // 换了视频、改了弹幕设置（重新排过）：已经建好的图层按新的重来
-        if layout != grid || placed.count != self.placed.count || placed.first != self.placed.first || placed.last != self.placed.last {
+        // 改了弹幕设置（字号、速度、显示区域）：已经建好的图层按新的样子重来。换了视频、直播来了新的弹幕：
+        // 图层按是哪一条记，不在新列表里的下面 refresh 时拿掉，所以不用全部重建（直播时不闪）
+        if layout != grid {
             clear()
-            self.placed = placed
             grid = layout
         }
+        self.placed = placed
         sync.opacity = Float(opacity)
         if placed.isEmpty {
-            // 这个视频没有弹幕（或还没取到）：放开上一个视频，不让它一直占着内存
+            // 这个视频没有弹幕（或还没取到）：图层拿掉，放开上一个视频，不让它一直占着内存
+            clear()
             sync.playerItem = nil
             item = nil
         }
@@ -292,9 +322,9 @@ final class BiliDanmakuView: NSView {
         builtWidth = bounds.width
     }
 
-    /// 让"前 9 秒到后 6 秒"之间的弹幕都有图层，这之外的拿掉
+    /// 让"前 9 秒到后 2 秒"之间的弹幕都有图层；不在这一段里（往前往后各多留一点）、或者已经不在列表里的拿掉
     private func refresh() {
-        guard let player, bounds.width > 0, !placed.isEmpty else { return }
+        guard let player, bounds.width > 0 else { return }
         if player.currentItem !== item {
             clear()
             item = player.currentItem
@@ -305,23 +335,27 @@ final class BiliDanmakuView: NSView {
         guard now.isFinite else { return }
         // 只提前 2 秒建图层（图层按视频时间自己出场）；拖进度后屏幕上该有的那些一次补上
         let from = now - grid.scrollDuration - 1, to = now + 2
+        let keep = Set(entries(from: from - 2, to: to + 6))
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (index, layer) in layers where placed[index].item.time < from - 2 || placed[index].item.time > to + 6 {
+        for (entry, layer) in layers where !keep.contains(entry) {
             layer.removeFromSuperlayer()
-            layers[index] = nil
+            layers[entry] = nil
         }
+        for entry in entries(from: from, to: to) where layers[entry] == nil { layers[entry] = makeLayer(entry) }
+        CATransaction.commit()
+    }
+
+    /// 列表里出现时间在 from…to 之间的那几条（列表按时间排好，二分找起点）
+    private func entries(from: Double, to: Double) -> ArraySlice<BiliDanmakuLayout.Placed> {
         var low = 0, high = placed.count
         while low < high {
             let mid = (low + high) / 2
             if placed[mid].item.time < from { low = mid + 1 } else { high = mid }
         }
-        var index = low
-        while index < placed.count, placed[index].item.time <= to {
-            if layers[index] == nil { layers[index] = makeLayer(placed[index]) }
-            index += 1
-        }
-        CATransaction.commit()
+        var end = low
+        while end < placed.count, placed[end].item.time <= to { end += 1 }
+        return placed[low..<end]
     }
 
     private func makeLayer(_ entry: BiliDanmakuLayout.Placed) -> CALayer {

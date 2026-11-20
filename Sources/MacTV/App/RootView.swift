@@ -8,10 +8,15 @@ struct RootView: View {
         ZStack {
             if tv.externalBrowser != nil {
                 TVCanvas { BravePlaybackView(tv: tv) }.ignoresSafeArea()
-            } else if case .player = tv.mode, let web = tv.webView {
-                WebViewHost(webView: web).id(ObjectIdentifier(web))
-                    .allowsHitTesting(tv.playerFailure == nil)
-                    .accessibilityHidden(tv.playerFailure != nil)
+            } else if case .player(let service) = tv.mode, let web = tv.webView {
+                if service.id == BrowserStore.pageID {
+                    // 浏览器：上面一条标签栏，网页在它下面（见 BrowserChrome）
+                    BrowserPageView(store: tv.browserStore, web: web, failed: tv.playerFailure != nil)
+                } else {
+                    WebViewHost(webView: web).id(ObjectIdentifier(web))
+                        .allowsHitTesting(tv.playerFailure == nil)
+                        .accessibilityHidden(tv.playerFailure != nil)
+                }
                 if tv.playerFailure != nil {
                     TVCanvas { PlaybackFailureView(tv: tv) }.ignoresSafeArea()
                 }
@@ -23,6 +28,12 @@ struct RootView: View {
                         .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
                 } else if tv.neteaseOpen {
                     NeteaseRoot(store: tv.neteaseStore)
+                        .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
+                } else if tv.browserOpen {
+                    BrowserRoot(store: tv.browserStore)
+                        .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
+                } else if tv.dedaoOpen {
+                    DedaoRoot(store: tv.dedaoStore)
                         .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
                 } else if tv.movies != nil {
                     // Opaque, and the only screen drawn, so nothing shows through on the way back from a movie.
@@ -53,6 +64,8 @@ struct RootView: View {
         .animation(Motion.appear, value: tv.movies != nil)
         .animation(Motion.appear, value: tv.bilibiliOpen)
         .animation(Motion.appear, value: tv.neteaseOpen)
+        .animation(Motion.appear, value: tv.browserOpen)
+        .animation(Motion.appear, value: tv.dedaoOpen)
         .animation(.easeInOut(duration: 1.2), value: tv.screensaver)
     }
 }

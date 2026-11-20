@@ -21,7 +21,7 @@ struct BravePlaybackView: View {
                 HStack(spacing: 24) {
                     let buttons = tv.browserButtons
                     ForEach(Array(buttons.enumerated()), id: \.element) { index, button in
-                        ShelfButton(title: button.title, focused: tv.browserFocusIndex == index, glass: false) {
+                        ShelfButton(title: button.title, focused: tv.braveFocusIndex == index, glass: false) {
                             tv.activateBrowserButton(button)
                         }
                     }
@@ -59,7 +59,7 @@ extension TVController {
         return [.returnToBrave, .home]
     }
 
-    var browserFocusIndex: Int { min(browserFocus, browserButtons.count - 1) }
+    var braveFocusIndex: Int { min(braveFocus, browserButtons.count - 1) }
 
     func activateBrowserButton(_ button: BrowserButton) {
         switch button {
@@ -73,9 +73,9 @@ extension TVController {
     func handleBrowserScreen(_ command: RemoteCommand) {
         let buttons = browserButtons
         switch command {
-        case .move(.left), .previousControl: browserFocus = max(0, browserFocusIndex - 1)
-        case .move(.right), .nextControl: browserFocus = min(buttons.count - 1, browserFocusIndex + 1)
-        case .select: activateBrowserButton(buttons[browserFocusIndex])
+        case .move(.left), .previousControl: braveFocus = max(0, braveFocusIndex - 1)
+        case .move(.right), .nextControl: braveFocus = min(buttons.count - 1, braveFocusIndex + 1)
+        case .select: activateBrowserButton(buttons[braveFocusIndex])
         case .back: goHome()
         default: break
         }

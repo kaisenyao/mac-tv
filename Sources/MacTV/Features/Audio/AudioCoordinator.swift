@@ -111,9 +111,9 @@ final class AudioCoordinator: ObservableObject {
         currentVolume = Self.readVolume()
     }
 
+    // The audio picker's own controls. The picker shows the level itself, so there's no volume HUD.
     func setVolume(_ level: Int) {
         currentVolume = SystemControl.setVolume(to: level)
-        tv?.showVolume(currentVolume)
     }
 
     /// A drag sets the volume only when the level changes.
@@ -124,12 +124,10 @@ final class AudioCoordinator: ObservableObject {
 
     func stepVolume(by delta: Int) {
         currentVolume = SystemControl.changeVolume(by: delta)
-        tv?.showVolume(currentVolume)
     }
 
     func toggleMute() {
         currentVolume = SystemControl.toggleMute()
-        tv?.showVolume(currentVolume)
     }
 
     func selectDevice(_ device: AudioOutputDevice) {
@@ -156,7 +154,6 @@ final class AudioCoordinator: ObservableObject {
         Log.audio.notice("Audio output switched to a \(DiagnosticReport.transportName(device.transport), privacy: .public) device")
         refreshDevices()
         refreshVolume()
-        tv?.showToast("Audio: \(device.name)")
     }
 
     // MARK: - Real-Time CoreAudio Listeners
@@ -366,13 +363,9 @@ struct AudioPickerSheet: View {
                     .background(.white.opacity(0.12), in: Capsule())
             }
 
-            Text("Choose where sound plays from this Mac. Connect AirPods in System Settings › Bluetooth.")
-                .font(.tv(.caption1))
-                .foregroundStyle(.white.opacity(0.7))
-
             VStack(spacing: 12) {
                 if tv.audioDevices.isEmpty {
-                    Text("No audio output devices found")
+                    Text("No Audio Outputs")
                         .font(.tv(.callout))
                         .foregroundStyle(.white.opacity(0.55))
                         .frame(maxWidth: .infinity, minHeight: 80)
@@ -430,20 +423,6 @@ struct AudioPickerSheet: View {
                     tv.audioPicker?.row = soundSliderRow
                 }
             }
-
-            let hint: String = {
-                if panel.row == masterSliderRow {
-                    return "Use ◀ ▶ to change volume, Select to mute, Esc or Back closes."
-                } else if panel.row == soundSliderRow {
-                    return "Use ◀ ▶ to change sound effects volume, Select to mute, Esc or Back closes."
-                } else {
-                    return "Press Select to switch audio output. Esc or Back closes."
-                }
-            }()
-
-            Text(hint)
-                .font(.tv(.caption2))
-                .foregroundStyle(.white.opacity(0.55))
         }
         .padding(52)
         .frame(width: 820, alignment: .leading)

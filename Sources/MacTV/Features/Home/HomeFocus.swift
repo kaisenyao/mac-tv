@@ -17,8 +17,12 @@ extension TVController {
 
     /// How many things in the Top Shelf can take focus: its Open button, for apps.
     var shelfCount: Int {
+        // 哔哩哔哩、网易云、YouTube：顶部轮播的按钮（播放，或者直播的观看直播）
+        if AppShelf.services.contains(shelfService.id), appShelf.current(for: shelfService.id) != nil {
+            return appShelf.actions(for: shelfService.id).count
+        }
         switch shelfService.kind {
-        case .web, .app, .steam, .movies: return topShelf.searchURL(for: shelfService) == nil ? 1 : 2
+        case .web, .app, .steam, .movies: return 1
         case .addApp, .settings: return 0
         }
     }
@@ -60,9 +64,15 @@ extension TVController {
                 }
             }
         case .shelf(let index):
+            // 哔哩哔哩、网易云、YouTube 的轮播：在第一个按钮上再往左是上一个，最后一个上再往右是下一个（焦点回到"播放"）
+            let carousel = AppShelf.services.contains(shelfService.id) && appShelf.current(for: shelfService.id) != nil
             switch direction {
-            case .left: if index > 0 { setFocus(.shelf(index - 1)) }
-            case .right: if index + 1 < shelfCount { setFocus(.shelf(index + 1)) }
+            case .left:
+                if index > 0 { setFocus(.shelf(index - 1)) }
+                else if carousel { appShelf.step(shelfService.id, by: -1); setFocus(.shelf(0)) }
+            case .right:
+                if index + 1 < shelfCount { setFocus(.shelf(index + 1)) }
+                else if carousel { appShelf.step(shelfService.id, by: 1); setFocus(.shelf(0)) }
             case .down: setFocus(.app(shelfAppIndex))
             case .up: setFocus(.status(.controlCenter))
             }
@@ -88,10 +98,12 @@ extension TVController {
     }
 
     func activateShelf(_ index: Int) {
-        if index == 0, let url = topShelf.searchURL(for: shelfService) {
-            playbackCoordinator.playWeb(shelfService, url: url)
-        } else {
-            open(shelfService)
+        let id = shelfService.id
+        if AppShelf.services.contains(id), appShelf.current(for: id) != nil {
+            let actions = appShelf.actions(for: id)
+            if actions.indices.contains(index) { appShelf.activate(actions[index], for: id) }
+            return
         }
+        open(shelfService)
     }
 }

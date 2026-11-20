@@ -3,13 +3,23 @@ import SwiftUI
 
 struct TopShelf: View {
     @ObservedObject var tv: TVController
+    /// 哔哩哔哩、网易云、YouTube 的轮播（内容到了、换了一张时这里要跟着重画）
+    @ObservedObject private var appShelf: AppShelf
     let expanded: Bool
     @Environment(\.canvasSize) private var canvas
+
+    init(tv: TVController, expanded: Bool) {
+        _tv = ObservedObject(wrappedValue: tv)
+        _appShelf = ObservedObject(wrappedValue: tv.appShelf)
+        self.expanded = expanded
+    }
 
     var body: some View {
         let service = tv.shelfService
         Group {
-            if tv.shelfCount > 0 {
+            if AppShelf.services.contains(service.id), appShelf.current(for: service.id) != nil {
+                AppShelfBanner(shelf: appShelf, tv: tv, service: service, expanded: expanded)
+            } else if tv.shelfCount > 0 {
                 AppBanner(tv: tv, service: service, expanded: expanded)
             }
         }
@@ -19,11 +29,13 @@ struct TopShelf: View {
     }
 }
 
-/// The focused app's colours across the screen, with its name top-left. Moving up from the
-/// dock brings up Open. Nothing about what was watched ever shows here.
+/// 没有轮播的应用（网站、Mac 应用、Steam 游戏、影片）选中时的主屏顶部：这个应用的颜色铺满，左上角写名字；
+/// 影片是片库里的海报 / 剧照，Steam 游戏是它自己的图。从底下往上进来是"Open"。
+///（哔哩哔哩、网易云、YouTube 的轮播见 AppShelf：那里显示的是你自己账号里的内容）
 struct AppBanner: View {
     @ObservedObject var tv: TVController
-    @ObservedObject private var feed: TopShelfFeed
+    /// 影片的海报跟着主屏轮播的节拍换
+    @ObservedObject private var clock: AppShelf
     @ObservedObject private var movieLibrary: MovieLibrary
     @Environment(\.canvasSize) private var canvas
     let service: Service
@@ -31,33 +43,30 @@ struct AppBanner: View {
 
     init(tv: TVController, service: Service, expanded: Bool) {
         _tv = ObservedObject(wrappedValue: tv)
-        _feed = ObservedObject(wrappedValue: tv.topShelf)
+        _clock = ObservedObject(wrappedValue: tv.appShelf)
         _movieLibrary = ObservedObject(wrappedValue: tv.movieLibrary)
         self.service = service
         self.expanded = expanded
     }
 
-    /// A Steam game's own art, for when there are no shows: its store screenshot or library hero,
-    /// else its dock tile. Other apps keep their colour wash: their icons are too small to fill the screen.
+    /// A Steam game's own art: its store screenshot or library hero, else its dock tile. Other apps keep
+    /// their colour wash: their icons are too small to fill the screen.
     private var steamArt: (id: String, image: NSImage)? {
         guard case .steam = service.kind else { return nil }
         if let hero = SteamShelfArt.image(at: tv.library.heroFile(for: service.id)) { return ("\(service.id)-hero", hero) }
         return Icons.tile(for: service).map { ("\(service.id)-tile", $0) }
     }
 
-    /// What the Top Shelf shows now: Movies art, popular shows, or a Steam game's own art.
+    /// What the Top Shelf shows now: Movies art, or a Steam game's own art.
     private var backdrop: (id: String, name: String, image: NSImage, cover: Bool, appOwned: Bool)? {
         if case .movies = service.kind {
             let shelf = movieLibrary.shelf
             if !shelf.isEmpty {
-                let pick = shelf[feed.turn % shelf.count]
+                let pick = shelf[clock.beat % shelf.count]
                 // Posters sit on the right like album covers; frames from the film fill the screen.
                 return (pick.path, movieLibrary.movies.first(where: { $0.path == pick.path })?.displayTitle ?? "Movies",
                         pick.image, pick.image.size.height > pick.image.size.width, false)
             }
-        }
-        if let show = feed.currentShow(for: service.id), let image = feed.image(for: show.id) {
-            return (String(show.id), show.name, image, show.square, false)
         }
         if let art = steamArt {
             return (art.id, service.name, art.image, false, true)
@@ -68,7 +77,7 @@ struct AppBanner: View {
     var body: some View {
         let show = backdrop
         ZStack(alignment: .topLeading) {
-            // A Steam game's art is the base layer, so it can't be lost under a stale show backdrop.
+            // A Steam game's art is the base layer, so it can't be lost under a stale backdrop.
             if let show, show.appOwned {
                 AppArtBackdrop(image: show.image)
                     .frame(width: canvas.width, height: canvas.height)
@@ -80,15 +89,15 @@ struct AppBanner: View {
                     .frame(width: canvas.width, height: canvas.height)
                     .clipped()
             }
-            // Popular shows on this app, cross-fading one to the next, like Apple TV's Top Shelf.
+            // Films in the Movies library, cross-fading one to the next, like Apple TV's Top Shelf.
             if let show, !show.appOwned {
                 if show.cover {
                     AlbumBackdrop(image: show.image)
                         .id(show.id)
                         .transition(.opacity)
                 } else {
-                    // One view for every show: it cross-fades to the next picture itself, in Core Animation.
-                    ShowBackdrop(image: show.image, since: feed.turnStarted)
+                    // One view for every film: it cross-fades to the next picture itself, in Core Animation.
+                    ShowBackdrop(image: show.image, since: clock.beatStarted)
                 }
             }
             // Legibility: a soft top-left wash for the name, a bottom wash for the dock or button.
@@ -105,7 +114,7 @@ struct AppBanner: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 if show == nil {
-                    // The show's artwork alone carries it; nothing is drawn over it. Without art, the app's name.
+                    // The artwork alone carries it; nothing is drawn over it. Without art, the app's name.
                     Text(service.name)
                         .font(.tv(.title1, emphasized: true))
                         .lineLimit(2)
@@ -113,16 +122,8 @@ struct AppBanner: View {
                         .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
                 }
                 if expanded {
-                    HStack(spacing: 18) {
-                        if feed.searchURL(for: service) != nil {
-                            ShelfButton(title: "Search in \(service.name)", systemImage: "magnifyingglass", focused: tv.focus == .shelf(0)) {
-                                tv.setFocus(.shelf(0)); tv.activateShelf(0)
-                            }
-                        }
-                        let openIndex = feed.searchURL(for: service) == nil ? 0 : 1
-                        ShelfButton(title: "Open \(service.name)", systemImage: "arrow.up.right", focused: tv.focus == .shelf(openIndex)) {
-                            tv.setFocus(.shelf(openIndex)); tv.activateShelf(openIndex)
-                        }
+                    ShelfButton(title: "Open \(service.name)", systemImage: "arrow.up.right", focused: tv.focus == .shelf(0)) {
+                        tv.setFocus(.shelf(0)); tv.activateShelf(0)
                     }
                     .padding(.top, 20)
                     .tvGlassTransition()
@@ -194,8 +195,7 @@ struct ShelfButton: View {
     }
 }
 
-/// A still in the app's own colours, behind the Top Shelf and its cards. Pictures of what you
-/// played aren't shown on the home screen.
+/// 一个应用自己颜色的底图（没有轮播的应用，主屏顶部铺的就是它）
 struct Artwork: View {
     let accent: String
     let deep: String

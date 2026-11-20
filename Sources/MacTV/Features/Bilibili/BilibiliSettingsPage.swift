@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// 哔哩哔哩的设置页（头像菜单里的"设置"）。和网易云的设置页一个样子：左边大头像和名字，
-/// 右边一行行设置（左边名字，右边现在的值），白色高亮在行之间滑。清晰度、倍速选了以后，右边换成一列档位。
+/// 右边一行行设置（左边名字，右边现在的值），白色高亮在行之间滑。清晰度、倍速、主屏顶部显示选了以后，右边换成一列档位；
+/// 弹幕换成弹幕的几项设置；左边栏显示换成可以勾选的几页。
 struct BilibiliSettingsPage: View {
     @ObservedObject var store: BilibiliStore
     @ObservedObject var player: BilibiliNativePlayer
@@ -26,7 +27,7 @@ struct BilibiliSettingsPage: View {
                 if let list = store.settingList {
                     HStack(spacing: 12) {
                         Image(systemName: "chevron.left").font(.system(size: 22, weight: .semibold))
-                        Text(list == .quality ? "清晰度" : (list == .speed ? "倍速" : "弹幕")).font(.system(size: 26, weight: .semibold))
+                        Text(title(of: list)).font(.system(size: 26, weight: .semibold))
                     }
                     .foregroundStyle(.white.opacity(0.55))
                     .padding(.leading, 30)
@@ -45,23 +46,32 @@ struct BilibiliSettingsPage: View {
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
         .animation(Motion.focus, value: store.settingIndex)
         .animation(Motion.focus, value: store.settingListIndex)
-        .animation(.easeOut(duration: 0.18), value: store.settingList)
+        .animation(Motion.press, value: store.settingList)
     }
 
     /// 设置页的大头像（列表上用的是小图，这里换成大一些的）
-    private var largeFace: URL? {
-        guard let face = store.account?.face else { return nil }
-        return URL(string: face.absoluteString.replacingOccurrences(of: "@120w_120h_1c", with: "@800w_800h_1c"))
-    }
+    private var largeFace: URL? { BiliAPI.resized(store.account?.face, to: "800w_800h_1c") }
 
     private var settings: [(title: String, value: String, checked: Bool, pick: Bool)] {
         BilibiliStore.Setting.allCases.map { setting in
             switch setting {
             case .quality: ("清晰度", BiliStream.name(of: player.preferredQuality), false, true)
             case .speed: ("倍速", BilibiliNativePlayer.speedName(player.speed), false, true)
-            case .subtitles: ("有字幕时自动显示", player.subtitlesOn ? "开" : "关", false, false)
-            case .danmaku: ("弹幕", player.danmakuOn ? "开" : "关", false, true)
+            case .subtitles: ("字幕", player.subtitlesOn ? "打开" : "关闭", false, false)   // 开着时，视频有字幕就自动显示
+            case .danmaku: ("弹幕", player.danmakuOn ? "打开" : "关闭", false, true)
+            case .sidebar: ("边栏", BiliSidebar.summary(hidden: store.hiddenTabs), false, true)
+            case .shelf: ("主屏幕顶部", BiliShelfSource.current.title, false, true)
             }
+        }
+    }
+
+    private func title(of list: BilibiliStore.SettingList) -> String {
+        switch list {
+        case .quality: "清晰度"
+        case .speed: "倍速"
+        case .danmaku: "弹幕"
+        case .sidebar: "边栏"
+        case .shelf: "主屏幕顶部"
         }
     }
 
@@ -74,6 +84,12 @@ struct BilibiliSettingsPage: View {
             return BilibiliNativePlayer.speeds.map { (BilibiliNativePlayer.speedName($0), "", $0 == player.speed, false) }
         case .danmaku:
             return player.danmakuOptions.map { ($0.title, $0.value, false, false) }
+        case .sidebar:
+            // 可以勾好几个：勾上的显示在左边栏里
+            return BiliSidebar.choices.map { ($0.title, "", !store.hiddenTabs.contains($0), false) }
+        case .shelf:
+            // 选中哔哩哔哩的图标时，主屏上方轮播哪一种（各取最新的 8 个）
+            return BiliShelfSource.allCases.map { ($0.title, "", $0 == BiliShelfSource.current, false) }
         }
     }
 
@@ -90,9 +106,8 @@ struct BilibiliSettingsPage: View {
                     Text(item.title).font(.system(size: 30, weight: .semibold))
                     Spacer(minLength: 20)
                     Text(item.value).font(.system(size: 28, weight: .medium)).opacity(0.6).contentTransition(.opacity)
-                    if item.pick {
-                        Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.45)   // 进下一层
-                    }
+                    // 进下一层的行带 ">"；别的行也留着它的位置，右边的值对在同一条竖线上
+                    Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(item.pick ? 0.45 : 0)
                 }
                 .foregroundStyle(on ? .black : .white.opacity(0.9))
                 .padding(.horizontal, 30)

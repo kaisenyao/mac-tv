@@ -45,7 +45,20 @@ enum SpatialNav {
         el.style.borderRadius = `${Math.min(Math.max(radius + PAD, 10), (r.height + PAD * 2) / 2)}px`;
         el.style.opacity = '1';
       }
-      (function follow() { place(); requestAnimationFrame(follow); })();
+      // 只在框可能要跟着动的时候一帧一帧地跟：刚换了焦点（页面在平滑滚动）、页面在滚、窗口在变大小，
+      // 跟一小会儿就停。以前是一直每帧都算，页面开着不动也在耗 CPU
+      let followUntil = 0, following = false;
+      function follow() {
+        place();
+        if (performance.now() < followUntil) requestAnimationFrame(follow);
+        else following = false;
+      }
+      function track(ms) {
+        followUntil = Math.max(followUntil, performance.now() + ms);
+        if (!following) { following = true; requestAnimationFrame(follow); }
+      }
+      window.addEventListener('scroll', () => { if (current) track(200); }, { capture: true, passive: true });
+      window.addEventListener('resize', () => { if (current) track(200); });
 
       const shown = el => {
         const r = el.getBoundingClientRect();
@@ -63,19 +76,29 @@ enum SpatialNav {
         return !!a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
       };
       const center = r => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+      // 浏览器里（有 macTVBrowser）：页面已经在最上面、上面也没有能选的了，再按上就交给 Mac TV 的标签栏。
+      // 别的网页播放器里没有这个，照旧
+      const toBar = dir => {
+        const bar = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.macTVBrowser;
+        if (dir !== 'up' || !bar || window.scrollY > 1) return false;
+        bar.postMessage({ edge: 'up' });
+        return true;
+      };
 
       function focusOn(el) {
         current = el;
         // Keep the browser's own focus outline away; the ring is the indicator.
         el.focus({ preventScroll: true, focusVisible: false });
         el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+        track(700);   // 平滑滚动大约半秒：这段时间跟着
       }
 
       function move(dir) {
         const candidates = [...document.querySelectorAll(SELECTOR)].filter(shown);
-        if (!candidates.length) return false;
+        if (!candidates.length) return toBar(dir);
 
         if (!current || !document.contains(current) || !shown(current)) {
+          if (toBar(dir)) return true;   // 刚打开的页面（还没有焦点）在最上面按上：去标签栏
           const inView = candidates.filter(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; });
           const pool = inView.length ? inView : candidates;
           pool.sort((a, b) => { const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect(); return (ra.top - rb.top) || (ra.left - rb.left); });
@@ -97,8 +120,10 @@ enum SpatialNav {
           if (score < bestScore) { bestScore = score; best = el; }
         }
         if (best) { focusOn(best); return true; }
+        if (toBar(dir)) return true;
         if (dir === 'up' || dir === 'down') {
           window.scrollBy({ top: (dir === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });
+          track(700);
           return true;
         }
         return false;
@@ -123,7 +148,7 @@ enum SpatialNav {
       }, true);
 
       // The mouse takes over: hide the ring until the D-pad is used again.
-      window.addEventListener('mousedown', () => { current = null; }, true);
+      window.addEventListener('mousedown', () => { current = null; place(); }, true);
     })();
     """#
 }

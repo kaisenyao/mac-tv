@@ -7,14 +7,14 @@ import SwiftUI
 @MainActor
 enum ScreenSaverSettings {
     enum Wallpaper: String, CaseIterable {
-        case aerials, topShelf, photos, colour
+        case aerials, photos, colour, flipClock
 
         var title: String {
             switch self {
             case .aerials: "Aerials"
-            case .topShelf: "Top Shelf"
-            case .photos: "Your Photos"
-            case .colour: "Drifting Colour"
+            case .photos: "My Photos"
+            case .colour: "Drifting Color"
+            case .flipClock: "Flip Clock"
             }
         }
     }
@@ -32,7 +32,7 @@ enum ScreenSaverSettings {
     static var wallpaper: Wallpaper {
         get {
             Preferences.shared.saverWallpaper.flatMap(Wallpaper.init(rawValue:))
-                ?? (Aerials.available ? .aerials : .topShelf)
+                ?? (Aerials.available ? .aerials : .colour)   // 以前选过已经去掉的"Top Shelf"的，也回到这里
         }
         set { Preferences.shared.saverWallpaper = newValue.rawValue }
     }
@@ -93,7 +93,7 @@ enum ScreenSaverSettings {
     /// One picture to show a slideshow wallpaper by in Settings: the same each time, and the folder is
     /// read only when it changes, not on every redraw.
     static func cover(for wallpaper: Wallpaper) -> URL? {
-        let folder = wallpaper == .photos ? photosFolder : AppFolder.url.appendingPathComponent("Top Shelf", isDirectory: true)
+        let folder = photosFolder
         if let cached = covers[wallpaper], cached.folder == folder { return cached.picture }
         let picture = pictures(for: wallpaper).min { $0.lastPathComponent < $1.lastPathComponent }
         covers[wallpaper] = (folder, picture)
@@ -104,10 +104,9 @@ enum ScreenSaverSettings {
     static func pictures(for wallpaper: Wallpaper) -> [URL] {
         let folder: URL
         switch wallpaper {
-        case .topShelf: folder = AppFolder.url.appendingPathComponent("Top Shelf", isDirectory: true)
         case .photos: folder = photosFolder
         case .aerials: return Aerials.films(in: aerialCategory)
-        case .colour: return []
+        case .colour, .flipClock: return []
         }
         let types: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff"]
         let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
@@ -125,8 +124,10 @@ struct ScreenSaverBackdrop: View {
         switch wallpaper {
         case .aerials where !pictures.isEmpty:
             AerialPlayer(films: pictures)
-        case .topShelf, .photos:
+        case .photos:
             if pictures.isEmpty { DriftingColor() } else { Slideshow(files: pictures) }
+        case .flipClock:
+            FlipClock()
         default:
             DriftingColor()
         }
@@ -139,8 +140,10 @@ struct WallpaperThumb: View {
 
     var body: some View {
         // The frame comes from Color.clear, so a wide photo fills its slot instead of widening it.
+        // 图本身不参与切换动画（只有边框、放大、阴影在动），不会被当成内容变了而淡出淡入
         Color.clear.overlay {
             ZStack { picture }
+                .transaction { $0.animation = nil }
         }
         .clipped()
     }
@@ -148,14 +151,14 @@ struct WallpaperThumb: View {
     @ViewBuilder private var picture: some View {
         switch wallpaper {
         case .aerials:
-            if let thumb = Aerials.thumbnail(forCategory: ScreenSaverSettings.aerialCategory), let image = ScreenImages.image(thumb, maxPixels: 400) {
+            if let thumb = Aerials.thumbnail(forCategory: ScreenSaverSettings.aerialCategory), let image = ScreenImages.thumbnail(thumb) {
                 Image(nsImage: image).resizable().scaledToFill()
             } else {
                 LinearGradient(colors: [Color(hex: "#5B7A3A"), Color(hex: "#1E3A2A")], startPoint: .top, endPoint: .bottom)
                 Image(systemName: "mountain.2.fill").font(.system(size: 44)).foregroundStyle(.white.opacity(0.6))
             }
-        case .topShelf, .photos:
-            if let first = ScreenSaverSettings.cover(for: wallpaper), let image = ScreenImages.image(first, maxPixels: 400) {
+        case .photos:
+            if let first = ScreenSaverSettings.cover(for: wallpaper), let image = ScreenImages.thumbnail(first) {
                 Image(nsImage: image).resizable().scaledToFill()
             } else {
                 Color.white.opacity(0.07)
@@ -164,6 +167,8 @@ struct WallpaperThumb: View {
         case .colour:
             LinearGradient(colors: [Color(hex: "#4338CA"), Color(hex: "#9D174D"), Color(hex: "#0E7490")],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .flipClock:
+            FlipClock()
         }
     }
 

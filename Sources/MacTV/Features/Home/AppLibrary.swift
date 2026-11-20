@@ -130,8 +130,6 @@ final class AppLibrary {
         return group[index + offset].id
     }
 
-    func canMove(_ id: String, by offset: Int) -> Bool { neighbour(of: id, by: offset) != nil }
-
     @discardableResult
     func move(_ id: String, by offset: Int) -> Bool {
         guard let neighbour = neighbour(of: id, by: offset) else { return false }

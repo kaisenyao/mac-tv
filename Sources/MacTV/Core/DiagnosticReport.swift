@@ -13,13 +13,12 @@ enum DiagnosticReport {
     /// happens off the main thread.
     static func copy(from tv: TVController) {
         let facts = facts(tv)
-        tv.showToast("Preparing the report…")
         Task.detached(priority: .userInitiated) {
             let report = facts + "\n\n## Log (this session)\n\n" + sessionLog()
             await MainActor.run {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(report, forType: .string)
-                tv.showToast("Report copied. Paste it into a GitHub issue.")
+                tv.showToast("Report Copied")
             }
             Log.app.notice("Diagnostics report copied")
         }
@@ -102,10 +101,21 @@ enum DiagnosticReport {
         }
     }
 
+    /// 报告里只写是哪一类（不写网址：可能是你打开的任何网页）
+    private static func playerName(_ kind: Service.Kind) -> String {
+        switch kind {
+        case .web: "a website"
+        case .app: "a Mac app"
+        case .steam: "a Steam game"
+        case .movies: "Movies"
+        case .addApp, .settings: "Settings"
+        }
+    }
+
     private static func screenName(_ tv: TVController) -> String {
         switch tv.mode {
         case .launcher: "Home"
-        case .player(let service): "\(service.kind) app"
+        case .player(let service): playerName(service.kind)
         case .movie: "a movie"
         }
     }
