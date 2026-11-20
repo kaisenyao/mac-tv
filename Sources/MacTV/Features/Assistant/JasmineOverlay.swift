@@ -1,48 +1,113 @@
 import SwiftUI
 
-/// Jasmine on screen: her orb in the bottom-right corner, where tvOS shows Siri, and a glass capsule beside it with
-/// what you're saying as it's heard, or her line. Over everything (RootView), never taking the pointer. Drawn only
-/// while she shows: hidden, nothing of it runs.
+/// Jasmine on screen, laid out as tvOS 26's Siri:
+/// - her orb in the top-right corner; while she listens or works, a glass capsule beside it with your words;
+/// - a short answer (or why she can't), in a glass card there;
+/// - a longer answer, in large type at the top left over the whole screen dimmed (SheetBackdrop): a few lines,
+///   then MORE (Select shows the rest).
+/// Over everything (RootView), never taking the pointer. Drawn only while she shows: hidden, nothing of it runs.
 struct JasmineOverlay: View {
     @ObservedObject var jasmine: Jasmine
 
     var body: some View {
-        TVCanvas {
-            GlassGroup {
-                if jasmine.shown {
-                    HStack(alignment: .center, spacing: 26) {
-                        if let text = caption {
-                            Text(text)
-                                .font(.tv(.headline))
-                                .foregroundStyle(.white.opacity(jasmine.line == nil && jasmine.phase == .listening ? 0.75 : 1))
-                                .lineLimit(2)
-                                .truncationMode(.head)
-                                .frame(maxWidth: 1040, alignment: .trailing)
-                                .padding(.horizontal, 36).padding(.vertical, 22)
-                                .tvGlass(in: Capsule())
-                                .tvGlassTransition()
-                        }
-                        JasmineOrb(phase: jasmine.phase, level: jasmine.level)
-                            .frame(width: orbSize, height: orbSize)
-                            .transition(.scale(scale: 0.4).combined(with: .opacity))
-                    }
-                    .animation(Motion.appear, value: caption)
+        ZStack {
+            if let answer = longAnswer {
+                SheetBackdrop()
+                    .transition(.opacity)
+                TVCanvas {
+                    JasmineAnswer(text: answer, expanded: jasmine.expanded)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(.leading, 120)
+                        .padding(.top, 140)
                 }
+                .ignoresSafeArea()
+                .transition(.opacity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-            .padding(.trailing, 96)
-            .padding(.bottom, 72)
+            TVCanvas {
+                GlassGroup {
+                    if jasmine.shown { corner.tvGlassTransition() }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.trailing, 96)
+                .padding(.top, 52)
+            }
+            .ignoresSafeArea()
         }
-        .ignoresSafeArea()
         .allowsHitTesting(false)
         .animation(Motion.appear, value: jasmine.shown)
+        .animation(Motion.appear, value: longAnswer != nil)
+        .animation(Motion.appear, value: cornerText)
     }
 
-    private var orbSize: CGFloat { jasmine.mode == .dictation ? 88 : 120 }
+    /// The top-right corner: the orb, with your words or her short answer beside it.
+    @ViewBuilder private var corner: some View {
+        let orb = JasmineOrb(phase: jasmine.phase, level: jasmine.level).frame(width: orbSize, height: orbSize)
+        if let text = cornerText {
+            HStack(alignment: .center, spacing: 22) {
+                Text(text)
+                    .font(.tv(.callout))
+                    .foregroundStyle(.white.opacity(dimmed ? 0.7 : 1))
+                    .lineLimit(cornerIsCard ? 3 : 1)
+                    .truncationMode(.head)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: 680, alignment: .leading)
+                orb
+            }
+            .padding(.leading, 34).padding(.trailing, 14).padding(.vertical, 14)
+            .tvGlass(in: RoundedRectangle(cornerRadius: cornerIsCard ? 36 : orbSize / 2 + 14, style: .continuous))
+        } else {
+            orb.padding(14).tvGlass(in: Circle())
+        }
+    }
 
-    private var caption: String? {
-        if let line = jasmine.line { return line }
+    private var orbSize: CGFloat { jasmine.mode == .dictation ? 56 : 72 }
+
+    /// Her answer, when it's too long for the corner.
+    private var longAnswer: String? {
+        guard jasmine.phase == .speaking || jasmine.phase == .message, let line = jasmine.line,
+              JasmineAnswer.isLong(line) else { return nil }
+        return line
+    }
+
+    /// What the corner says: her short answer, or your words while she hears and works.
+    private var cornerText: String? {
+        if let line = jasmine.line { return longAnswer != nil ? nil : line }
         return jasmine.heard.isEmpty ? nil : jasmine.heard
+    }
+
+    private var cornerIsCard: Bool { jasmine.line != nil }
+    /// Your words once you've let go, while she works on them.
+    private var dimmed: Bool { jasmine.line == nil && jasmine.phase != .listening }
+}
+
+/// A longer answer: large type, a few lines, then MORE.
+struct JasmineAnswer: View {
+    let text: String
+    let expanded: Bool
+
+    static let lines = 4
+
+    /// Too long for the corner's card: more than one sentence, or more than a short line.
+    static func isLong(_ text: String) -> Bool {
+        text.count > 36 || Sentences.split(text).count > 1
+    }
+
+    /// Long enough to be cut at `lines` lines (about 26 characters a line at this size).
+    static func isCut(_ text: String) -> Bool { text.count > lines * 26 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(text)
+                .font(.tv(.title2, emphasized: true))
+                .foregroundStyle(.white)
+                .lineLimit(expanded ? nil : Self.lines)
+                .lineSpacing(6)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: 1180, alignment: .leading)
+            if !expanded, Self.isCut(text) {
+                Text("MORE").font(.tv(.caption1, emphasized: true)).tracking(1.4).opacity(0.6)
+            }
+        }
     }
 }
 
@@ -67,8 +132,15 @@ struct JasmineOrb: View {
         }
     }
 
-    /// Faster while she listens, as PianaSoul's: energy 0.4 hearing, 0.16 otherwise; the voice adds to it.
-    private var energy: Double { (phase == .listening ? 0.4 : 0.16) + Double(level) * 0.6 }
+    /// As PianaSoul's: energy 0.7 speaking, 0.4 hearing or thinking, 0.16 otherwise; the voice adds to it.
+    private var energy: Double {
+        let base = switch phase {
+        case .speaking: 0.7
+        case .listening, .thinking, .finishing: 0.4
+        default: 0.16
+        }
+        return base + Double(level) * 0.6
+    }
 
     private func orb(time: Double) -> some View {
         let t = time * (1 + energy)
@@ -90,8 +162,6 @@ struct JasmineOrb: View {
             }
             .frame(width: side, height: side)
             .clipShape(Circle())
-            .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
-            .shadow(color: Self.sky[1].opacity(0.45 + energy * 0.3), radius: 18 + energy * 14)
             .scaleEffect(1 + 0.012 * sin(1.3 * t) + CGFloat(level) * 0.11)
         }
     }

@@ -449,7 +449,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // F5 (🎤 on a Mac keyboard, when macOS's own Dictation doesn't take it) is the Siri button: pressed, Search;
             // held, Jasmine, or dictation into the field with focus (see Jasmine)
             if event.keyCode == 96, mods.isEmpty {
-                if !event.isARepeat { tv.inputPresses.siriDown(from: .keyboard) }
+                if !event.isARepeat {
+                    tv.inputPresses.siriDown(from: .keyboard)
+                    // With fn held (fn-F5), AppKit may never deliver F5's keyUp, and every later press would be taken
+                    // for a key repeat. As ⌘H: the key itself is watched, and let go within 20 ms of coming up.
+                    let f5Down = { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_F5)) }
+                    if f5Down() { tv.inputPresses.watchSiri(from: .keyboard, isDown: f5Down) }
+                    else { tv.inputPresses.siriUp(from: .keyboard) }   // let go already (or unreadable): a press
+                }
                 return nil
             }
             // The Home key (Fn-Left Arrow on a Mac keyboard) is the TV button too, as ⌘H

@@ -142,6 +142,8 @@ final class InputPresses {
     /// While one is down its physical state is checked every `watchInterval`, and it's let go as soon as it's up.
     static let watchInterval: TimeInterval = 0.02
     private var watched: [(key: PhonePresses.Key, source: Feedback.Source, isDown: () -> Bool)] = []
+    /// The same for the Siri button (fn-F5: AppKit may not deliver F5's keyUp while fn is held).
+    private var watchedSiri: [(source: Feedback.Source, isDown: () -> Bool)] = []
     private var watchTimer: Timer?
     /// The clock; tests pass their own times instead.
     var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -176,6 +178,7 @@ final class InputPresses {
     /// The Siri button came up. False when it wasn't down here.
     @discardableResult
     func siriUp(from source: Feedback.Source, at time: TimeInterval? = nil) -> Bool {
+        unwatchSiri(source)
         guard let phases = siri[source]?.release(at: time ?? now()), !phases.isEmpty else { return false }
         for phase in phases { tv?.handle(.siri(phase), from: source) }
         schedule()
@@ -202,6 +205,8 @@ final class InputPresses {
             timing[each] = nil
             for (key, phase) in released { tv?.handle(.press(key, phase), from: each) }
         }
+        watchedSiri.removeAll { source == nil || $0.source == source }
+        stopWatchingIfIdle()
         for each in Array(siri.keys) where source == nil || each == source {
             let cancelled = siri[each]?.reset() ?? []
             siri[each] = nil
@@ -214,6 +219,22 @@ final class InputPresses {
     func watch(_ key: PhonePresses.Key, from source: Feedback.Source, isDown: @escaping () -> Bool) {
         unwatch { $0.key == key && $0.source == source }
         watched.append((key, source, isDown))
+        startWatching()
+    }
+
+    /// Lets the Siri button go when `isDown` says it's up (checked every `watchInterval` while it's down).
+    func watchSiri(from source: Feedback.Source, isDown: @escaping () -> Bool) {
+        unwatchSiri(source)
+        watchedSiri.append((source, isDown))
+        startWatching()
+    }
+
+    private func unwatchSiri(_ source: Feedback.Source) {
+        watchedSiri.removeAll { $0.source == source }
+        stopWatchingIfIdle()
+    }
+
+    private func startWatching() {
         guard watchTimer == nil else { return }
         let timer = Timer(timeInterval: Self.watchInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkWatched() }
@@ -225,14 +246,18 @@ final class InputPresses {
     /// The watched keys, checked now: one that's up is let go (a tap, or the end of a hold).
     func checkWatched() {
         for entry in watched where !entry.isDown() { up(entry.key, from: entry.source) }
+        for entry in watchedSiri where !entry.isDown() { siriUp(from: entry.source) }
     }
 
     private func unwatch(_ matching: (_ entry: (key: PhonePresses.Key, source: Feedback.Source, isDown: () -> Bool)) -> Bool) {
         watched.removeAll(where: matching)
-        if watched.isEmpty {
-            watchTimer?.invalidate()
-            watchTimer = nil
-        }
+        stopWatchingIfIdle()
+    }
+
+    private func stopWatchingIfIdle() {
+        guard watched.isEmpty, watchedSiri.isEmpty else { return }
+        watchTimer?.invalidate()
+        watchTimer = nil
     }
 
     private func schedule() {

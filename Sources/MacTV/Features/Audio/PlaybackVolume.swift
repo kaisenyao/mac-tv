@@ -27,7 +27,14 @@ final class PlaybackVolume {
     var volume: VolumeLevel { VolumeLevel(level: level, muted: muted) }
 
     /// 现在乘到播放器音量上的倍数
-    var gain: Float { output == nil ? 1 : muted ? 0 : Self.gain(for: level) }
+    var gain: Float { (output == nil ? 1 : muted ? 0 : Self.gain(for: level)) * ducking }
+
+    /// Jasmine listening or speaking: everything Mac TV plays, at this share of its own volume (1 = as it is). A
+    /// multiplier, never a level: a volume changed meanwhile (by you or by her) is what plays once it's back to 1.
+    /// Her own voice isn't attached here, so it isn't lowered.
+    var ducking: Float = 1 {
+        didSet { if ducking != oldValue { applyGain() } }
+    }
 
     /// 0–100 → 播放器音量。按三次方：听起来一格差不多一样多（直接按比例，上半截几乎听不出变化）
     static func gain(for level: Int) -> Float {

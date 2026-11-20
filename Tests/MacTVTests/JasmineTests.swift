@@ -38,6 +38,30 @@ import Testing
         func cancel() { cancelled = true }
     }
 
+    final class FakeBrain: Thinking {
+        var script: (String, @MainActor (String) -> Void, @MainActor (ToolCall) async -> String) async throws -> String = { _, _, _ in "" }
+        private(set) var asked: [(text: String, state: String)] = []
+        private(set) var cancels = 0
+        func respond(to text: String, state: String, tools: [AssistantTool], meanwhile: @escaping @MainActor (String) -> Void,
+                     perform: @escaping @MainActor (ToolCall) async -> String) async throws -> String {
+            asked.append((text, state))
+            return try await script(text, meanwhile, perform)
+        }
+        func cancel() { cancels += 1 }
+    }
+
+    final class FakeVoice: Speaking {
+        var onLevel: ((Float) -> Void)?
+        var onFinished: (() -> Void)?
+        private(set) var said: [String] = []
+        private(set) var stops = 0
+        private(set) var speaking = false
+        func say(_ text: String) { said.append(text); speaking = true }
+        func stop() { stops += 1; speaking = false }
+        /// Everything given has been said.
+        func finish() { speaking = false; onFinished?() }
+    }
+
     final class FakeChimes: Chiming {
         private(set) var played: [Chime] = []
         func play(_ chime: Chime) { played.append(chime) }
@@ -49,7 +73,10 @@ import Testing
         let chimes: FakeChimes
         let settings: JasmineSettings
         let box: Box
-        final class Box { var made: [FakeTranscriber] = [] }
+        final class Box { var made: [FakeTranscriber] = []; var ducks: [Float] = [] }
+        let brain: FakeBrain
+        let voice: FakeVoice
+        var ducks: [Float] { box.ducks }
         var transcribers: [FakeTranscriber] { box.made }
 
         func siri(_ phases: SiriPhase...) { phases.forEach { tv.handle(.siri($0), from: .siriRemote) } }
@@ -66,10 +93,12 @@ import Testing
                 JasmineKey.allCases.forEach { JasmineSettings.shared.remove($0) }
             }
             if key { settings.save("sk-test-not-a-real-key", for: .openAI) }
-            let rig = Rig(tv: tv, microphone: FakeMicrophone(), chimes: FakeChimes(), settings: settings, box: Rig.Box())
+            let rig = Rig(tv: tv, microphone: FakeMicrophone(), chimes: FakeChimes(), settings: settings, box: Rig.Box(),
+                          brain: FakeBrain(), voice: FakeVoice())
             tv.jasmine = Jasmine(tv: tv, settings: settings, microphone: rig.microphone, chimes: rig.chimes,
                                  transcriber: { _ in let t = FakeTranscriber(); rig.box.made.append(t); return t },
-                                 access: { access })
+                                 access: { access }, brain: { _ in rig.brain }, duck: { rig.box.ducks.append($0) },
+                                 voice: rig.voice)
             try await body(rig)
             tv.jasmine.dismiss()
         }
@@ -133,6 +162,25 @@ import Testing
             presses.reset(.controller)
             #expect(!rig.microphone.running && rig.transcribers[1].cancelled)
             #expect(!presses.siriUp(from: .controller, at: 3))
+        }
+    }
+
+    @Test func fnF5IsLetGoWhenItsUpEvenWithoutAKeyUp() async throws {
+        try await Self.withJasmine { rig in
+            let presses = rig.tv.inputPresses
+            var f5Down = true
+            presses.siriDown(from: .keyboard, at: 0)
+            presses.watchSiri(from: .keyboard) { f5Down }
+            presses.checkWatched()
+            #expect(rig.microphone.running, "still down")
+            f5Down = false                                      // let go, and no keyUp came
+            presses.checkWatched()
+            #expect(rig.tv.activeSheet == .search, "a press")
+            #expect(!rig.microphone.running)
+            // The next press works
+            presses.siriDown(from: .keyboard, at: 1)
+            #expect(rig.microphone.running && rig.transcribers.count == 2)
+            #expect(presses.siriUp(from: .keyboard, at: 1.1))
         }
     }
 
@@ -291,8 +339,10 @@ import Testing
             rig.siri(.down, .hold)
             #expect(rig.tv.jasmine.phase == .listening && rig.tv.jasmine.mode == .assistant)
             rig.siri(.release)
-            rig.transcribers[0].onFinal?("打开哔哩哔哩")
-            #expect(rig.tv.jasmine.phase == .message && rig.tv.jasmine.heard == "打开哔哩哔哩")
+            rig.brain.script = { _, _, _ in "我是小茗同学。" }
+            rig.transcribers[0].onFinal?("你是谁")
+            await Self.waitUntil { rig.tv.jasmine.phase == .speaking }
+            #expect(rig.tv.jasmine.shown && rig.tv.jasmine.heard == "你是谁")
             #expect(rig.tv.activeSheet == nil, "Home stays as it was")
             // A press while she shows: she goes away, and it opens nothing
             rig.siri(.down, .tap)
@@ -307,9 +357,10 @@ import Testing
 
     @Test func holdingWhileSheShowsListensAgain() async throws {
         try await Self.withJasmine { rig in
+            rig.brain.script = { _, _, _ in "你好！" }
             rig.siri(.down, .hold, .release)
             rig.transcribers[0].onFinal?("你好")
-            #expect(rig.tv.jasmine.phase == .message)
+            await Self.waitUntil { rig.tv.jasmine.phase == .speaking }
             rig.siri(.down, .hold)
             #expect(rig.tv.jasmine.phase == .listening && rig.tv.jasmine.heard == "")
             #expect(rig.microphone.running && rig.transcribers.count == 2)
@@ -345,6 +396,151 @@ import Testing
             rig.siri(.down, .hold, .release, .down, .tap)
             #expect(rig.microphone.starts == 0 && rig.tv.activeSheet == nil && rig.tv.standby)
         }
+    }
+
+    // MARK: Doing things
+
+    /// Waits for her model's answer (a fake, answering at once), at most 5 s.
+    static func waitUntil(_ condition: @MainActor () -> Bool) async {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition(), Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(condition(), "waited 5 s")
+    }
+
+    @Test func shortCommandsNeedNoModel() {
+        let apps = [(id: "bilibili", name: "哔哩哔哩"), (id: "youtube", name: "YouTube"), (id: "settings", name: "Settings"),
+                    (id: "netease", name: "网易云音乐")]
+        #expect(LocalCommand.match("暂停。", apps: apps) == .pause)
+        #expect(LocalCommand.match("停", apps: apps) == .pause)
+        #expect(LocalCommand.match("播", apps: apps) == .play)
+        #expect(LocalCommand.match("Pause.", apps: apps) == .pause)
+        #expect(LocalCommand.match("大声一点", apps: apps) == .volumeStep(10))
+        #expect(LocalCommand.match("Turn it down", apps: apps) == .volumeStep(-10))
+        #expect(LocalCommand.match("打开 YouTube", apps: apps) == .open("youtube"))
+        #expect(LocalCommand.match("打开B站", apps: apps) == .open("bilibili"))
+        #expect(LocalCommand.match("帮我打开网易云", apps: apps) == .open("netease"))
+        #expect(LocalCommand.match("Open Settings", apps: apps) == .settings)
+        #expect(LocalCommand.match("回到主屏幕", apps: apps) == .home)
+        #expect(LocalCommand.match("播放 Taylor Swift", apps: apps) == nil, "a search is the model's")
+        #expect(LocalCommand.match("打开冰箱", apps: apps) == nil)
+    }
+
+    @Test func aShortCommandIsDoneAtOnce() async throws {
+        try await Self.withJasmine { rig in
+            rig.siri(.down, .hold)
+            #expect(rig.ducks == [Jasmine.duckedTo], "what's playing is lowered while she listens")
+            rig.siri(.release)
+            rig.transcribers[0].onFinal?("打开设置")
+            #expect(rig.tv.activeSheet == .settings)
+            #expect(rig.brain.asked.isEmpty, "no model")
+            #expect(rig.ducks.last == 1)
+            #expect(rig.tv.jasmine.phase == .message && rig.tv.jasmine.heard == "打开设置")
+        }
+    }
+
+    @Test func anythingElseGoesToHerModelWithTheTVsTools() async throws {
+        try await Self.withJasmine { rig in
+            rig.brain.script = { _, meanwhile, perform in
+                meanwhile("好的")
+                let result = await perform(ToolCall(id: "c1", name: "open", arguments: ["target": "settings"]))
+                #expect(result == #"{"ok":true}"#)
+                return "设置打开了。"
+            }
+            rig.siri(.down, .hold, .release)
+            rig.transcribers[0].onFinal?("我想改一下设置")
+            await Self.waitUntil { rig.tv.jasmine.phase == .speaking }
+            #expect(rig.brain.asked.first?.text == "我想改一下设置")
+            #expect(rig.brain.asked.first?.state.contains(#""screen":"Home""#) == true)
+            #expect(rig.tv.activeSheet == .settings)
+            #expect(rig.tv.jasmine.line == "设置打开了。")
+            #expect(rig.voice.said == ["好的", "设置打开了。"], "the early line while the tool runs, then the answer")
+            #expect(rig.ducks == [Jasmine.duckedTo], "still lowered while she speaks")
+            rig.voice.finish()
+            #expect(rig.tv.jasmine.phase == .message)
+            #expect(rig.ducks == [Jasmine.duckedTo, 1], "then as it was")
+        }
+    }
+
+    @Test func pressingWhileSheSpeaksStopsHer() async throws {
+        try await Self.withJasmine { rig in
+            rig.brain.script = { _, _, _ in "从前有座山。山里有座庙。" }
+            rig.siri(.down, .hold, .release)
+            rig.transcribers[0].onFinal?("讲个故事")
+            await Self.waitUntil { rig.tv.jasmine.phase == .speaking }
+            rig.siri(.down)                                      // she stops as the button goes down
+            #expect(rig.voice.stops >= 1 && !rig.voice.speaking)
+            rig.siri(.hold)                                      // and listens again
+            #expect(rig.tv.jasmine.phase == .listening)
+            #expect(rig.ducks.last == Jasmine.duckedTo)
+        }
+    }
+
+    @Test func sentencesAreSaidOneByOne() {
+        #expect(Sentences.split("从前有座山。山里有座庙！好吗？") == ["从前有座山。", "山里有座庙！", "好吗？"])
+        #expect(Sentences.split("Sure. It's 3 p.m. now. Anything else?") == ["Sure.", "It's 3 p.m. now.", "Anything else?"])
+        #expect(Sentences.split("好的") == ["好的"])
+        #expect(Sentences.split("  ") == [])
+        #expect(Sentences.isChinese("好的，打开了 YouTube"))
+        #expect(!Sentences.isChinese("Opening YouTube"))
+        let ladaisy = Voice.Settings(voice: "8RCmdqih4CKjJ7Bd3ZxT"), yating = Voice.Settings(voice: "5eoK8NqMBsMdqUmImHNs")
+        #expect(Voice.clipKey("好的。", ladaisy) == Voice.clipKey("好的。", ladaisy))
+        #expect(Voice.clipKey("好的。", ladaisy) != Voice.clipKey("好的。", yating), "each voice keeps its own lines")
+    }
+
+    @Test func herModelFailingSaysWhy() async throws {
+        try await Self.withJasmine { rig in
+            rig.brain.script = { _, _, _ in throw BrainFailure.refused("Incorrect API key provided") }
+            rig.siri(.down, .hold, .release)
+            rig.transcribers[0].onFinal?("今天天气怎么样")
+            await Self.waitUntil { rig.tv.jasmine.phase == .message }
+            #expect(rig.tv.jasmine.line == "Incorrect API key provided")
+            #expect(rig.chimes.played.last == .unavailable)
+        }
+    }
+
+    @Test func pressingWhileSheThinksStopsHer() async throws {
+        try await Self.withJasmine { rig in
+            rig.brain.script = { _, _, _ in
+                try await Task.sleep(for: .seconds(30))
+                return "too late"
+            }
+            rig.siri(.down, .hold, .release)
+            rig.transcribers[0].onFinal?("讲个笑话")
+            await Self.waitUntil { rig.brain.asked.count == 1 }
+            #expect(rig.tv.jasmine.phase == .thinking)
+            rig.siri(.down, .tap)
+            #expect(rig.brain.cancels >= 1 && !rig.tv.jasmine.shown)
+            #expect(rig.ducks.last == 1)
+        }
+    }
+
+    @Test func herToolsCheckWhatTheyreGiven() async throws {
+        try await Self.withJasmine { rig in
+            let tv = rig.tv
+            #expect(tv.performJasmine(ToolCall(id: "1", name: "open", arguments: ["target": "nowhere"])).contains("not understood"))
+            #expect(tv.performJasmine(ToolCall(id: "2", name: "control", arguments: ["action": "pause"])).contains("nothing is playing"))
+            #expect(tv.performJasmine(ToolCall(id: "3", name: "fly", arguments: [:])).contains("not understood"))
+            #expect(tv.jasmineTools.map(\.name) == ["open", "control", "volume"])
+            let state = tv.jasmineState()
+            #expect(!state.contains("sk-"), "no keys in what the model is told")
+        }
+    }
+
+    @Test func duckingLowersWithoutTouchingTheVolume() {
+        let suite = "MacTVTests.Ducking.\(UUID().uuidString)"
+        defer { TestDefaults.remove(suite) }
+        let volume = PlaybackVolume(defaults: TestDefaults.named(suite))
+        volume.use("output")
+        volume.perform(.set(50))
+        volume.ducking = 0.2
+        #expect(abs(volume.gain - PlaybackVolume.gain(for: 50) * 0.2) < 0.0001)
+        volume.perform(.set(70))                                 // changed meanwhile ("set the volume to 70")
+        volume.ducking = 1
+        #expect(volume.level == 70)
+        #expect(abs(volume.gain - PlaybackVolume.gain(for: 70)) < 0.0001)
+        volume.use(nil)
+        volume.ducking = 0.2
+        #expect(volume.gain == 0.2, "a volume macOS controls: only what Mac TV plays is lowered")
     }
 
     // MARK: Search

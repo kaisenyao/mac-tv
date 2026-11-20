@@ -22,7 +22,12 @@
 <main>
   <!-- 顶上：打开链接 / 打字、应用、设置、电源（屏幕睡着时是唤醒） -->
   <header>
-    <button class="drawn field" id="open-text" aria-label="Open a link or type on TV"><svg class="art" viewBox="0 0 594 144" aria-hidden="true"><use href="#art-field" data-state="normal"/><use href="#art-field-pressed" data-state="pressed" display="none"/></svg></button>
+    <div class="field-wrap">
+      <button class="drawn field" id="open-text" aria-label="Open a link or type on TV"><svg class="art" viewBox="0 0 594 144" aria-hidden="true"><use href="#art-field" data-state="normal"/><use href="#art-field-pressed" data-state="pressed" display="none"/></svg></button>
+      <!-- Siri, at the field's end as iOS puts dictation: pressed, Search; held, Jasmine (or dictation into the field
+           with focus on the TV), with the Mac's microphone -->
+      <button id="siri" aria-label="Siri (press for Search, hold to talk)"><svg viewBox="0 0 44 44" aria-hidden="true"><g fill="none" stroke="#2b2d2f" stroke-width="2.2" stroke-linecap="round"><rect x="17.5" y="9.5" width="9" height="16" rx="4.5"/><path d="M13.5 21.5a8.5 8.5 0 0 0 17 0M22 30v4.5"/></g></svg></button>
+    </div>
     <div class="rounds">
       <button class="drawn round" id="open-apps" aria-label="Apps"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-apps" data-state="normal"/><use href="#art-apps-pressed" data-state="pressed" display="none"/></svg></button>
       <button class="drawn round" id="open-settings" aria-label="Settings"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-settings" data-state="normal"/><use href="#art-settings-pressed" data-state="pressed" display="none"/></svg></button>

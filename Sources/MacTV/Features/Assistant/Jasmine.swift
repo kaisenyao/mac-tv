@@ -21,6 +21,10 @@ final class Jasmine: ObservableObject {
         case listening
         /// The button is up: the last words are being written out
         case finishing
+        /// Working out what to say or do
+        case thinking
+        /// Saying her answer aloud
+        case speaking
         /// Something to say in a line: what was heard, or why it can't listen
         case message
     }
@@ -33,6 +37,8 @@ final class Jasmine: ObservableObject {
     @Published private(set) var line: String?
     /// The microphone's loudness while she listens (0–1), for the orb.
     @Published private(set) var level: Float = 0
+    /// A long answer shown whole: Select on MORE.
+    @Published private(set) var expanded = false
 
     var shown: Bool { phase != .hidden }
 
@@ -43,6 +49,20 @@ final class Jasmine: ObservableObject {
     private let transcriber: (String) -> Transcribing
     /// Whether the microphone may be used (a test puts in its own answer).
     private let access: () -> MicrophoneAccess.Status
+    private let makeBrain: (String) -> Thinking
+    /// What Mac TV plays is lowered to this share while she listens and speaks (PlaybackVolume.ducking).
+    private let duck: (Float) -> Void
+    private let voice: Speaking
+    private var brain: (key: String, thinking: Thinking)?
+    private var thinkingTask: Task<Void, Never>?
+    /// When the moments of one request happened, for the timing log.
+    private var timing = Timing()
+    struct Timing {
+        var released: TimeInterval?
+        var heard: TimeInterval?
+        var acted: TimeInterval?
+    }
+    static let duckedTo: Float = 0.2
 
     /// One press of the Siri button, from down to up.
     private struct Press {
@@ -60,11 +80,15 @@ final class Jasmine: ObservableObject {
     /// The field dictation types into when the words come.
     private var dictating: DictationField?
     private var hideTask: Task<Void, Never>?
+    /// A release that never came (lost on the phone's network): she stops listening after this long.
+    private var listenLimit: Task<Void, Never>?
+    static let longestListen: Duration = .seconds(30)
     /// Two seconds of 24 kHz 16-bit mono: more than the hold time, in case the main actor was busy.
     private static let bufferLimit = 2 * 24_000 * 2
 
     init(tv: TVController, settings: JasmineSettings = .shared, microphone: Hearing? = nil, chimes: Chiming? = nil,
-         transcriber: ((String) -> Transcribing)? = nil, access: (() -> MicrophoneAccess.Status)? = nil) {
+         transcriber: ((String) -> Transcribing)? = nil, access: (() -> MicrophoneAccess.Status)? = nil,
+         brain: ((String) -> Thinking)? = nil, duck: ((Float) -> Void)? = nil, voice: Speaking? = nil) {
         self.tv = tv
         self.settings = settings
         self.microphone = microphone ?? Microphone()
@@ -73,9 +97,22 @@ final class Jasmine: ObservableObject {
             RealtimeTranscriber(key: key, settings: .init(keywords: Self.keywords))
         }
         self.access = access ?? { MicrophoneAccess.status }
+        makeBrain = brain ?? { key in OpenAIBrain(key: key, settings: .init(instructions: TVController.jasmineInstructions)) }
+        self.duck = duck ?? { PlaybackVolume.shared.ducking = $0 }
+        self.voice = voice ?? Voice(key: { settings.key(.elevenLabs) }, settings: { Voice.Settings(voice: settings.voice) },
+                                    allowed: !SystemGuard.fake, cache: Self.voiceCache)
+        self.voice.onLevel = { [weak self] level in
+            guard let self, self.phase == .speaking || self.phase == .thinking else { return }
+            self.level = level
+        }
+        self.voice.onFinished = { [weak self] in self?.saidEverything() }
         self.microphone.onAudio = { [weak self] data, level in self?.heard(data, level: level) }
         self.microphone.onLost = { [weak self] in self?.cancel(because: "Microphone Disconnected") }
     }
+
+    /// Where her short lines are kept once made (Voice): ~/Library/Caches/Mac TV/Jasmine.
+    static let voiceCache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("Mac TV/Jasmine", isDirectory: true)
 
     /// Words that are easy to mishear: Jasmine's names, the apps, short commands.
     static let keywords = ["小茗同学", "Jasmine", "哔哩哔哩", "网易云音乐", "得到", "YouTube", "Movies", "Safari",
@@ -93,11 +130,21 @@ final class Jasmine: ObservableObject {
         }
     }
 
-    /// Back while she's showing closes her (and the press goes no further).
+    /// While she shows: Back closes her, and Select on a long answer shows the rest (MORE). Neither goes further.
     func takes(_ command: RemoteCommand) -> Bool {
-        guard shown, case .back = command else { return false }
-        dismiss()
-        return true
+        guard shown else { return false }
+        switch command {
+        case .back:
+            dismiss()
+            return true
+        case .select:
+            guard let line, JasmineAnswer.isCut(line), !expanded, phase == .speaking || phase == .message else { return false }
+            expanded = true
+            if phase == .message { hide(after: .seconds(12)) }
+            return true
+        default:
+            return false
+        }
     }
 
     private func down() {
@@ -149,8 +196,16 @@ final class Jasmine: ObservableObject {
         dictating = press.field
         heard = ""
         line = nil
+        expanded = false
         hideTask?.cancel()
         withAnimation(Motion.appear) { phase = .listening }
+        listenLimit?.cancel()
+        listenLimit = Task { [weak self] in
+            try? await Task.sleep(for: Self.longestListen)
+            guard !Task.isCancelled, let self, self.phase == .listening else { return }
+            self.release()
+        }
+        duck(Self.duckedTo)
         chimes.play(.listen)
         for piece in self.press?.buffer ?? [] { session?.send(piece) }
         self.press?.buffer = []
@@ -181,6 +236,7 @@ final class Jasmine: ObservableObject {
         level = 0
         chimes.play(.done)
         withAnimation(Motion.appear) { phase = .finishing }
+        timing = Timing(released: Self.now())
         session?.finish()
     }
 
@@ -201,6 +257,7 @@ final class Jasmine: ObservableObject {
             phase = .hidden
             heard = ""
             line = nil
+            expanded = false
         }
     }
 
@@ -218,6 +275,8 @@ final class Jasmine: ObservableObject {
     }
 
     private func stopHearing() {
+        listenLimit?.cancel()
+        listenLimit = nil
         microphone.stop()
         level = 0
     }
@@ -227,6 +286,11 @@ final class Jasmine: ObservableObject {
         session?.cancel()
         session = nil
         dictating = nil
+        thinkingTask?.cancel()
+        thinkingTask = nil
+        brain?.thinking.cancel()
+        voice.stop()
+        duck(1)
     }
 
     private func heard(_ data: Data, level: Float) {
@@ -277,14 +341,87 @@ final class Jasmine: ObservableObject {
             dictating = nil
             dismiss()
         case .assistant:
-            // Until her brain is in: what she heard, for a moment.
-            withAnimation(Motion.appear) { phase = .message }
-            hide(after: .seconds(2.5))
+            timing.heard = Self.now()
+            respond(to: text)
         }
+    }
+
+    /// A request: a short command at once, here; anything else to her model, with Mac TV's tools.
+    private func respond(to text: String) {
+        guard let tv else { return dismiss() }
+        if let command = LocalCommand.match(text, apps: tv.jasmineApps) {
+            let done = tv.perform(command)
+            timing.acted = Self.now()
+            logTiming(local: true)
+            duck(1)
+            line = done ? nil : "Nothing Is Playing"
+            withAnimation(Motion.appear) { phase = .message }
+            hide(after: .seconds(done ? 1.2 : 2.5))
+            return
+        }
+        guard let key = settings.key(.openAI) else { return say("Add an OpenAI API key in Settings › General › Jasmine.", chime: .unavailable) }
+        if brain?.key != key { brain = (key, makeBrain(key)) }
+        guard let thinking = brain?.thinking else { return }
+        withAnimation(Motion.appear) { phase = .thinking }
+        thinkingTask = Task { [weak self, weak tv] in
+            do {
+                let reply = try await thinking.respond(
+                    to: text, state: tv?.jasmineState() ?? "{}", tools: tv?.jasmineTools ?? [],
+                    meanwhile: { [weak self] early in
+                        guard let self, self.phase == .thinking else { return }
+                        self.line = early
+                        self.voice.say(early)   // said while the tools run
+                    },
+                    perform: { [weak self, weak tv] call in
+                        if self?.timing.acted == nil { self?.timing.acted = Self.now() }
+                        return tv?.performJasmine(call) ?? #"{"ok":false}"#
+                    })
+                guard let self, !Task.isCancelled, self.phase == .thinking else { return }
+                self.logTiming(local: false)
+                if !reply.isEmpty {
+                    self.line = reply
+                    self.voice.say(reply)
+                }
+                guard self.line != nil else { return self.dismiss() }
+                withAnimation(Motion.appear) { self.phase = .speaking }   // what's playing stays low until she's done
+                if !self.voice.speaking { self.saidEverything() }
+            } catch BrainFailure.cancelled {
+            } catch BrainFailure.refused(let reason) {
+                guard let self, self.phase == .thinking else { return }
+                self.duck(1)
+                self.say(reason, chime: .unavailable)
+            } catch {
+                guard let self, self.phase == .thinking else { return }
+                self.duck(1)
+                self.say("Can’t Reach OpenAI", chime: .unavailable)
+            }
+        }
+    }
+
+    /// She has said everything: what's playing comes back up, and she goes two seconds later.
+    private func saidEverything() {
+        guard phase == .speaking else { return }
+        level = 0
+        duck(1)
+        withAnimation(Motion.appear) { phase = .message }
+        // Two seconds once she's done; a long answer stays to be read.
+        hide(after: .seconds(line.map { JasmineAnswer.isLong($0) ? (expanded ? 12 : 6) : 2 } ?? 2))
+    }
+
+    private static func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    /// One line per request: from letting go of the button to the words, the first action and the answer.
+    private func logTiming(local: Bool) {
+        guard let released = timing.released else { return }
+        let text = timing.heard.map { String(format: "%.2f", $0 - released) } ?? "-"
+        let acted = timing.acted.map { String(format: "%.2f", $0 - released) } ?? "-"
+        let answer = String(format: "%.2f", Self.now() - released)
+        Log.app.notice("Jasmine timing (\(local ? "local" : "model", privacy: .public)): words \(text, privacy: .public) s, action \(acted, privacy: .public) s, answer \(answer, privacy: .public) s")
     }
 
     private func say(_ text: String, chime: Chime?) {
         if let chime { chimes.play(chime) }
+        duck(1)
         line = text
         withAnimation(Motion.appear) { phase = .message }
         hide(after: .seconds(4))

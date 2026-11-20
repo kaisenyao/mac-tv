@@ -240,7 +240,7 @@ function send(a, extra = {}, repeat = false) {
       while (commandQueue.length) commandQueue.shift().done();
       if (activeCommand) activeCommand.abort();
       commandQueue.unshift({ body: { a, ...extra }, done: resolve });
-    } else if (!(a === 'press' && extra.p !== 'alive')   // 按键的点一下 / 按住 / 松开一条都不能丢
+    } else if (!(a === 'press' && extra.p !== 'alive') && a !== 'siri'   // 按键的点一下 / 按住 / 松开、Siri 键都不能丢
                && ((repeat && (activeCommand || commandQueue.length)) || commandQueue.length >= 8)) {
       resolve(); return;
     } else {
@@ -1301,6 +1301,30 @@ document.querySelectorAll('[data-press]').forEach(b => {
   ['pointercancel', 'pointerleave'].forEach(t => b.addEventListener(t, () => { clearTimeout(timer); if (held) press.release(k); held = false; }));
   b.addEventListener('click', e => { if (e.detail === 0) press.tap(k); });   // 键盘 / 辅助功能触发
 });
+// Siri 键：和 Siri Remote 的一样，按下就告诉 Mac（它马上开始听，第一个字不丢），按满 500 毫秒是按住（叫 Jasmine，
+// 或者往电视上有焦点的输入框里听写），没满就是按一下（打开搜索）。手指挪出去算没按（取消，什么都不做）
+{
+  const siri = $('#siri');
+  let timer = null, down = false, held = false;
+  const end = phase => {
+    clearTimeout(timer);
+    siri.classList.remove('down');
+    if (down) send('siri', { p: phase });
+    down = held = false;
+  };
+  siri.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (down) return;
+    down = true; held = false;
+    siri.classList.add('down');
+    haptic('press');
+    send('siri', { p: 'down' });
+    timer = setTimeout(() => { held = true; haptic('hold'); send('siri', { p: 'hold' }); }, 500);
+  });
+  siri.addEventListener('pointerup', () => end(held ? 'release' : 'tap'));
+  ['pointercancel', 'pointerleave'].forEach(t => siri.addEventListener(t, () => end(held ? 'release' : 'cancel')));
+  siri.addEventListener('contextmenu', e => e.preventDefault());
+}
 $('#browser-retry').onclick = () => send('retrybrowser').then(refresh);
 let websiteOpening = false, openedNote = 0;   // openedNote：收起"Opened on TV"的定时，新的一条重新计时
 $('#open-website').onsubmit = async e => {
