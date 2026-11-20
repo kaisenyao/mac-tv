@@ -98,8 +98,8 @@ struct ModalSheetRouter: View {
         case .pairing: PairSheet(tv: tv)
         case .addApp: AddAppSheet(tv: tv)
         case .topShelfPreferences: TopShelfPreferencesSheet(tv: tv)
-        case .playbackCheck: PlaybackCheckSheet(tv: tv)
         case .audioPicker: AudioPickerSheet(tv: tv)
+        case .appSwitcher: AppSwitcherView(tv: tv)
         case .profilePicker: ProfilesScreen(tv: tv)
         case .setup: SetupScreen(tv: tv)
         }

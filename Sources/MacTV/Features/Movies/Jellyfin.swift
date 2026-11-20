@@ -440,8 +440,11 @@ final class JellyfinServers: ObservableObject {
     }
 }
 
-/// Jellyfin sign-in tokens in the login Keychain, one per server, labelled as Mac TV's.
+/// Jellyfin sign-in tokens in the login Keychain, one per server, labelled as Mac TV's. In memory under the tests
+/// (SystemKeychain).
 enum JellyfinKeychain {
+    private static let memory = SystemKeychain.memoryStore()
+
     private static func query(server: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: "Mac TV Jellyfin",
@@ -449,24 +452,27 @@ enum JellyfinKeychain {
     }
 
     static func save(_ token: String, server: String) {
-        SecItemDelete(query(server: server) as CFDictionary)
+        if let memory { memory.withLock { $0[server] = Data(token.utf8) }; return }
+        SystemKeychain.delete(query(server: server))
         var item = query(server: server)
         item[kSecValueData as String] = Data(token.utf8)
         item[kSecAttrLabel as String] = "Mac TV Jellyfin sign-in"
-        SecItemAdd(item as CFDictionary, nil)
+        _ = SystemKeychain.add(item)
     }
 
     static func token(server: String) -> String? {
+        if let memory { return memory.withLock { $0[server] }.flatMap { String(data: $0, encoding: .utf8) } }
         var item = query(server: server)
         item[kSecReturnData as String] = true
         item[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(item as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        guard SystemKeychain.copyMatching(item, &result) == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     static func delete(server: String) {
-        SecItemDelete(query(server: server) as CFDictionary)
+        if let memory { memory.withLock { _ = $0.removeValue(forKey: server) }; return }
+        SystemKeychain.delete(query(server: server))
     }
 }
 

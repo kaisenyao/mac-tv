@@ -40,7 +40,7 @@ final class BilibiliStore: ObservableObject {
         case video(BiliVideo)
         /// 一个 UP 主（搜索结果里），按确认进他的主页
         case user(BiliUser)
-        /// 没登录时占位的"扫码登录"、没有关注时的"刷新"
+        /// 没登录时占位的"登录"（打开登录页）、没有关注时的"刷新"
         case login, refresh
         /// 这一排暂时没有内容时占位的一张卡片，只显示一句话，按了没反应
         case empty(String)
@@ -66,7 +66,9 @@ final class BilibiliStore: ObservableObject {
 
     /// 右上角头像菜单里的一项
     enum AccountAction: Hashable {
-        case login, refresh, settings, logout
+        /// 没登录、有登录过的账号时，账号列表下面的"登录其他账号"（打开登录页）
+        case login
+        case refresh, settings, logout
         /// "切换账号"：菜单换成登录过的账号列表；选一个就换过去，"添加账号"登录一个新的
         case switchAccount, useAccount(Int), addAccount
         /// 退出登录的确认：先问一次，默认停在"取消"上
@@ -125,11 +127,16 @@ final class BilibiliStore: ObservableObject {
         case .accounts: return savedAccounts.map { .useAccount($0.mid) } + [.addAccount]
         case .confirmLogout: return [.keepLogin, .confirmLogout]
         case .main:
-            // 没登录：扫码登录，下面是登录过的账号（点一下直接换过去）
-            guard account != nil else { return [.login] + savedAccounts.map { .useAccount($0.mid) } }
+            // 没登录：登录过的账号（点一下直接换过去），下面一项"登录其他账号"。
+            // 一个登录过的账号都没有时不出菜单，选头像直接打开登录页（见 openAccount）
+            guard account != nil else { return savedAccounts.map { .useAccount($0.mid) } + [.login] }
             return [.refresh, .switchAccount, .settings, .logout]
         }
     }
+    /// 选头像（确认键、触控板点一下）：没登录、也没有登录过的账号时直接打开登录页，不先出一个只有一项的菜单
+    var accountOpensLogin: Bool { account == nil && savedAccounts.isEmpty }
+    /// 测试用：当作登录过的是这几个账号（不碰钥匙串和本机设置）
+    func pretendSavedAccounts(_ accounts: [BiliSavedAccount]) { savedAccounts = accounts }
     /// 登录过的账号（名字、头像；登录信息在钥匙串里，见 BiliAccounts）
     @Published private(set) var savedAccounts = BiliAccounts.list()
     /// 左边栏里藏起来的几页（设置里的"左边栏显示"；首页一直都在）
@@ -217,6 +224,8 @@ final class BilibiliStore: ObservableObject {
             if player.relatedVisible { return .strip }
             return player.qualityMenuVisible ? .picker : .scrub
         }
+        // 登录页：左边的二维码、右边表单里固定的几样，两个方向都是挑一个
+        if login != nil { return .picker }
         // 头像、搜索框的上下跟着它们下面那一块走（一去一回方向相反）：下面是搜索页的搜索历史和热搜（光标）时，
         // 往上滑上去、往下滑回来；下面是视频排（内容跟着手走）时，往下滑上去、往上滑回来
         let aboveContent: TVController.Module = showingLanding ? .picker : .drawer
@@ -251,7 +260,7 @@ final class BilibiliStore: ObservableObject {
             default: return false
             }
         }
-        guard focus == .rows, !sortFocused, rows.indices.contains(row) else { return false }
+        guard login == nil, focus == .rows, !sortFocused, rows.indices.contains(row) else { return false }
         switch direction {
         // 到第一张就停，不进左边栏；热搜是一条接一条的（1 到 10），在一排的两头也能接着走
         case .left: return column > 0 || (isHotRow(row) && isHotRow(row - 1))
@@ -263,7 +272,10 @@ final class BilibiliStore: ObservableObject {
     let player = BilibiliNativePlayer()
     private var playerChanges: AnyCancellable?
     private var loadedAt: [Tab: Date] = [:]
-    private var loginWatch: Task<Void, Never>?
+    /// 开着的登录页（盖在列表上面，见 BilibiliLoginScreen）。开着时按键都给它
+    @Published private(set) var login: BiliLoginPage?
+    /// 扫码登录用的接口（测试里换成假的）
+    var qrService: BiliQRService = BiliQRWeb()
     /// 能一直往后翻的排（推荐、热门、搜索结果）：已经取到第几页、是否正在取、是否到头了
     private var pages: [String: Int] = [:]
     private var fetchingMore: Set<String> = []
@@ -308,10 +320,13 @@ final class BilibiliStore: ObservableObject {
             + "-\(sidebarTab.rawValue)-\(upPage?.sort.rawValue ?? -1)-\(upPage?.browsing ?? false)"
             // 看视频时键盘左右是快进快退十秒：进度也算，这样每一下都有声音
             + "-\(Int(player.time))"
+            // 登录页：在二维码和表单之间、表单里走一格
+            + "-\(login?.focusKey ?? "")"
     }
 
     private func wirePlayer() {
         player.cookie = { [weak self] in await self?.cookieHeader() ?? "" }
+        player.cookieOfNow = { [weak self] in self?.cookieSource() ?? { "" } }
         player.toast = { [weak self] text in self?.tv?.showToast(text) }
         player.keepAwake = { [weak self] on in
             if on { self?.tv?.displayCoordinator.holdPlaybackKeepAwake(reason: "在 Mac TV 里看哔哩哔哩") }
@@ -606,6 +621,17 @@ final class BilibiliStore: ObservableObject {
 
     private func cookieHeader(fresh: Bool = false) async -> String { await cookieJar(fresh: fresh).header }
 
+    /// 现在这个人的登录信息，绑在他身上（他的网页数据）：过一会儿才发的请求（停下时报看到哪了），
+    /// 中间换了人，带的也还是他的
+    private func cookieSource() -> () async -> String {
+        if let cached = cookieCache, Date().timeIntervalSince(cached.at) < 600 {
+            let header = cached.jar.header
+            return { header }
+        }
+        guard let store = tv?.profile.websiteDataStore.httpCookieStore else { return { "" } }
+        return { CookieJar(cookies: (await store.allCookies()).filter(\.isBilibili)).header }
+    }
+
     /// 登录状态存在这个应用自己的网页数据里（和内置网页共用）；这里只把哔哩哔哩的那几个带给请求。
     /// fresh = 不用记着的，现在去读（等登录、换账号时用）
     private func cookieJar(fresh: Bool = false) async -> CookieJar {
@@ -644,8 +670,8 @@ final class BilibiliStore: ObservableObject {
     /// 设置页里改了清晰度，回去点开的不能还是按旧清晰度准备好的那个
     private func warmFocused() {
         guard tv?.bilibiliOpen == true else { return }   // 还没进哔哩哔哩时只取列表，不准备视频
-        // 直播不提前准备（挂上去就是在拉直播流）
-        if case .video(let video) = focused, !video.isRoom { player.warm(video) }
+        // 直播不提前准备（挂上去就是在拉直播流）；登录页盖着时也不准备
+        if login == nil, case .video(let video) = focused, !video.isRoom { player.warm(video) }
         else { player.warm(nil) }
     }
 
@@ -654,6 +680,10 @@ final class BilibiliStore: ObservableObject {
     func handle(_ command: RemoteCommand) {
         if player.current != nil {
             if player.handle(command) == .close { player.stop() }
+            return
+        }
+        if let login {
+            login.handle(command)
             return
         }
         defer { warmFocused() }
@@ -733,9 +763,19 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
+    /// 选了头像：打开菜单；没登录、也没有登录过的账号时直接打开登录页
+    private func openAccount() {
+        if accountOpensLogin {
+            focus = .account   // 登录页关了回到头像上
+            openLogin()
+            return
+        }
+        withAnimation(Motion.focus) { accountIndex = 0; focus = .accountMenu(.main) }
+    }
+
     private func handleAccount(_ command: RemoteCommand) {
         switch command {
-        case .select: withAnimation(Motion.focus) { accountIndex = 0; focus = .accountMenu(.main) }
+        case .select: openAccount()
         // 在 UP 主的主页里，头像下面是关注按钮；搜索页上是搜索框；别的页直接回到内容
         case .move(.down), .back:
             withAnimation(Motion.focus) { focus = upPage != nil ? .follow : (tab == .search ? .searchField : .rows) }
@@ -780,7 +820,7 @@ final class BilibiliStore: ObservableObject {
             // 别的页（包括盖在搜索页上的 UP 主页），哪怕右边暂时还没有内容也收起
             withAnimation(Motion.focus) { focus = tab == .search && upPage == nil ? .searchField : .rows }
         // 左边栏是盖在右边内容之上的二级菜单：按一下 Esc 永远是收起它、回到右边
-        //（哪怕右边暂时只有一个搜索框）。离开哔哩哔哩要长按 Esc。
+        //（哪怕右边暂时只有一个搜索框）。内容里最上一层再按返回是回主屏（哔哩哔哩留在后台），长按 Esc 是退出它（见 AppQuit）。
         case .back:
             commitSidebar()
             withAnimation(Motion.focus) { focus = contentFocus }
@@ -826,10 +866,12 @@ final class BilibiliStore: ObservableObject {
             if tab == .search, upPage == nil, rows.isEmpty { withAnimation(Motion.focus) { focus = .typing } }
             else { activate() }
         case .back:
-            // 在某个 UP 主的主页里：Esc 回到进来之前的那一页。其他时候在内容里短按 Esc 不做任何事。
+            // 在某个 UP 主的主页里：Esc 回到进来之前的那一页。
             if upPage != nil { leaveUpPage() }
             // 搜索结果的上一级是搜索页本身（搜索历史、热搜）
             else if tab == .search, !showingLanding, !rows.isEmpty { withAnimation(Motion.navigate) { showLanding() } }
+            // 最上一层：回主屏，哔哩哔哩留在后台（和 Apple TV 一样，见 AppQuit）
+            else { tv?.goHome() }
         case .playPause: if case .video = focused { activate() }
         default: break
         }
@@ -842,6 +884,7 @@ final class BilibiliStore: ObservableObject {
             if player.relatedVisible { return flickCanMove(direction) }   // 选集、相关视频：到第一张就停
             return true                                                    // 清晰度栏、右边面板：在里面走，到头自己停
         }
+        if let login { return login.canMove(direction) }                  // 登录页：只在表单里上下走，不转回二维码
         switch focus {
         case .typing, .searchField, .account, .follow: return false
         case .settings, .cardMenu, .accountMenu, .sidebar: return true    // 一列固定的选项，到头自己停
@@ -858,6 +901,7 @@ final class BilibiliStore: ObservableObject {
     /// 转盘沿着哪个方向走（见 TVController.wheelRunsHorizontally）
     var wheelRunsHorizontally: Bool {
         if player.current != nil { return !player.panelVisible }   // 相关视频、清晰度栏是横的；右边的面板是竖的
+        if login != nil { return false }                            // 登录表单：从上往下一样一样走
         switch focus {
         // 设置、菜单、左边栏是竖的；头像、关注按钮往下回到内容
         case .settings, .cardMenu, .accountMenu, .sidebar, .account, .follow: return false
@@ -1025,7 +1069,8 @@ final class BilibiliStore: ObservableObject {
         guard tv != nil else { return }
         switch action {
         case .login:
-            closeAccountMenu()
+            // "登录其他账号"：菜单收起，打开登录页；登录页返回时回到头像上
+            withAnimation(Motion.focus) { focus = .account }
             openLogin()
         case .refresh:
             closeAccountMenu()
@@ -1071,13 +1116,43 @@ final class BilibiliStore: ObservableObject {
         withAnimation(Motion.focus) { focus = contentFocus }
     }
 
-    /// 打开扫码登录的网页；登录成功自动回来（见 watchForLogin）
-    private func openLogin() {
+    /// 打开登录页（盖在列表上：左边扫码，右边哔哩哔哩自己的表单）；登录成功自动回到列表（见 finishLogin）
+    func openLogin() {
+        guard login == nil else { return }
+        let qr = BiliQRLogin(service: qrService)
+        // 表单用这个人自己的网页数据：在里面登录，登录信息就存在别处读的那个地方
+        let page = BiliLoginPage(qr: qr, dataStore: tv?.profile.websiteDataStore)
+        page.tv = tv
+        qr.signedIn = { [weak self] cookies in await self?.saveLogin(cookies) }
+        page.signedIn = { [weak self] in self?.finishLogin() }
+        page.close = { [weak self] in self?.closeLogin() }
+        login = page
+        page.open()
+    }
+
+    /// 关掉登录页：不再问二维码，网页拆掉；焦点回到打开它的地方（头像、"登录"卡片）
+    func closeLogin() {
+        guard let page = login else { return }
+        page.shutdown()
+        login = nil
+    }
+
+    /// 扫码登录成功：哔哩哔哩发下来的登录信息放进这个人的网页数据（和在网页里登录存的是同一个地方、
+    /// 同样的名字和域名），再同 finishLogin
+    private func saveLogin(_ cookies: [HTTPCookie]) async {
+        guard let page = login else { return }
+        if let tv { await BiliQRLogin.save(cookies, in: tv.profile.websiteDataStore.httpCookieStore) }
+        guard login === page else { return }   // 存的这一会儿登录页关了、换了人：不算
+        finishLogin()
+    }
+
+    /// 登录成功（扫码，或者在表单里登录了）：关掉登录页，登录信息重新读、内容重新取
+    /// （取的时候认出是谁，记进登录过的账号）
+    private func finishLogin() {
+        closeLogin()
         guard let tv else { return }
-        let url = URL(string: "https://passport.bilibili.com/login")!
-        let service = Service(id: Self.loginID, name: "哔哩哔哩", kind: .web(url), accent: "#FB7299", deep: "#3A0F1E")
-        tv.playbackCoordinator.playWeb(service, url: url)
-        watchForLogin()
+        reload()
+        tv.showToast("登录成功")
     }
 
     // MARK: 多账号
@@ -1103,8 +1178,12 @@ final class BilibiliStore: ObservableObject {
     private func clearLogin() async {
         guard let tv else { return }
         let store = tv.profile.websiteDataStore.httpCookieStore
+        // 系统的 cookie 存储和默认网页数据是同一份：那是第一个人的，只在第一个人退出登录时清（别的人各有各的网页数据）
+        let usesDefaultStore = tv.profile.store == nil
         for cookie in await store.allCookies() where cookie.isBilibili { await store.deleteCookie(cookie) }
-        for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.isBilibili { HTTPCookieStorage.shared.deleteCookie(cookie) }
+        if usesDefaultStore {
+            for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.isBilibili { HTTPCookieStorage.shared.deleteCookie(cookie) }
+        }
         forgetLogin()
     }
 
@@ -1132,22 +1211,24 @@ final class BilibiliStore: ObservableObject {
         let saved = BiliAccounts.cookies(for: mid)
         let name = savedAccounts.first { $0.mid == mid }?.name ?? "这个账号"
         guard !saved.isEmpty, let tv else { tv?.showToast("「\(name)」的登录已过期，请重新登录"); return }
+        // 换的是这个人（个人资料）的账号、放进他的网页数据：中途换了人就停，不放进下一个人那里
+        let space = ProfileSpace.current, store = tv.profile.websiteDataStore.httpCookieStore
         Task { @MainActor in
             await self.rememberCurrent()
             await self.clearLogin()
+            guard ProfileSpace.isCurrent(space.epoch) else { return }
             let epoch = self.loginEpoch
-            let store = tv.profile.websiteDataStore.httpCookieStore
             for cookie in saved { await store.setCookie(cookie) }
             let jar = await self.cookieJar(fresh: true)
             let answer = await BiliAPI.account(cookie: jar.header)
-            guard epoch == self.loginEpoch else { return }
+            guard epoch == self.loginEpoch, ProfileSpace.isCurrent(space.epoch) else { return }
             switch answer {
             case .signedIn(let account):
                 self.adopt(account, cookies: jar.cookies)
             case .signedOut:
                 // 存下来的登录信息不管用了（在别处退出过、过期了）：从列表里去掉
                 await self.clearLogin()
-                BiliAccounts.forget(mid)
+                BiliAccounts.forget(mid, in: space)
                 self.savedAccounts = BiliAccounts.list()
                 tv.showToast("「\(name)」的登录已过期，请重新登录")
             case .unknown:
@@ -1158,19 +1239,41 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
-    /// 换了一个 Mac TV 的用户：每个人的哔哩哔哩登录在各自的网页数据里。这边记着的账号、内容、签名密钥、
-    /// 读到的登录信息都是上一个人的，全部作废，按新的人重新取（Profiles.switchProfile 换完人以后调用）
+    /// 要换人了：在放的是这个人的视频，停下（看到哪了记在他自己那里、报到他的账号上，见 cookieOfNow）
+    func profileWillChange() {
+        player.stop()
+        player.warm(nil)
+        resetTransient()
+    }
+
+    /// 换了一个 Mac TV 的用户：每个人的哔哩哔哩登录在各自的网页数据里，登录过的账号、搜索历史、看到哪了、
+    /// 播放设置在各自的设置里。这边记着的账号、内容、签名密钥、读到的登录信息都是上一个人的，全部作废，
+    /// 按新的人重新取（见 ProfileApp）
     func profileChanged() {
         player.stop()
         player.warm(nil)
         forgetLogin()
+        // 搜索页（搜索历史、搜过的结果）也是上一个人的
+        content = [:]
+        rowIndex = [:]
+        loadingTabs = []
+        columns = [:]
+        query = ""
+        clearArmed = false
         cookieWaker = nil   // 唤醒的是上一个人的网页数据
+        savedAccounts = BiliAccounts.list()
+        hiddenTabs = BiliSidebar.hidden
+        tab = .home   // 首页每个人都有（别的页这个人可能藏起来了）
+        sidebarTab = .home
+        player.reloadSettings()
         resetTransient()
         preload()
     }
 
-    /// 离开哔哩哔哩、从外面直接放一个视频时：把各种开着的小东西都收起来，下次进来焦点在内容上
+    /// 离开哔哩哔哩、从外面直接放一个视频、换了人时：把各种开着的小东西都收起来（登录页也关掉，不再问二维码），
+    /// 下次进来焦点在内容上
     func resetTransient() {
+        closeLogin()
         focus = contentFocus
         settingList = nil
     }
@@ -1448,7 +1551,7 @@ final class BilibiliStore: ObservableObject {
     /// 返回是否真的打开了菜单（不在视频卡片上就不会打开）
     @discardableResult
     func openCardMenu() -> Bool {
-        guard player.current == nil, case .video(let video)? = focused else { return false }
+        guard player.current == nil, login == nil, case .video(let video)? = focused else { return false }
         var actions: [CardAction] = []
         if video.ownerMid > 0, upPage?.user.mid != video.ownerMid { actions.append(.upPage) }
         // 直播间不是视频：收藏、稍后再看用不了（只留"UP 主"，进主播的主页）
@@ -1498,9 +1601,11 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
-    /// 用触控板点头像：焦点过去并打开 / 收起菜单（不管刚才焦点在哪：左边栏、搜索框、设置页……）
+    /// 用触控板点头像：焦点过去并打开 / 收起菜单（不管刚才焦点在哪：左边栏、搜索框、设置页……）。
+    /// 没登录、也没有登录过的账号时直接打开登录页
     func tapAccount() {
-        guard player.current == nil, !editing else { return }
+        guard player.current == nil, !editing, login == nil else { return }
+        if !accountMenuOpen, accountOpensLogin { openAccount(); return }
         withAnimation(Motion.focus) {
             accountIndex = 0
             focus = accountMenuOpen ? .account : .accountMenu(.main)
@@ -1554,23 +1659,7 @@ final class BilibiliStore: ObservableObject {
         }
     }
 
-    /// 登录页开着的时候每两秒看一眼，登录成功就自动回到列表
-    private func watchForLogin() {
-        loginWatch?.cancel()
-        loginWatch = Task { @MainActor [weak self] in
-            for _ in 0..<150 {
-                try? await Task.sleep(for: .seconds(2))
-                guard let self, !Task.isCancelled, let tv = self.tv else { return }
-                guard case .player(let service) = tv.mode, service.id == Self.loginID else { return }
-                if case .signedIn = await BiliAPI.account(cookie: await self.cookieHeader(fresh: true)) {
-                    tv.returnToBilibili()
-                    return
-                }
-            }
-        }
-    }
-
-    /// 登录页（网页）里的返回键：回到哔哩哔哩，而不是回主屏
+    /// 以前的登录页（整页网页，现在换成了原生的 BilibiliLoginScreen）里的返回键：回到哔哩哔哩，而不是回主屏
     func handleInPlayer(_ command: RemoteCommand, service: Service) -> Bool {
         guard let tv, service.id == Self.loginID else { return false }
         if case .back = command { tv.returnToBilibili(); return true }
@@ -1634,8 +1723,9 @@ enum BiliSidebar {
     static let choices = BilibiliStore.Tab.allCases.filter { $0 != .home }
 
     static var hidden: Set<BilibiliStore.Tab> {
-        get { Set((UserDefaults.standard.stringArray(forKey: key) ?? []).compactMap(BilibiliStore.Tab.init).filter(choices.contains)) }
-        set { UserDefaults.standard.set(choices.filter(newValue.contains).map(\.rawValue), forKey: key) }
+        // 每个人（个人资料）各选各的（见 ProfileSpace）
+        get { Set((ProfileSpace.current.defaults.stringArray(forKey: key) ?? []).compactMap(BilibiliStore.Tab.init).filter(choices.contains)) }
+        set { ProfileSpace.current.defaults.set(choices.filter(newValue.contains).map(\.rawValue), forKey: key) }
     }
 
     /// 设置那一行右边写的："搜索等 4 项"、"直播、搜索"、"直播"、"仅首页"
@@ -1686,4 +1776,18 @@ extension BilibiliStore {
         }
         return (label, items)
     }
+}
+
+// MARK: 每个人（个人资料）各一份（见 ProfileApp）
+
+extension BilibiliStore: ProfileApp {
+    /// 新的人从这些设置开始（和第一次打开哔哩哔哩一样）
+    static var registeredDefaults: [String: Any] {
+        ["bilibiliQuality": 112, "bilibiliSpeed": 1.0, "bilibiliSubtitles": true, "bilibiliDanmaku": true]
+    }
+    /// 登录过的账号的登录信息在钥匙串里这个名字下（每个人一份，见 BiliAccounts）：删掉一个人时一起删
+    static var keychainServices: [String] { [BiliAccounts.service] }
+
+    /// 登录过的账号在别处改了（以前的账号分给了登录它的人）：头像菜单里重新列
+    func savedAccountsChanged() { savedAccounts = BiliAccounts.list() }
 }

@@ -1,4 +1,6 @@
 import AppKit
+import GameController
+import IOKit.hid
 import Network
 
 /// Manages remote server links, pairing tokens, remote state snapshots, and client request routing.
@@ -32,23 +34,33 @@ final class RemoteCoordinator: ObservableObject {
 
     // MARK: Shortcuts (see RemoteShortcuts)
 
-    /// Where the shortcut choice is kept; tests use their own.
+    /// Where the first profile's shortcut choice is kept; tests use their own.
     var shortcutDefaults = UserDefaults.standard {
         didSet { savedShortcuts = nil }
     }
+    /// Another profile's own defaults while they're watching: each person picks their own shortcuts.
+    private var profileShortcutDefaults: UserDefaults?
+    private var activeShortcutDefaults: UserDefaults { profileShortcutDefaults ?? shortcutDefaults }
     private var savedShortcuts: RemoteShortcutChoice?
     /// The owner's shortcut choice, read once and saved on every change. `/state` reads it every few seconds.
     var shortcutChoice: RemoteShortcutChoice {
         get {
             if let savedShortcuts { return savedShortcuts }
-            let loaded = RemoteShortcutChoice.load(from: shortcutDefaults)
+            let loaded = RemoteShortcutChoice.load(from: activeShortcutDefaults)
             savedShortcuts = loaded
             return loaded
         }
         set {
             savedShortcuts = newValue
-            newValue.save(to: shortcutDefaults)
+            newValue.save(to: activeShortcutDefaults)
         }
+    }
+
+    /// Someone else is watching: their shortcut sets and Apple Shortcut from now on (a new profile starts
+    /// with the defaults).
+    func shortcutsProfileChanged(_ space: ProfileSpace) {
+        profileShortcutDefaults = space.isMain ? nil : space.defaults
+        savedShortcuts = nil
     }
     /// Lists and runs the owner's Apple Shortcuts; tests stand in for the Shortcuts app.
     var listAppleShortcuts: @Sendable () async -> [String]? = { await AppleShortcuts.names() }
@@ -65,7 +77,25 @@ final class RemoteCoordinator: ObservableObject {
     /// removed in Settings is refused at once. Tests put in their own before first use.
     lazy var pairingStore = PairingStore()
 
-    /// Settings › iPhone › Paired Devices: forgets one phone; it has to scan the code again.
+    /// The Siri Remote's charge, when this macOS exposes it, and whether Mac TV may read the remote's buttons.
+    @Published private(set) var siriRemoteBattery: Int?
+    @Published private(set) var inputMonitoringAllowed = false
+
+    /// Reads the remotes' battery and Input Monitoring again: when a page or sheet showing them opens, when a
+    /// remote connects or disconnects, and on coming back from System Settings. Never on a timer.
+    func refreshRemoteStatus() {
+        let battery = SiriRemoteStatus.shared.connected ? SiriRemoteBattery.read() : nil
+        if battery != siriRemoteBattery { siriRemoteBattery = battery }
+        let allowed = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+        if allowed != inputMonitoringAllowed { inputMonitoringAllowed = allowed }
+        // A controller's charge is read when it connects; read it again now.
+        if let tv, let pad = GCController.controllers().first(where: { $0.extendedGamepad != nil }) {
+            let info = ControllerInput.info(for: pad)
+            if tv.controller != info { tv.controller = info }
+        }
+    }
+
+    /// Settings › Remotes and Devices › iPhone: forgets one phone; it has to scan the code again.
     func removePairedDevice(_ id: String) {
         do {
             try pairingStore.revoke(id: id)
@@ -128,13 +158,15 @@ final class RemoteCoordinator: ObservableObject {
         showStartupPairingIfReady()
     }
 
+    /// Connect a Remote at launch, as Apple TV shows its pairing screen: only while there's no remote at all.
+    /// The keyboard and mouse always work, so a Siri Remote or game controller that's connected, or a phone
+    /// that has ever been paired (even if its page isn't open yet), is enough. Back closes it, and so does a
+    /// remote connecting or being used.
     func showStartupPairingIfReady() {
         guard let tv, startupPairingPending, !phoneConnectedThisLaunch,
               tv.setup == nil, tv.profilePicker == nil, tv.mode == .launcher else { return }
-        // Siri Remote 或手柄已经连着：已经有遥控器了，不用弹配对页
-        if tv.otherRemoteConnected { startupPairingPending = false; return }
         startupPairingPending = false
-        guard tv.preferences.showPairingAtLaunch else { return }
+        guard !tv.otherRemoteConnected, pairingStore.activeDevices().isEmpty else { return }
         startupPairingVisible = true
         tv.pairing = true
     }
@@ -161,7 +193,7 @@ final class RemoteCoordinator: ObservableObject {
 
     func remoteState() -> [String: Any] {
         guard let tv else { return [:] }
-        phonePaired = true
+        if !phonePaired { phonePaired = true }   // asked every few seconds: write it once, not on every ask
         noteRemoteConnection()
         tv.notePhoneDuringSetup()
 
@@ -174,10 +206,10 @@ final class RemoteCoordinator: ObservableObject {
             "audioDevice": tv.currentAudioDevice?.name ?? "",
             "apps": tv.arrangedServices.map { service -> [String: Any] in
                 ["id": service.id, "name": service.name, "icon": Icons.image(for: service) != nil,
-                 "playing": playingAudio(service.id, tv),
-                 "pinned": tv.isPinned(service.id), "canMoveEarlier": tv.canMoveApp(service.id, by: -1),
-                 "canMoveLater": tv.canMoveApp(service.id, by: 1)]
+                 "playing": playingAudio(service.id, tv), "added": tv.organizerActions(for: service.id).contains(.deleteForEveryone)]
             },
+            // Home's first apps are its top row, the dock; the phone's Edit shows the same.
+            "dockSize": AppLibrary.dockSize,
             "canRestore": tv.library.hasHiddenBuiltIns,
             "profile": tv.profile.name,
             "focus": String(describing: tv.focus),
@@ -319,26 +351,31 @@ final class RemoteCoordinator: ObservableObject {
             guard let app else { return .json(["error": "Couldn't add that. Check the address."], status: "400 Bad Request") }
             return .json(["ok": true, "id": app.id, "name": app.name])
         case ("POST", "/apps/remove"):
+            // Hide: the app leaves this profile's Home only.
             guard let id = body["id"] as? String else { return .json(["error": "Missing app"], status: "400 Bad Request") }
-            tv.removeApp(id)
+            tv.hideApp(id)
+            return .json(["ok": true])
+        case ("POST", "/apps/delete"):
+            // Delete for Everyone: only for an app someone added; built-in apps can only be hidden. Its files go to the Trash.
+            guard let id = body["id"] as? String, tv.library.containsAddedApp(id),
+                  !Catalog.services.contains(where: { $0.id == id }) else {
+                return .json(["error": "Built-in apps can’t be deleted. You can hide them."], status: "400 Bad Request")
+            }
+            if let error = tv.deleteAppForEveryone(id) { return .json(["error": error], status: "500 Internal Server Error") }
             return .json(["ok": true])
         case ("POST", "/apps/restore"):
             tv.restoreBuiltInApps()
             return .json(["ok": true])
-        case ("POST", "/apps/pin"):
-            guard let id = body["id"] as? String, let value = body["pinned"] as? NSNumber,
-                  CFGetTypeID(value) == CFBooleanGetTypeID(), tv.arrangedServices.contains(where: { $0.id == id }) else {
-                return .json(["error": "Choose an app and whether to pin it."], status: "400 Bad Request")
+        case ("POST", "/apps/place"):
+            // The phone's Edit: an app dropped at a place in Home's order (the first six are the dock).
+            guard let id = body["id"] as? String, tv.appOrder.contains(id),
+                  let index = body["index"] as? NSNumber, CFGetTypeID(index) != CFBooleanGetTypeID(),
+                  index.doubleValue >= 0, index.doubleValue == index.doubleValue.rounded() else {
+                return .json(["error": "Choose an app and where to put it."], status: "400 Bad Request")
             }
-            guard tv.setPinned(id, value.boolValue) else { return .json(["error": "Couldn’t save favorites. Check storage and folder permissions on the Mac."], status: "500 Internal Server Error") }
-            return .json(["ok": true])
-        case ("POST", "/apps/move"):
-            guard let id = body["id"] as? String, let value = body["offset"] as? NSNumber,
-                  CFGetTypeID(value) != CFBooleanGetTypeID(), value == -1 || value == 1,
-                  tv.canMoveApp(id, by: value.intValue) else {
-                return .json(["error": "That app can't move further in this group."], status: "400 Bad Request")
+            guard tv.moveApp(id, to: Int(min(index.doubleValue, 10_000))) else {
+                return .json(["error": "Couldn't save that app's position. Check storage on the Mac."], status: "500 Internal Server Error")
             }
-            guard tv.moveApp(id, by: value.intValue) else { return .json(["error": "Couldn't save that app's position. Check storage on the Mac."], status: "500 Internal Server Error") }
             return .json(["ok": true])
         default:
             return nil

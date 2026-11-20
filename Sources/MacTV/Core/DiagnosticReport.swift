@@ -52,7 +52,7 @@ enum DiagnosticReport {
         lines += ["", "## Sound", ""]
         add("Output", tv.currentAudioDevice.map { transportName($0.transport) } ?? "none")
         add("Outputs available", "\(tv.audioDevices.count)")
-        add("Navigation sounds", tv.feedback.enabled ? "on" : "off")
+        add("Navigation clicks", tv.feedback.enabled ? "on" : "off")
 
         lines += ["", "## Remote and power", ""]
         add("Remote page", RemotePage.available ? "found" : "missing")

@@ -38,8 +38,22 @@ struct SheetStackTests {
 
         tv.profilePicker = ProfilePicker()
         tv.settings = SettingsPanel()
+        tv.lastHomePress = nil   // a press of its own, not the second of two (that's the App Switcher)
         tv.handle(.home)
         #expect(tv.sheets.open == [.profilePicker])
+    }
+
+    @Test
+    func homeTwiceIsTheAppSwitcherAndHomeClosesIt() {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let tv = TVController(library: AppLibrary(folder: folder))
+        tv.handle(.home)
+        tv.handle(.home)
+        #expect(tv.sheets.top == .appSwitcher && tv.remoteState()["sheet"] as? String == "app-switcher")
+        tv.handle(.home)
+        #expect(tv.sheets.open.isEmpty)
     }
 
     @Test

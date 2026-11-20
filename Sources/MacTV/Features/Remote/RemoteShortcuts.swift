@@ -115,7 +115,8 @@ enum RemoteShortcuts {
     }
 }
 
-/// What the owner picked: each place's set and the Apple Shortcut "Run Shortcut" runs. Kept in UserDefaults.
+/// What the person watching picked: each place's set and the Apple Shortcut "Run Shortcut" runs. Kept in their
+/// profile's defaults (UserDefaults.standard for the first profile), so each person has their own.
 struct RemoteShortcutChoice: Equatable, Sendable {
     /// Each scope's saved set. A scope that has none shows its default; an app saved empty uses Home's.
     private(set) var sets: [String: [String]]

@@ -62,8 +62,8 @@ struct RemoteShortcutsTests {
 
     @Test func savedChoiceComesBackAndDropsWhatNoLongerFits() throws {
         let suite = "MacTVTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
         var choice = RemoteShortcutChoice()
         let problem4 = choice.choose(["bilibili.coin", "files"], for: "bilibili")
         #expect(problem4 == nil)
@@ -303,11 +303,11 @@ struct RemoteShortcutsTests {
         let folder = root.appendingPathComponent("work/tests/shortcuts-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let suite = "MacTVTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = TestDefaults.named(suite)
         let tv = TVController(library: AppLibrary(folder: folder))
         tv.remoteCoordinator.shortcutDefaults = defaults
         return (tv, defaults, {
-            defaults.removePersistentDomain(forName: suite)
+            TestDefaults.remove(suite)
             try? FileManager.default.removeItem(at: folder)
         })
     }

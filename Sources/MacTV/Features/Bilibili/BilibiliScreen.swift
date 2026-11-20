@@ -1,18 +1,23 @@
 import SwiftUI
 
-/// 哔哩哔哩的入口：列表页，或者正在播放时的播放界面
+/// 哔哩哔哩的入口：列表页，盖在它上面的登录页，或者正在播放时的播放界面
 struct BilibiliRoot: View {
     @ObservedObject var store: BilibiliStore
 
     var body: some View {
         ZStack {
             TVCanvas { BilibiliScreen(store: store) }.ignoresSafeArea()
+            if let login = store.login {
+                BilibiliLoginScreen(page: login)
+                    .transition(.opacity)
+            }
             if let video = store.player.current {
                 BilibiliPlayerScreen(player: store.player, video: video)
                     .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.18), value: store.player.current)
+        .animation(Motion.appear, value: store.login != nil)
     }
 }
 
@@ -41,7 +46,7 @@ struct BilibiliScreen: View {
     private let pink = Color(hex: "#FB7299")
     @Namespace private var sortSpace
     /// 粉色的 bilibili 字标（Icons/bilibili-logo.png，透明底）
-    private static let logo: NSImage? = Bundle.main.url(forResource: "bilibili-logo.png", withExtension: nil, subdirectory: "Icons")
+    static let logo: NSImage? = Bundle.main.url(forResource: "bilibili-logo.png", withExtension: nil, subdirectory: "Icons")
         .flatMap { NSImage(contentsOf: $0) }
 
     var body: some View {
@@ -263,7 +268,7 @@ struct BilibiliScreen: View {
 
     private func symbol(for action: BilibiliStore.AccountAction) -> String {
         switch action {
-        case .login: "qrcode.viewfinder"
+        case .login: "person.crop.circle.badge.plus"
         case .refresh: "arrow.clockwise"
         case .settings: "gearshape"
         case .switchAccount: "person.2"
@@ -276,7 +281,7 @@ struct BilibiliScreen: View {
 
     private func title(for action: BilibiliStore.AccountAction) -> String {
         switch action {
-        case .login: "扫码登录"
+        case .login: "登录其他账号"   // 只在没登录、有登录过的账号时出现（在那几个账号下面）
         case .refresh: "刷新"
         case .settings: "设置"
         case .switchAccount: "切换账号"
@@ -502,7 +507,7 @@ struct BilibiliScreen: View {
 
     private func hint(for item: BilibiliStore.Item) -> String {
         switch item {
-        case .login: "扫码登录"
+        case .login: "登录"
         case .refresh: "刷新"
         case .empty(let text): text
         case .user(let user): user.name
@@ -581,7 +586,7 @@ struct BilibiliScreen: View {
         .fixedSize(horizontal: true, vertical: false)
         .background {
             Capsule().fill(focused ? (armed ? Color(hex: "#E5484D") : .white) : .white.opacity(clear ? 0.05 : 0.1))
-            Capsule().strokeBorder(.white.opacity(focused ? 0 : 0.12))
+            PillOutline().strokeBorder(.white.opacity(focused ? 0 : 0.12))
         }
         .scaleEffect(focused ? 1.08 : 1)
         .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 18, y: 10)
@@ -728,7 +733,7 @@ struct BilibiliScreen: View {
                                 .frame(maxHeight: .infinity, alignment: .bottom)
                         }
                     }
-                case .login: action("qrcode.viewfinder", "扫码登录")
+                case .login: action("person.crop.circle", "登录")
                 case .refresh: action("arrow.clockwise", "刷新")
                 case .user(let user):
                     ZStack {

@@ -58,6 +58,7 @@ final class IdleCoordinator: ObservableObject {
                 guard let self else { return }
                 self.sleepAt = nil
                 self.tv?.goHome()
+                self.tv?.stopBackgroundAudio(reason: "the sleep timer ended")   // Home keeps music playing; the sleep timer doesn't
                 SystemControl.displayOff()
             }
         }

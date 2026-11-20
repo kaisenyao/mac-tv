@@ -2,9 +2,9 @@ import AppKit
 
 // Focus on the home screen: the app grid, the Top Shelf and the status row.
 extension TVController {
-    var statusItems: [StatusItem] {
-        (lidSleepOff ? [.lid] : []) + [.controlCenter, .profile]
-    }
+    /// The status row's buttons, left to right. The lid staying awake is a glyph beside the time, not a button:
+    /// Control Center's Lid Closed switches it.
+    var statusItems: [StatusItem] { [.controlCenter, .profile] }
 
     /// The top-row app whose content the Top Shelf shows.
     var shelfService: Service { services.indices.contains(shelfAppIndex) ? services[shelfAppIndex] : services[0] }
@@ -91,7 +91,7 @@ extension TVController {
     func activateStatus(_ item: StatusItem) {
         setFocus(.status(item))
         switch item {
-        case .lid: settings = SettingsPanel(section: .power, open: true, row: 1)
+        case .lid: openSettings(to: .lidOverride)
         case .controlCenter: openControlCenter()
         case .profile: openProfiles()
         }

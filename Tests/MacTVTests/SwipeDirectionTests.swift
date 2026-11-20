@@ -155,11 +155,11 @@ struct SwipeDirectionTests {
         try withTV { tv in
             let home = tv.focus
             tv.handle(.controlCenter)
-            #expect(tv.controlCenter?.item == .audio)
+            #expect(tv.controlCenter?.item == .remotes)
             swipe(tv, source, dx: 4, dy: 150)        // 手指往下：下一格，惯性不再走
-            #expect(tv.controlCenter?.item == .phone)
+            #expect(tv.controlCenter?.item == .display)
             swipe(tv, source, dx: 0, dy: -150)       // 往上
-            #expect(tv.controlCenter?.item == .audio)
+            #expect(tv.controlCenter?.item == .remotes)
             swipe(tv, source, dx: -150, dy: 20)      // 往左
             #expect(tv.controlCenter?.item == .sleepMac)
             #expect(tv.focus == home)

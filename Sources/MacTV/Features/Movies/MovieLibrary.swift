@@ -70,20 +70,36 @@ struct MovieFolderPreferences {
     }
 }
 
+/// Where one profile after the first stopped in a movie (the first profile's is in the library itself).
+struct MoviePlace: Codable, Equatable, Sendable {
+    var position: Double?
+    var lastWatched: Date?
+}
+
 /// The movies in the folders you choose (Movies and Downloads to begin with), with posters and
 /// where you stopped. Kept in ~/Library/Application Support/Mac TV/Movies. Posters come from
 /// Apple's public movie search when the title matches exactly, otherwise from a frame of the film.
+///
+/// The library is this Mac's, the same for everyone; where you stopped is each profile's own. The first
+/// profile's places stay in library.json as they always have; another profile's are in movie-positions.json
+/// in its own folder, laid over the library while they're watching.
 @MainActor
 final class MovieLibrary: ObservableObject {
     static let shared = MovieLibrary()
 
     nonisolated static let extensions: Set<String> = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "ts", "m2ts", "mts", "mpg", "mpeg", "3gp"]
 
+    /// The library with the places of the person watching.
     @Published private(set) var movies: [Movie] = []
+    /// The library as saved, with the first profile's places.
+    private var library: [Movie] = [] { didSet { publish() } }
+    /// Another profile's places while they're watching, by path; nil for the first profile.
+    private var places: [String: MoviePlace]?
+    private var placesFile: URL?
     @Published private(set) var scanning = false
     @Published private(set) var posters: [String: NSImage] = [:]
 
-    private let folder = AppFolder.url.appendingPathComponent("Movies", isDirectory: true)
+    private let folder: URL
     private var postersFolder: URL { folder.appendingPathComponent("Posters", isDirectory: true) }
     private var listFile: URL { folder.appendingPathComponent("library.json") }
     private var offlineFile: URL { folder.appendingPathComponent("offline.json") }
@@ -94,14 +110,50 @@ final class MovieLibrary: ObservableObject {
     /// so they come back as they were.
     private var offline: [Movie] = []
 
-    private init() {
+    /// `folder` is the Mac TV folder's Movies; tests use their own.
+    init(folder: URL = AppFolder.url.appendingPathComponent("Movies", isDirectory: true)) {
+        self.folder = folder
         try? FileManager.default.createDirectory(at: postersFolder, withIntermediateDirectories: true)
         if let data = try? Data(contentsOf: listFile), let saved = try? JSONDecoder().decode([Movie].self, from: data) {
-            movies = saved
+            library = saved
             saved.forEach(loadPoster)
         }
         if let data = try? Data(contentsOf: offlineFile), let saved = try? JSONDecoder().decode([Movie].self, from: data) {
             offline = saved
+        }
+        publish()   // setting `library` in here doesn't run its didSet
+    }
+
+    // MARK: Each profile's places
+
+    /// Someone else is watching: their places from now on (none yet for a new profile).
+    func use(_ space: ProfileSpace) {
+        if space.isMain {
+            places = nil
+            placesFile = nil
+        } else {
+            let file = space.folder.appendingPathComponent("movie-positions.json")
+            placesFile = file
+            places = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String: MoviePlace].self, from: $0) } ?? [:]
+        }
+        publish()
+    }
+
+    private func publish() {
+        guard let places else { movies = library; return }
+        movies = library.map { movie in
+            var shown = movie
+            shown.position = places[movie.path]?.position
+            shown.lastWatched = places[movie.path]?.lastWatched
+            return shown
+        }
+    }
+
+    private func savePlaces() {
+        guard let places, let placesFile else { return }
+        Log.movies.attempt("Saving where you stopped") {
+            try FileManager.default.createDirectory(at: placesFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(places).write(to: placesFile, options: .atomic)
         }
     }
 
@@ -199,7 +251,7 @@ final class MovieLibrary: ObservableObject {
 
     /// `missing` are folders that aren't there and servers that didn't answer, as path prefixes.
     private func merge(_ found: [(url: URL, added: Date, size: Int64)], served: [Movie], missing: [String]) {
-        let known = Dictionary((movies + offline).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        let known = Dictionary((library + offline).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         // A folder that isn't there (a drive unplugged, a share offline) or a server that's down:
         // set its movies aside, don't forget them.
         let missingPrefixes = missing.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
@@ -219,7 +271,7 @@ final class MovieLibrary: ObservableObject {
         // On the Mac running the server (or one with its own copy), the file plays here directly.
         let local = Set(files.map(Self.matchKey))
         let fromServers = served.filter { !local.contains(Self.matchKey($0)) }
-        movies = (files + fromServers.map { Self.update(known[$0.path], from: $0) })
+        library = (files + fromServers.map { Self.update(known[$0.path], from: $0) })
             .sorted { $0.added != $1.added ? $0.added > $1.added : $0.title < $1.title }
         scanning = false
         save()
@@ -260,21 +312,29 @@ final class MovieLibrary: ObservableObject {
         movies.filter(\.inProgress).sorted { ($0.lastWatched ?? .distantPast) > ($1.lastWatched ?? .distantPast) }
     }
 
+    /// Where the person watching stopped: in the library for the first profile, in their own places for another.
     func record(position: Double, duration: Double, for movie: Movie) {
-        guard let index = movies.firstIndex(where: { $0.path == movie.path }) else { return }
-        if duration > 0 { movies[index].duration = duration }
+        guard let index = library.firstIndex(where: { $0.path == movie.path }) else { return }
         let finished = duration > 0 && position >= duration * 0.95
-        movies[index].position = finished ? nil : position
-        movies[index].lastWatched = Date()
+        let place = MoviePlace(position: finished ? nil : position, lastWatched: Date())
+        if places != nil {
+            places?[movie.path] = place
+            savePlaces()
+            if duration > 0 { library[index].duration = duration } else { publish() }
+        } else {
+            if duration > 0 { library[index].duration = duration }
+            library[index].position = place.position
+            library[index].lastWatched = place.lastWatched
+        }
         save()
-        if movies[index].isRemote { JellyfinServers.shared.progress(movies[index], at: position, paused: false) }
+        if library[index].isRemote { JellyfinServers.shared.progress(library[index], at: position, paused: false) }
     }
 
     func movie(_ path: String) -> Movie? { movies.first { $0.path == path } }
 
     private func save() {
         Log.movies.attempt("Saving the movie list") {
-            try JSONEncoder().encode(movies).write(to: listFile, options: .atomic)
+            try JSONEncoder().encode(library).write(to: listFile, options: .atomic)
             try JSONEncoder().encode(offline).write(to: offlineFile, options: .atomic)
         }
     }
@@ -292,7 +352,7 @@ final class MovieLibrary: ObservableObject {
         guard !lookingUp else { return }
         lookingUp = true
         Task {
-            while let movie = movies.first(where: { !$0.posterChecked }) {
+            while let movie = library.first(where: { !$0.posterChecked }) {
                 let poster: Data?
                 var duration = movie.duration
                 if movie.isRemote {
@@ -302,15 +362,15 @@ final class MovieLibrary: ObservableObject {
                     poster = await Self.findPoster(for: movie)
                     if duration == nil { duration = await Self.duration(of: movie.url) }
                 }
-                guard let index = movies.firstIndex(where: { $0.path == movie.path }) else { continue }
+                guard let index = library.firstIndex(where: { $0.path == movie.path }) else { continue }
                 if let poster {
                     let name = "\(abs(movie.path.hashValue))-\(Int(Date().timeIntervalSince1970)).jpg"
                     try? poster.write(to: postersFolder.appendingPathComponent(name), options: .atomic)
-                    movies[index].poster = name
-                    loadPoster(movies[index])
+                    library[index].poster = name
+                    loadPoster(library[index])
                 }
-                movies[index].duration = duration
-                movies[index].posterChecked = true
+                library[index].duration = duration
+                library[index].posterChecked = true
                 save()
             }
             lookingUp = false

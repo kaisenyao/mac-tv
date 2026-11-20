@@ -54,9 +54,19 @@ final class PairingStore {
     func authenticate(_ token: String?) -> Device? {
         guard let token, token.count == 64 else { return nil }
         let hash = digest(token)
-        return devices.first { $0.digest == hash && ($0.expiresAt.map { $0 > now() } ?? true) }
+        let device = devices.first { $0.digest == hash && ($0.expiresAt.map { $0 > now() } ?? true) }
+        if let device { lastSeen[device.id] = now() }
+        return device
     }
     func activeDevices() -> [Device] { devices.filter { $0.expiresAt.map { $0 > now() } ?? true } }
+
+    /// When each phone last reached the Mac, in this launch only. An open remote page asks for the TV's
+    /// state every few seconds, so a phone heard from in the last 15 seconds counts as connected.
+    private var lastSeen: [String: Date] = [:]
+    func connectedCount(within seconds: TimeInterval = 15) -> Int {
+        let since = now().addingTimeInterval(-seconds)
+        return activeDevices().filter { lastSeen[$0.id].map { $0 >= since } ?? false }.count
+    }
     func revoke(id: String) throws { try save(devices.filter { $0.id != id }) }
     func revokeAll() throws { try save([]) }
     private func digest(_ token: String) -> String {

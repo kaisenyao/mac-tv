@@ -16,7 +16,8 @@ struct BrowserTab: Codable, Identifiable, Equatable, Sendable {
 }
 
 /// 标签页记在哪：列表（地址、标题）在 UserDefaults，几百字节；截图是缓存文件夹里的 JPEG，一张一百 KB 上下。
-/// 下次打开浏览器标签页还在（无痕的不存）
+/// 下次打开浏览器标签页还在（无痕的不存）。看过的页面、每个网站的缩放也在这里。
+/// 每个人（个人资料）一份：第一个人是原来的地方（.standard），别的人在他自己的设置、缓存文件夹里（见 ProfileSpace）
 struct BrowserTabStorage: Sendable {
     /// 测试用自己的一份 UserDefaults 和文件夹，不碰真的
     var suite: String?
@@ -24,9 +25,26 @@ struct BrowserTabStorage: Sendable {
 
     static let standard = BrowserTabStorage(suite: nil, folder: BrowserCache.folder("Browser Tabs"))
 
+    /// 第一个人以外的人的那一份
+    static func forProfile(_ space: ProfileSpace) -> BrowserTabStorage {
+        BrowserTabStorage(suite: space.suiteName, folder: space.caches.appendingPathComponent("Browser Tabs", isDirectory: true))
+    }
+
     var defaults: UserDefaults { suite.flatMap(UserDefaults.init(suiteName:)) ?? .standard }
 
-    private static let tabsKey = "browserTabs", activeKey = "browserActiveTab", zoomKey = "browserZoom"
+    private static let tabsKey = "browserTabs", activeKey = "browserActiveTab", zoomKey = "browserZoom", historyKey = "browserHistory"
+
+    // MARK: 在 Mac TV 里看过的页面（最多一百条，最新的在前）。无痕标签页的不记
+
+    var history: [WebPage] {
+        defaults.data(forKey: Self.historyKey).flatMap { try? JSONDecoder().decode([WebPage].self, from: $0) } ?? []
+    }
+
+    func addHistory(_ url: URL, title: String) {
+        var pages = history.filter { $0.url != url }
+        pages.insert(WebPage(url: url, title: title, visited: Date()), at: 0)
+        if let data = try? JSONEncoder().encode(Array(pages.prefix(100))) { defaults.set(data, forKey: Self.historyKey) }
+    }
 
     func load() -> (tabs: [BrowserTab], active: String?) {
         let tabs = defaults.data(forKey: Self.tabsKey).flatMap { try? JSONDecoder().decode([BrowserTab].self, from: $0) } ?? []
@@ -67,35 +85,30 @@ struct BrowserTabStorage: Sendable {
 /// 浏览器的缓存（网站图标、标签页截图）放哪：平时在 ~/Library/Caches/Mac TV 下面；
 /// 设了 MACTV_DATA_DIR（开发、测试时用，和 AppFolder 一样）就放在那个文件夹里，不碰真的
 enum BrowserCache {
-    static func folder(_ name: String) -> URL {
+    /// ~/Library/Caches/Mac TV: the first profile's caches; the other profiles' are in Profiles/<id> (see ProfileSpace)
+    static var root: URL {
         if let path = ProcessInfo.processInfo.environment["MACTV_DATA_DIR"], path.hasPrefix("/") {
-            return URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("Caches/\(name)", isDirectory: true)
+            return URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("Caches", isDirectory: true)
         }
         return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Mac TV/\(name)", isDirectory: true)
+            .appendingPathComponent("Mac TV", isDirectory: true)
     }
+
+    static func folder(_ name: String) -> URL { root.appendingPathComponent(name, isDirectory: true) }
 }
 
-/// 网页缩放（WKWebView.pageZoom，和 Safari 的"放大"一样：文字、图片一起变大，版式重排，不是把画面拉大）
+/// 网页缩放（WKWebView.pageZoom，和 Safari 的"放大"一样：文字、图片一起变大，版式重排，不是把画面拉大）。
+/// 现在只有三档（BrowserZoomLevel）；这里是记下来的缩放怎么读、按网站怎么记
 enum BrowserZoom {
-    static let steps: [Double] = [0.75, 0.85, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
-
-    /// 电视上的默认缩放：让网页以为窗口大约 1280 宽（笔记本上最常见的版式，字和按钮在沙发上看得清）。
-    /// 1920 宽的电视画面是 150%，1600 宽是 125%，窗口小到 1280 以下就不放大
+    /// 以前（三档之前）电视上的默认缩放：让网页以为窗口大约 1280 宽。1920 宽的电视画面是 150%，1600 宽是 125%。
+    /// 只用来认出以前记下的"默认"（BrowserZoomLevel.level 把它当成"中"）
     static func standard(forWidth width: CGFloat) -> Double {
         guard width > 0 else { return 1.5 }
         return clamp(max(1, (Double(width) / 1280 * 20).rounded() / 20))
     }
 
-    static func clamp(_ zoom: Double) -> Double { min(steps.last!, max(steps.first!, zoom)) }
-
-    /// 放大 / 缩小一档
-    static func step(from zoom: Double, larger: Bool) -> Double {
-        larger ? steps.first { $0 > zoom + 0.001 } ?? steps.last!
-               : steps.last { $0 < zoom - 0.001 } ?? steps.first!
-    }
-
-    static func percent(_ zoom: Double) -> String { "\(Int((zoom * 100).rounded()))%" }
+    /// 以前能调的范围：75% 到 300%
+    static func clamp(_ zoom: Double) -> Double { min(3, max(0.75, zoom)) }
 
     /// 按网站记（www.apple.com 和 apple.com 算一个）
     static func key(_ host: String) -> String {

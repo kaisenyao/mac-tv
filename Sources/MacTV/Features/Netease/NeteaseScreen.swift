@@ -494,7 +494,7 @@ struct NeteaseScreen: View {
             }
             .frame(width: cardSize, height: cardSize)
             .clipShape(shape)
-            .overlay(shape.strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
+            .overlay(PillOutline(shape).strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
             .shadow(color: .black.opacity(focused ? 0.65 : 0), radius: 30, y: 22)
             .scaleEffect(focused ? 1.09 : 1)
             .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { focused ? ["card": $0] : [:] }

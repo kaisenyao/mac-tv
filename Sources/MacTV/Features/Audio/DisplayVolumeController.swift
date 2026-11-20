@@ -208,12 +208,15 @@ final class DisplayVolumeController {
         if next.muted == false, previous?.muted == true { await ddc.write(VCP.mute, value: VCP.muteOff) }
     }
 
-    /// 有的显示器说认 0x8D，写了却不静音：读回来不是"静音"就改成假静音（写 0），以后都这样
+    /// 有的显示器说认 0x8D，写了却不静音：读回来不是"静音"就改成假静音（写 0），以后都这样。
+    /// 也有的其实静了、只是读回来的不对：先写一次"不静音"，不然以后再也不发 0x8D，显示器就一直静着
     private func checkMute() async {
         guard let after = await ddc.read(VCP.mute) else { return }
         muteChecked = true
-        guard after.current != VCP.muteOn, var model else { return }
+        guard after.current != VCP.muteOn, model != nil else { return }
         muteBroken = true
+        await ddc.write(VCP.mute, value: VCP.muteOff)
+        guard var model else { return }   // 写的时候又按过：用最新的
         model.dropMuteCommand()
         self.model = model
         writer.submit(model.target)

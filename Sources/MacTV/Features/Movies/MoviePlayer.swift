@@ -275,6 +275,26 @@ final class MoviePlayer: ObservableObject {
     var selectedAudio: Int? { engine.selectedAudio }
     var hasMenu: Bool { audioOptions.count > 1 || !subtitleOptions.isEmpty }
 
+    /// Home: Movies goes to the background, paused where it is (and saved), and nothing ticks until it's back.
+    func background() {
+        if playing {
+            playing = false
+            engine.pause()
+        }
+        tick?.invalidate()
+        tick = nil
+        save()
+    }
+
+    /// Movies opened again: the player as it was, paused, with its controls showing.
+    func foreground() {
+        showControls()
+        tick?.invalidate()
+        tick = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.update() }
+        }
+    }
+
     func start(at seconds: Double) {
         engine.start(at: seconds)
         time = seconds

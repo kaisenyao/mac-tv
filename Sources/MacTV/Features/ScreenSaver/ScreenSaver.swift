@@ -62,13 +62,6 @@ enum ScreenSaverSettings {
         wallpaper = all[min(max(index + by, 0), all.count - 1)]
     }
 
-    static func stepAerialCategory(_ by: Int, wrap: Bool = false) {
-        let choices: [String?] = [nil] + Aerials.categories.map { Optional($0.id) }
-        let index = choices.firstIndex { $0 == aerialCategory } ?? 0
-        let next = wrap ? (index + by + choices.count) % choices.count : min(max(index + by, 0), choices.count - 1)
-        aerialCategory = choices[next]
-    }
-
     static func stepDelay(_ by: Int, wrap: Bool = false) {
         let index = delays.firstIndex(of: delayMinutes) ?? 1
         let next = wrap ? (index + by + delays.count) % delays.count : min(max(index + by, 0), delays.count - 1)

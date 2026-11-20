@@ -18,12 +18,14 @@ final class DedaoPlayer: ObservableObject {
     /// 拖进度时停在哪（拖完才真的跳过去）
     @Published private(set) var scrubbing = false
     @Published private(set) var scrubTarget: Double = 0
-    /// 倍速，记着下次还用
-    @Published private(set) var speed: Float = UserDefaults.standard.object(forKey: "dedaoSpeed") as? Float ?? 1
+    /// 倍速，记着下次还用。倍速、自动下一讲是每个人（个人资料）各自的，在他自己的设置里（见 ProfileSpace）
+    @Published private(set) var speed: Float = ProfileSpace.current.defaults.object(forKey: "dedaoSpeed") as? Float ?? 1
     /// 一本书、一讲放完了接着放下一个（设置里能关；关了就停在最后）
-    @Published var autoNext: Bool = UserDefaults.standard.object(forKey: "dedaoAutoNext") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(autoNext, forKey: "dedaoAutoNext") }
+    @Published var autoNext: Bool = ProfileSpace.current.defaults.object(forKey: "dedaoAutoNext") as? Bool ?? true {
+        didSet { if !reloading { ProfileSpace.current.defaults.set(autoNext, forKey: "dedaoAutoNext") } }
     }
+    /// 换了人，正在把他的设置读进来：不往回存
+    private var reloading = false
 
     /// 能选的倍速：0.75 到 2，每档差 0.25
     static let speeds: [Float] = [0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -222,6 +224,23 @@ final class DedaoPlayer: ObservableObject {
         setSleep(.off)
         session += 1
         for report in reports { await report.value }
+        clear()
+    }
+
+    /// 换人（个人资料）：停下，报一下听到哪了（回报带着这个人自己的登录信息，在后台发完，不用等），
+    /// 然后什么都不留；倍速、自动下一讲换成下一个人的
+    func profileReset() {
+        stop()
+        setSleep(.off)
+        session += 1
+        clear()
+        reloading = true
+        defer { reloading = false }
+        speed = ProfileSpace.current.defaults.object(forKey: "dedaoSpeed") as? Float ?? 1
+        autoNext = ProfileSpace.current.defaults.object(forKey: "dedaoAutoNext") as? Bool ?? true
+    }
+
+    private func clear() {
         reports = []
         player.replaceCurrentItem(with: nil)
         itemWatch.removeAll()
@@ -265,7 +284,7 @@ final class DedaoPlayer: ObservableObject {
 
     func setSpeed(_ value: Float) {
         speed = value
-        UserDefaults.standard.set(value, forKey: "dedaoSpeed")
+        ProfileSpace.current.defaults.set(value, forKey: "dedaoSpeed")
         if !paused { player.rate = value }
     }
 
@@ -460,7 +479,9 @@ final class DedaoPlayer: ObservableObject {
     private func report(_ kind: DedaoAPI.Report, _ entries: [[String: Any]]) {
         guard let track = current, let json = try? JSONSerialization.data(withJSONObject: entries) else { return }
         reports.removeAll { $0.isCancelled }
-        let task = Task.detached { await DedaoAPI.report(kind, track, json: json) }
+        // 用现在这个人的登录信息报：换人时停下的这一讲，报到听它的人的账号上
+        let login = DedaoCookies.login
+        let task = Task.detached { await DedaoCookies.$pinned.withValue(login) { await DedaoAPI.report(kind, track, json: json) } }
         reports.append(task)
         if reports.count > 20 { reports.removeFirst(reports.count - 20) }
     }

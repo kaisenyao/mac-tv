@@ -20,9 +20,10 @@ enum YouTubeShelfSource: String, CaseIterable {
         case .subscriptions: "FEsubscriptions"
         }
     }
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
     static var current: YouTubeShelfSource {
-        get { UserDefaults.standard.string(forKey: "youtubeShelf").flatMap(YouTubeShelfSource.init) ?? .recommended }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "youtubeShelf") }
+        get { ProfileSpace.current.defaults.string(forKey: "youtubeShelf").flatMap(YouTubeShelfSource.init) ?? .recommended }
+        set { ProfileSpace.current.defaults.set(newValue.rawValue, forKey: "youtubeShelf") }
     }
 }
 
@@ -202,6 +203,10 @@ enum YouTubeFeed {
     }
     static func remembered(_ source: YouTubeShelfSource, profile: String) -> [Video] {
         UserDefaults.standard.data(forKey: key(source, profile: profile)).flatMap { try? JSONDecoder().decode([Video].self, from: $0) } ?? []
+    }
+    /// 删掉一个人（个人资料）时，他记着的这几排也删掉
+    static func forget(profile: String) {
+        for source in YouTubeShelfSource.allCases { UserDefaults.standard.removeObject(forKey: key(source, profile: profile)) }
     }
 }
 

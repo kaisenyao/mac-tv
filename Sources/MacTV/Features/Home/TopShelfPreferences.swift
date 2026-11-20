@@ -12,14 +12,17 @@ struct TopShelfPreferencesPanel: Equatable {
     var option = 0
     /// 勾过几次：选项存在各应用自己那里，这里变一下面板才跟着重画
     var changes = 0
+    /// 确认（或点）了几次：有焦点的那一行往下一沉再弹回来
+    var presses = 0
 }
 
 /// 某个应用那一层的一项
 struct TopShelfOption: Equatable {
     let title: String
     let on: Bool
-    /// 这一组到这里为止，下面空开一点：网易云、得到的"正在播放"，得到的"新书推荐"（下面是它的分类）
-    var groupEnd = false
+    /// 从这一项起是新的一组，上面一行小标题（和设置里的分组标题一样）。每一组都有：空开一段就说明下面是另一类，
+    /// 得说是哪一类；只有一组的也有（选的是什么）
+    var header: String?
 }
 
 extension TVController {
@@ -42,6 +45,9 @@ extension TVController {
         }
     }
 
+    /// 第一层（一个个应用）的小标题
+    static let topShelfAppsHeader = "APPS"
+
     /// 只能选一种（哔哩哔哩、YouTube）：勾跟着走。网易云、得到可以选几种
     func topShelfSingleChoice(_ app: String) -> Bool {
         app == BilibiliStore.appID || app == "youtube"
@@ -52,20 +58,30 @@ extension TVController {
         switch app {
         case BilibiliStore.appID:
             let current = BiliShelfSource.current
-            return BiliShelfSource.allCases.map { TopShelfOption(title: $0.title, on: $0 == current) }
+            return BiliShelfSource.allCases.enumerated().map {
+                TopShelfOption(title: $0.element.title, on: $0.element == current, header: $0.offset == 0 ? "内容" : nil)
+            }
         case NeteaseStore.appID:
+            // 两组：正在放的，和歌单、榜单
             let chosen = Set(NeteaseShelfSource.selected)
-            return [TopShelfOption(title: "正在播放", on: NeteaseShelfSource.showsNowPlaying, groupEnd: true)]
-                + NeteaseShelfSource.allCases.map { TopShelfOption(title: $0.title, on: chosen.contains($0)) }
+            return [TopShelfOption(title: "正在播放", on: NeteaseShelfSource.showsNowPlaying, header: "播放")]
+                + NeteaseShelfSource.allCases.enumerated().map {
+                    TopShelfOption(title: $0.element.title, on: chosen.contains($0.element), header: $0.offset == 0 ? "歌单" : nil)
+                }
         case DedaoStore.appID:
-            // 得到自己的设置里分类在"新书推荐"里面一层；这里摆在它下面，一层就够
+            // 得到自己的设置里分类在"新书推荐"里面一层；这里摆在它下面，一层就够。
+            // 两组各有小标题：放什么（正在播放、新书推荐），新书从哪些分类里挑（得到自己叫"分类"，网页版的"全部分类"）
             let hidden = DedaoShelfSource.hiddenCategories
-            return [TopShelfOption(title: "正在播放", on: DedaoShelfSource.showsListening, groupEnd: true),
-                    TopShelfOption(title: "新书推荐", on: DedaoShelfSource.showsNewBooks, groupEnd: true)]
-                + Self.dedaoShelfCategories.map { TopShelfOption(title: $0, on: !hidden.contains($0)) }
+            return [TopShelfOption(title: "正在播放", on: DedaoShelfSource.showsListening, header: "内容"),
+                    TopShelfOption(title: "新书推荐", on: DedaoShelfSource.showsNewBooks)]
+                + Self.dedaoShelfCategories.enumerated().map {
+                    TopShelfOption(title: $0.element, on: !hidden.contains($0.element), header: $0.offset == 0 ? "分类" : nil)
+                }
         default:
             let current = YouTubeShelfSource.current
-            return YouTubeShelfSource.allCases.map { TopShelfOption(title: $0.title, on: $0 == current) }
+            return YouTubeShelfSource.allCases.enumerated().map {
+                TopShelfOption(title: $0.element.title, on: $0.element == current, header: $0.offset == 0 ? "CONTENT" : nil)
+            }
         }
     }
 
@@ -80,7 +96,10 @@ extension TVController {
             case .back: closeTopShelfApp(); return
             case .move(.up): panel.option = max(0, panel.option - 1)
             case .move(.down): panel.option = min(topShelfOptions(app).count - 1, panel.option + 1)
-            case .select: toggleTopShelfOption(panel.option); return
+            case .select:
+                topShelfPreferences?.presses += 1
+                toggleTopShelfOption(panel.option)
+                return
             default: return   // 左右不动
             }
         } else {
@@ -88,7 +107,10 @@ extension TVController {
             case .back: topShelfPreferences = nil; return
             case .move(.up): panel.row = max(0, panel.row - 1)
             case .move(.down): panel.row = min(topShelfApps.count - 1, panel.row + 1)
-            case .select: openTopShelfApp(panel.row); return
+            case .select:
+                topShelfPreferences?.presses += 1
+                openTopShelfApp(panel.row)
+                return
             default: return
             }
         }
@@ -145,9 +167,13 @@ struct TopShelfPreferencesSheet: View {
     @Environment(\.canvasSize) private var canvas
     @Namespace private var focusSpace
 
-    private static let rowHeight: CGFloat = 78
-    private static let spacing: CGFloat = 10
-    private static let groupGap: CGFloat = 18
+    /// 和设置一样大（Apple TV 的设置在 1080p 上的大小）
+    private static let rowHeight = SettingsMetrics.rowHeight
+    private static let spacing = SettingsMetrics.rowSpacing
+    /// 组的小标题：多高、和下面那一行隔多少、和上面一组多隔多少（和设置里的分组标题一样）
+    private static let headerHeight: CGFloat = 30
+    private static let headerGap: CGFloat = 10
+    private static let headerTop: CGFloat = 12
     /// 那一层最多露出这么高；更长的（得到的分类）跟着焦点滚，焦点尽量停在中间
     private static let window: CGFloat = 800
 
@@ -156,9 +182,9 @@ struct TopShelfPreferencesSheet: View {
         let apps = tv.topShelfApps
         let app = panel.app.flatMap { id in apps.first { $0.id == id } }
         HStack(spacing: 0) {
-            hero(caption: app == nil ? "SETTINGS" : "TOP SHELF", title: app?.name ?? "Top Shelf")
-                .frame(width: 780, alignment: .leading)
+            hero(caption: app == nil ? "SETTINGS" : "TOP SHELF", title: app?.name ?? "Top Shelf", app: app)
                 .padding(.leading, 120)
+                .frame(maxWidth: .infinity, alignment: .leading)
             ZStack {
                 // 往里一层：第一层往左让开、淡出，这一层从右边进来；返回反过来。只是一段短的位置 + 透明度
                 if let app {
@@ -170,39 +196,52 @@ struct TopShelfPreferencesSheet: View {
                         .transition(AnyTransition.offset(x: -80).combined(with: .opacity))
                 }
             }
-            .frame(maxWidth: .infinity)
-            .padding(.trailing, 120)
-            .padding(.leading, 20)
+            .frame(width: SettingsMetrics.listWidth)
+            .padding(.trailing, 100)
         }
         .foregroundStyle(.white)
         .frame(width: canvas.width, height: canvas.height)
         .animation(Motion.focus, value: panel)
     }
 
-    /// 左边：和设置一样的大图标，下面是这一层的名字（上面一行小字是上一层）
-    private func hero(caption: String, title: String) -> some View {
-        VStack(alignment: .leading, spacing: 34) {
+    /// 左边：和设置一样的大图标，下面是这一层的名字（上面一行小字是上一层）。
+    /// 进了某个应用那一层，图标换成它在主屏上的那张卡片（得到的猫头鹰、哔哩哔哩的小电视……），放大到一样宽
+    private func hero(caption: String, title: String, app: Service?) -> some View {
+        VStack(alignment: .leading, spacing: 28) {
             Text(caption).font(.tv(.caption2, emphasized: true)).tracking(1.6).opacity(0.5)
                 .id(caption).transition(.opacity)
-            Image(systemName: "rectangle.topthird.inset.filled")
-                .font(.system(size: 130, weight: .regular))
-                .frame(width: 300, height: 300)
-                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 72, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 72, style: .continuous).strokeBorder(.white.opacity(0.14)))
+            ZStack {
+                if let app {
+                    AppTile(service: app, focused: false, tilt: .zero)
+                        .scaleEffect(1.12)   // Home's 250-pt-wide tile, as wide as the 280-pt icon box
+                        .id(app.id)
+                        .transition(.opacity)
+                } else {
+                    Image(systemName: "rectangle.topthird.inset.filled")
+                        .font(.system(size: 120, weight: .regular))
+                        .frame(width: 280, height: 280)
+                        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 66, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 66, style: .continuous).strokeBorder(.white.opacity(0.14)))
+                        .transition(.opacity)
+                }
+            }
+            .frame(width: 280, height: 280)
             Text(title).font(.tv(.title2, emphasized: true))
                 .id(title).transition(.opacity)
         }
     }
 
-    /// 第一层：每个应用一行，右边是现在放什么
+    /// 第一层：每个应用一行，右边是现在放什么；上面一个小标题
     private func appRows(_ apps: [Service], focused: Int) -> some View {
         VStack(alignment: .leading, spacing: Self.spacing) {
+            header(TVController.topShelfAppsHeader, first: true)
             ForEach(Array(apps.enumerated()), id: \.element.id) { index, app in
                 row(focused: index == focused, focusID: "apps") {
-                    Text(app.name).font(.tv(.body)).lineLimit(1)
+                    Text(app.name).font(SettingsMetrics.title).lineLimit(1)
                     Spacer(minLength: 16)
-                    Text(tv.topShelfSummary(app.id)).font(.tv(.caption1)).opacity(0.55).lineLimit(1)
-                    Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.4)
+                    Text(tv.topShelfSummary(app.id)).font(SettingsMetrics.value).opacity(0.55).lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Image(systemName: "chevron.right").font(.system(size: 24, weight: .semibold)).opacity(0.4)
                 } action: {
                     tv.openTopShelfApp(index)
                 }
@@ -213,25 +252,28 @@ struct TopShelfPreferencesSheet: View {
     /// 那一层：一行一项，开着的右边打勾
     private func options(_ app: String, focused: Int) -> some View {
         let items = tv.topShelfOptions(app)
-        // 每一行的上边在哪（组和组之间多空一点），算滚到哪用
+        // 每一行的上边在哪（组的小标题、组和组之间多空的），算滚到哪用
         var tops: [CGFloat] = []
         var y: CGFloat = 0
-        for item in items {
+        for (index, item) in items.enumerated() {
+            if item.header != nil { y += (index == 0 ? 0 : Self.headerTop) + Self.headerHeight + Self.headerGap }
             tops.append(y)
-            y += Self.rowHeight + Self.spacing + (item.groupEnd ? Self.groupGap : 0)
+            y += Self.rowHeight + Self.spacing
         }
         let total = max(0, y - Self.spacing)
         let list = VStack(alignment: .leading, spacing: Self.spacing) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                row(focused: index == focused, focusID: "options-\(app)") {
-                    Text(item.title).font(.tv(.body)).lineLimit(1)
-                    Spacer(minLength: 16)
-                    Image(systemName: "checkmark").font(.system(size: 26, weight: .bold)).opacity(item.on ? 1 : 0)
-                } action: {
-                    tv.toggleTopShelfOption(index)
+                VStack(alignment: .leading, spacing: Self.headerGap) {
+                    if let header = item.header { self.header(header, first: index == 0) }
+                    row(focused: index == focused, focusID: "options-\(app)") {
+                        Text(item.title).font(SettingsMetrics.title).lineLimit(1)
+                        Spacer(minLength: 16)
+                        Image(systemName: "checkmark").font(.system(size: 25, weight: .bold)).opacity(item.on ? 1 : 0)
+                    } action: {
+                        tv.toggleTopShelfOption(index)
+                    }
+                    .accessibilityAddTraits(item.on ? .isSelected : [])
                 }
-                .accessibilityAddTraits(item.on ? .isSelected : [])
-                .padding(.bottom, item.groupEnd ? Self.groupGap : 0)
             }
         }
         return Group {
@@ -259,24 +301,34 @@ struct TopShelfPreferencesSheet: View {
         }
     }
 
-    /// 和设置里的一行一样：焦点是一块白底黑字、在行之间滑的板子，稍微放大、带影子
+    /// 一组的小标题：和设置里的一样
+    private func header(_ text: String, first: Bool) -> some View {
+        Text(text).font(.tv(.caption1, emphasized: true)).tracking(1.4).opacity(0.5)
+            .frame(height: Self.headerHeight)
+            .padding(.leading, 6).padding(.top, first ? 0 : Self.headerTop)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// 和设置里的一行一样：焦点是一块白底黑字、在行之间滑的板子，稍微放大、带影子；按下去往下一沉
     private func row<Content: View>(focused: Bool, focusID: String, @ViewBuilder content: () -> Content,
                                     action: @escaping () -> Void) -> some View {
-        HStack(spacing: 22) { content() }
-            .padding(.horizontal, 30)
-            .frame(height: Self.rowHeight)
-            .foregroundStyle(focused ? .black : .white)
-            .background {
-                let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-                if focused {
-                    shape.fill(.white).matchedGeometryEffect(id: focusID, in: focusSpace)
-                } else {
-                    shape.fill(.white.opacity(0.07))
+        Button(action: action) {
+            HStack(spacing: 18) { content() }
+                .padding(.horizontal, SettingsMetrics.inset)
+                .frame(height: Self.rowHeight)
+                .foregroundStyle(focused ? .black : .white)
+                .background {
+                    let shape = RoundedRectangle(cornerRadius: SettingsMetrics.corner, style: .continuous)
+                    if focused {
+                        shape.fill(.white).matchedGeometryEffect(id: focusID, in: focusSpace)
+                    } else {
+                        shape.fill(.white.opacity(0.07))
+                    }
                 }
-            }
-            .scaleEffect(focused ? 1.03 : 1)
-            .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 20, y: 12)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: action)
+                .scaleEffect(focused ? 1.03 : 1)
+                .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 16, y: 10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressDip(presses: tv.topShelfPreferences?.presses ?? 0, focused: focused))
     }
 }

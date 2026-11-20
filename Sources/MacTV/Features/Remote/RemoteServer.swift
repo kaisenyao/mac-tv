@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Network
 
@@ -404,7 +405,7 @@ final class RemoteServer {
                 }
                 if let shortcuts = snapshot["shortcuts"] as? [String: Any] { snapshot["shortcuts"] = RemoteShortcuts.forGuest(shortcuts) }
             }
-            return .json(snapshot)
+            return .state(snapshot, ifNoneMatch: request.headers["if-none-match"])
         case ("POST", "/cmd"):
             guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
                   let command = RemoteCommand(json: object)
@@ -517,6 +518,15 @@ struct HTTPResponse {
 
     static func json(_ object: Any, status: String = "200 OK") -> HTTPResponse {
         HTTPResponse(status: status, body: (try? JSONSerialization.data(withJSONObject: object)) ?? Data())
+    }
+
+    /// `/state`, which the phone asks for every few seconds: tagged with a digest of its JSON (keys sorted, so the
+    /// same state always gives the same tag). When the phone already has that one it gets an empty 304 instead.
+    static func state(_ object: [String: Any], ifNoneMatch: String?) -> HTTPResponse {
+        let body = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+        let tag = "\"" + SHA256.hash(data: body).prefix(12).map { String(format: "%02x", $0) }.joined() + "\""
+        if ifNoneMatch == tag { return HTTPResponse(status: "304 Not Modified", headers: [("ETag", tag)]) }
+        return HTTPResponse(body: body, headers: [("ETag", tag)])
     }
 
     /// An answer that comes later (see pending).

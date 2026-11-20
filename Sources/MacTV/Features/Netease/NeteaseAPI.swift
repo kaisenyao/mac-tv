@@ -85,40 +85,79 @@ enum NeteaseAPI {
 
     // 登录信息自己管：系统自带的那份存储在应用被关掉时不一定来得及写盘，重启后就成了"没登录"。
     // 这里把服务器发回来的登录信息记在内存里，并存进这个应用自己的偏好设置（退出登录时删掉）。
+    // 每个人（个人资料）一份，在他自己的设置里（第一个人还是原来的地方，见 ProfileSpace）。每个请求带着发出去时
+    // 那个人的登录信息：回来时已经换了人，回来的登录信息不记，结果也不要（不会落到下一个人身上）
+    static let storeKey = "neteaseLogin"
+
+    /// 一个人的登录信息，和它属于哪一次换人以后（ProfileSpace.epoch）
+    struct Login: Sendable {
+        var cookies: [String: String]
+        var epoch: Int
+    }
+
+    private struct Jar {
+        var login: Login
+        let defaults: UserDefaults
+        init(_ space: ProfileSpace) {
+            defaults = space.defaults
+            login = Login(cookies: space.defaults.dictionary(forKey: NeteaseAPI.storeKey) as? [String: String] ?? [:], epoch: space.epoch)
+        }
+    }
+
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var jar: [String: String] = UserDefaults.standard.dictionary(forKey: storeKey) as? [String: String] ?? [:]
-    private static let storeKey = "neteaseLogin"
+    nonisolated(unsafe) private static var jar = Jar(ProfileSpace.current)
+    /// 这个任务里的请求用这一份登录信息、不用现在在看的人的：换人前那个人还没报完的听歌记录用他自己的
+    @TaskLocal static var pinned: Login?
 
-    private static func value(_ name: String) -> String {
+    /// 换了人（个人资料）：之后的请求用他的登录信息
+    static func useProfile(_ space: ProfileSpace) {
         lock.lock(); defer { lock.unlock() }
-        return jar[name] ?? ""
+        jar = Jar(space)
     }
 
-    private static func snapshot() -> [String: String] {
+    /// 现在的登录信息（任务里指定了一份就是那一份）
+    static var login: Login {
+        if let pinned { return pinned }
         lock.lock(); defer { lock.unlock() }
-        return jar
+        return jar.login
     }
 
-    private static func remember(_ response: URLResponse, for url: URL) {
+    /// 这份登录信息的人还在看
+    static func isCurrent(_ login: Login) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return jar.login.epoch == login.epoch
+    }
+
+    private static func value(_ name: String) -> String { login.cookies[name] ?? "" }
+
+    private static func snapshot() -> Login { login }
+
+    /// 请求回来了：发的人已经不在看（换了人）就什么都不要；指定了登录信息的（上一个人的听歌记录）照样交回去
+    private static func stillWanted(_ sent: Login) -> Bool { pinned != nil || isCurrent(sent) }
+
+    static func remember(_ response: URLResponse, for url: URL, sent: Login) {
         guard let http = response as? HTTPURLResponse, let fields = http.allHeaderFields as? [String: String] else { return }
         let fresh = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
         guard !fresh.isEmpty else { return }
         lock.lock()
-        for cookie in fresh { jar[cookie.name] = cookie.value.isEmpty ? nil : cookie.value }
-        let snapshot = jar
+        // 发出去以后换了人：这是上一个人的登录信息，不记到现在这个人身上
+        guard jar.login.epoch == sent.epoch else { lock.unlock(); return }
+        for cookie in fresh { jar.login.cookies[cookie.name] = cookie.value.isEmpty ? nil : cookie.value }
+        let snapshot = jar.login.cookies, defaults = jar.defaults
         lock.unlock()
-        UserDefaults.standard.set(snapshot, forKey: storeKey)
+        defaults.set(snapshot, forKey: storeKey)
     }
-
-    private static var csrf: String { value("__csrf") }
 
     /// 是否有登录信息（不代表一定还有效）
     static var hasLogin: Bool { !value("MUSIC_U").isEmpty }
 
-    /// 退出登录：把这个应用里网易云的登录信息全部删掉
+    /// 退出登录：把这个应用里网易云的登录信息全部删掉（现在在看的这个人的）
     static func forgetLogin() {
-        lock.lock(); jar = [:]; lock.unlock()
-        UserDefaults.standard.removeObject(forKey: storeKey)
+        lock.lock()
+        jar.login.cookies = [:]
+        let defaults = jar.defaults
+        lock.unlock()
+        defaults.removeObject(forKey: storeKey)
     }
 
     /// 读取。登录以后走客户端接口：实测（复用连接，交替各测 16 轮）和网页版一样快，差距在 ±20 毫秒的波动以内；
@@ -131,8 +170,9 @@ enum NeteaseAPI {
 
     /// 网页版接口（music.163.com 网页在用的那套）
     private static func webCall(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
+        let login = snapshot()
         var body = payload
-        let token = csrf
+        let token = login.cookies["__csrf"] ?? ""
         body["csrf_token"] = token
         guard let json = try? JSONSerialization.data(withJSONObject: body),
               let first = aes(json, key: presetKey)?.base64EncodedData(),
@@ -145,13 +185,14 @@ enum NeteaseAPI {
         request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.httpShouldHandleCookies = false
-        var sent = snapshot()
+        var sent = login.cookies
         // 告诉服务器这是电脑端（取歌曲地址时要）。只在登录之后带：登录前带着它，要二维码的请求会被风控拒绝。
         if sent["MUSIC_U"] != nil { sent["os"] = "pc" } else { sent["os"] = nil }
         if !sent.isEmpty { request.setValue(sent.map { "\($0.key)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie") }
         request.httpBody = Data("params=\(params)&encSecKey=\(encryptedSecondKey)".utf8)
         guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
-        remember(response, for: url)
+        remember(response, for: url, sent: login)
+        guard stillWanted(login) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
@@ -176,9 +217,16 @@ enum NeteaseAPI {
 
     /// 登录在网易云官方网页上完成（应用里打开的网页）。登录好以后，把网页那边的登录信息交到这里，
     /// 之后取歌单、取歌就用它。直接调接口扫码登录会被网易云拒绝（8821），所以不走那条路。
-    static func importLogin(_ cookies: [String: String]) {
-        lock.lock(); jar = cookies; lock.unlock()
-        UserDefaults.standard.set(cookies, forKey: storeKey)
+    /// epoch：取这份登录信息时是谁在看（ProfileSpace.epoch）；之后换了人就不要了，返回 false
+    @discardableResult
+    static func importLogin(_ cookies: [String: String], epoch: Int) -> Bool {
+        lock.lock()
+        guard jar.login.epoch == epoch else { lock.unlock(); return false }
+        jar.login.cookies = cookies
+        let defaults = jar.defaults
+        lock.unlock()
+        defaults.set(cookies, forKey: storeKey)
+        return true
     }
 
     static func account() async -> NeteaseAccount? {
@@ -381,7 +429,7 @@ enum NeteaseAPI {
     }
 
     private static func clientCall(_ path: String, _ payload: [String: Any]) async -> [String: Any]? {
-        let jar = snapshot()
+        let login = snapshot(), jar = login.cookies
         guard let token = jar["MUSIC_U"] else { return nil }
         let now = Date().timeIntervalSince1970
         let header: [String: String] = [
@@ -404,7 +452,7 @@ enum NeteaseAPI {
         request.setValue(header.map { "\(escape($0.key))=\(escape($0.value))" }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
         request.httpShouldHandleCookies = false
         request.httpBody = Data("params=\(sealed.map { String(format: "%02X", $0) }.joined())".utf8)
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(for: request), stillWanted(login) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 

@@ -38,7 +38,7 @@ extension View {
         } else if enabled {
             background(tint ?? .clear, in: shape)
                 .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.strokeBorder(.white.opacity(0.18)))
+                .overlay(PillOutline(shape).strokeBorder(.white.opacity(0.18)))
         } else {
             self
         }
@@ -56,7 +56,7 @@ extension View {
     /// refract and read as a flat grey slab, so these group their content with a quiet fill instead.
     func tvPanel<S: InsettableShape>(in shape: S) -> some View {
         background(.white.opacity(0.07), in: shape)
-            .overlay(shape.strokeBorder(.white.opacity(0.12)))
+            .overlay(PillOutline(shape).strokeBorder(.white.opacity(0.12)))
     }
 
     /// Related glass in one GlassGroup morphs between shapes when one appears or leaves.

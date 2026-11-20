@@ -14,7 +14,7 @@ extension NSScreen {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Esc 按下的时刻，和这一次按住是否已经触发过"回主屏"
     var escapeDownAt: Date?
     var escapeHeld = false
@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 长按用计时器来认（不靠系统的"按键重复"，那个可以在系统设置里关掉或调慢）
     var escapeTimer: Timer?
     var selectTimer: Timer?
+    /// ⌘H, the keyboard's TV button: when it went down, and whether it was held long enough for Control Center
+    var tvKeyDownAt: Date?
+    var tvKeyHeld = false
+    var tvKeyTimer: Timer?
     /// 网易云播放界面里的左右键：短按切歌，按住快进 / 快退
     var arrowDownAt: Date?
     var arrowHeld = false
@@ -188,7 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             do {
                 let tv = TVController()
-                tv.settings = SettingsPanel(section: .power, open: true, row: 1)
+                tv.openSettings(to: .lidOverride)
                 let renderer = ImageRenderer(content: ZStack { Wallpaper(); HomeView(tv: tv); Color.black.opacity(0.55); SettingsSheet(tv: tv) }
                     .frame(width: 1920, height: 1080).environment(\.colorScheme, .dark))
                 renderer.scale = 1
@@ -262,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 自用分支：启动时就把哔哩哔哩每一页的内容取好，进去和切换时不用等
         tv.bilibiliStore.tv = tv
         tv.bilibiliStore.preload()
+        tv.attributeBilibiliAccounts()   // 只做一次：以前登录过的哔哩哔哩账号分给登录着它的人（见 BiliAccounts）
         tv.neteaseStore.tv = tv
         tv.neteaseStore.preload()
         // 主屏顶部：哔哩哔哩关注的 UP 主最新视频、网易云的歌单、YouTube 为你推荐（在各自的设置里可以换）
@@ -366,6 +371,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown]) { [weak self] event in
             guard let self, event.window === window else { return event }
             let woke = tv.noteActivity()
+            // 浏览器里正在改地址：点在输入框外面（网页、标签、按钮）就不改了，像按返回；这一下照常给点到的东西
+            if event.type == .leftMouseDown, tv.browserStore.editing, !BrowserStore.isInTextEditor(event, in: window) {
+                tv.browserStore.endEditingByClick()
+            }
             if event.type == .mouseMoved && (abs(event.deltaX) > 0.5 || abs(event.deltaY) > 0.5) {
                 tv.suppressHover = false
                 PointerActivity.shared.set(true)
@@ -378,7 +387,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if tv.noteActivity() { return nil }
             return tv.trackpadGestures.feed(TrackpadGestures.Sample(event), from: .trackpad) ? nil : event
         }
+        // ⌘ let go while ⌘Q is held: too soon, Mac TV stays (see AppQuit)
+        NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            if !event.modifierFlags.contains(.command) { self?.tv.quitKeyUp() }
+            return event
+        }
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            if event.charactersIgnoringModifiers?.lowercased() == "q" { self?.tv.quitKeyUp() }
+            // ⌘H let go: not held long enough for Control Center, so it's a press of the TV button (Home; twice, the
+            // App Switcher)
+            if let self, event.charactersIgnoringModifiers?.lowercased() == "h", self.tvKeyDownAt != nil {
+                let held = self.tvKeyHeld
+                self.tvKeyDownAt = nil
+                self.tvKeyTimer?.invalidate()
+                if !held { self.tv.handle(.home) }
+                return nil
+            }
             // 网易云、得到播放界面的左右键松开：没按到"按住"的程度就是切歌 / 换一讲，按住过就是快进 / 快退结束、从那里接着放
             if let self, event.keyCode == 123 || event.keyCode == 124, self.arrowDownAt != nil {
                 let held = self.arrowHeld
@@ -408,19 +432,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let tv = self?.tv, event.window === self?.window else { return event }
-            if tv.noteActivity() { return nil }
+            guard let tv = self?.tv else { return event }
             // 只有 ⌘ ⌥ ⌃ ⇧ 算"按着修饰键"。大写锁定不算：它亮着的时候（很多人用它切换中英文输入），
             // 方向键、回车、Esc 照样要起作用，否则整个键盘像被锁住一样。
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .subtracting([.numericPad, .function, .capsLock, .help])
+            // ⌘Q, as Chrome: a press says "Hold ⌘Q to Quit"; held, Mac TV quits (see AppQuit). The Quit menu item,
+            // a logout, restart, shutdown and the updater still quit at once: only this key holds.
+            if mods == [.command], event.charactersIgnoringModifiers?.lowercased() == "q" {
+                if !event.isARepeat { tv.quitKeyDown() }
+                return nil
+            }
+            guard event.window === self?.window else { return event }
+            if tv.noteActivity() { return nil }
             // 自用分支：Esc 的规矩，在哪都一样：
-            //   按一下 = 返回（松开时才算数）；按住半秒 = 回主屏。
+            //   按一下 = 返回（松开时才算数）；按住半秒 = 回主屏（应用留在后台，见 AppQuit）。
             // 搜索框里输入法还有待选字时，Esc 是输入法的，不拦。
             if event.keyCode == 53, mods.isEmpty {
-                let composing = tv.mode == .launcher
+                let composing = (tv.mode == .launcher
                     && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.typing)
-                        || (tv.browserOpen && tv.browserStore.editing))
+                        || (tv.browserOpen && tv.browserStore.editing)) || (tv.browserPageInFront && tv.browserStore.editing))
                     && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
                 if composing { return event }
                 if !event.isARepeat {
@@ -436,6 +467,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
                 return nil   // 按住时系统重发的 Esc 一律忽略
+            }
+            // ⌘H is the keyboard's TV button, everywhere (a web page too), as the Siri Remote's: pressed and let go,
+            // the Home Screen; twice, the App Switcher; held half a second, Control Center (see AppQuit)
+            if mods == [.command], event.charactersIgnoringModifiers?.lowercased() == "h" {
+                if !event.isARepeat {
+                    self?.tvKeyDownAt = Date()
+                    self?.tvKeyHeld = false
+                    self?.tvKeyTimer?.invalidate()
+                    self?.tvKeyTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.tvKeyDownAt != nil, !self.tvKeyHeld else { return }
+                            self.tvKeyHeld = true
+                            self.tv.handle(.controlCenter)
+                        }
+                    }
+                }
+                return nil
             }
             // 哔哩哔哩里的确认键：
             //   在列表里，按一下（松开时算数）= 确认；在视频卡片上按住半秒 = 这张卡片的菜单。
@@ -463,6 +511,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
                 // 清晰度栏、下面那一块、设置开着：新按下的这一次立刻生效（走下面的常规处理）
+            }
+            // Arrange Apps, and an app on the Home Screen: Return pressed and let go is Select; held half a second, the
+            // app's menu (Edit Home Screen, Hide), and held again it closes, as with the phone's OK (TVController.holdSelect)
+            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.activeSheet == .organizer || tv.homeAppFocused {
+                if event.isARepeat { return nil }
+                self?.selectDownAt = Date()
+                self?.selectHeld = false
+                self?.selectTimer?.invalidate()
+                self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
+                        if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
+                    }
+                }
+                return nil
             }
             // 网易云音乐、得到的播放界面：短按左右 = 上一首 / 下一首、上一讲 / 下一讲（松开时算数）；
             // 按住 = 快退 / 快进，松手从那里接着放
@@ -512,6 +575,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return nil
             }
+            // Web 的开始页、History 里的确认键：按一下（松开时算数）= 确认；在一个网站、History 的一行上按住半秒 = 它的菜单
+            //（个人收藏：Open in New Tab、Rename、Edit Address…、Delete），菜单开着时再按住半秒是收起
+            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.browserOpen, tv.activeSheet == nil,
+               !tv.browserStore.editing, tv.browserStore.barFocus == nil,
+               tv.browserStore.historyState != nil || tv.browserStore.itemMenu != nil || tv.browserStore.focusedPage != nil {
+                if event.isARepeat { return nil }
+                self?.selectDownAt = Date()
+                self?.selectHeld = false
+                self?.selectTimer?.invalidate()
+                self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
+                        if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
+                    }
+                }
+                return nil
+            }
             // 网易云音乐里的确认键，规矩一样：按一下（松开时算数）= 确认；
             // 在歌曲、歌单卡片上或播放界面里按住半秒 = 菜单（喜欢、收藏到歌单、播放模式），菜单开着时再按住半秒是收起。
             if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,
@@ -541,7 +621,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // 浏览器的地址栏：和网易云的搜索框一样，还没拿到键盘（刚出现那一瞬间）就让它再要一次，这一下不算
             if tv.mode == .launcher, tv.browserOpen, tv.browserStore.editing {
-                if self?.window.firstResponder is NSTextView { return event }
+                // ⌘ 的组合键（⌘W、⌘T、⌘L…）走菜单
+                if self?.window.firstResponder is NSTextView || mods.contains(.command) { return event }
                 tv.browserStore.refocus()
                 return nil
             }
@@ -550,6 +631,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if self?.window.firstResponder is NSTextView { return event }
                 // 输入框还没拿到键盘（刚出现的那一瞬间）：让它再要一次，这一下按键不算，也不把输入框收掉
                 tv.neteaseStore.refocus()
+                return nil
+            }
+            // 浏览器的网页上在标签栏里改地址：按键整个交给地址栏（和开始页的一样，还没拿到键盘就再要一次）
+            if tv.browserPageInFront, tv.browserStore.editing {
+                if self?.window.firstResponder is NSTextView || mods.contains(.command) { return event }
+                tv.browserStore.refocus()
                 return nil
             }
             // 浏览器的网页：焦点在标签栏上时，方向键、回车、空格归标签栏。
@@ -625,7 +712,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func goHome(_ sender: Any?) { tv.handle(.home) }
     @objc func reloadPage(_ sender: Any?) { tv.webView?.reload() }
+    /// 浏览器的快捷键（Safari 的那一套）：只在浏览器开着时能用，别的时候灰掉，键照常给输入框、网页
+    @objc func browserShortcut(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let shortcut = BrowserStore.Shortcut(rawValue: raw) else { return }
+        tv.browserStore.perform(shortcut)
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(browserShortcut(_:)) else { return true }
+        guard let raw = item.representedObject as? String, let shortcut = BrowserStore.Shortcut(rawValue: raw) else { return false }
+        return tv.browserStore.canPerform(shortcut)
+    }
+
+    private func browserItem(_ shortcut: BrowserStore.Shortcut, hidden key: String? = nil) -> NSMenuItem {
+        let (character, modifiers) = shortcut.key
+        let item = NSMenuItem(title: shortcut.title, action: #selector(browserShortcut(_:)), keyEquivalent: key ?? character)
+        item.keyEquivalentModifierMask = modifiers
+        item.representedObject = shortcut.rawValue
+        item.isHidden = key != nil
+        item.allowsKeyEquivalentWhenHidden = key != nil
+        return item
+    }
     @objc func copyReport(_ sender: Any?) { DiagnosticReport.copy(from: tv) }
+    /// Help › Mac TV Help (⌘?): Settings › System › User Guide.
+    @objc func showUserGuide(_ sender: Any?) {
+        tv.openUserGuide()
+        tv.bringToFront()
+    }
     @objc func reportBug(_ sender: Any?) {
         NSWorkspace.shared.open(URL(string: "https://github.com/kaisenyao/mac-tv/issues/new?template=bug_report.md")!)
     }
@@ -634,11 +747,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let main = NSMenu()
 
         let app = NSMenu()
-        app.addItem(withTitle: "Home", action: #selector(goHome(_:)), keyEquivalent: "H")
+        // ⌘H is the TV button (the key monitor above takes it first, for its double press and hold); the item shows it
+        app.addItem(withTitle: "Home Screen", action: #selector(goHome(_:)), keyEquivalent: "h")
         app.addItem(.separator())
-        app.addItem(withTitle: "Hide Mac TV", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(withTitle: "Hide Mac TV", action: #selector(NSApplication.hide(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Quit Mac TV", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         main.addItem(submenu: app, title: "Mac TV")
+
+        // 浏览器：和 Safari 一样的菜单、一样的键
+        let file = NSMenu(title: "File")
+        for shortcut in [BrowserStore.Shortcut.newTab, .newPrivateTab, .openLocation] { file.addItem(browserItem(shortcut)) }
+        file.addItem(.separator())
+        file.addItem(browserItem(.closeTab))
+        main.addItem(submenu: file, title: "File")
 
         // Standard editing so ⌘V works in sign-in fields.
         let edit = NSMenu(title: "Edit")
@@ -655,15 +776,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fullScreen = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]
         view.addItem(withTitle: "Reload Page", action: #selector(reloadPage(_:)), keyEquivalent: "r")
+        view.addItem(.separator())
+        view.addItem(browserItem(.actualSize))
+        view.addItem(browserItem(.zoomIn))
+        view.addItem(browserItem(.zoomIn, hidden: "="))   // ⌘= 也是放大（不用按 ⇧）
+        view.addItem(browserItem(.zoomOut))
         main.addItem(submenu: view, title: "View")
+
+        let history = NSMenu(title: "History")
+        history.addItem(browserItem(.back))
+        history.addItem(browserItem(.forward))
+        history.addItem(.separator())
+        history.addItem(browserItem(.showAllHistory))
+        main.addItem(submenu: history, title: "History")
 
         let window = NSMenu(title: "Window")
         window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         window.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        window.addItem(.separator())
+        window.addItem(browserItem(.previousTab))
+        window.addItem(browserItem(.nextTab))
         main.addItem(submenu: window, title: "Window")
         NSApp.windowsMenu = window
 
         let help = NSMenu(title: "Help")
+        help.addItem(withTitle: "Mac TV Help", action: #selector(showUserGuide(_:)), keyEquivalent: "?")
+        help.addItem(.separator())
         help.addItem(withTitle: "Copy Diagnostics Report", action: #selector(copyReport(_:)), keyEquivalent: "")
         help.addItem(withTitle: "Report a Bug…", action: #selector(reportBug(_:)), keyEquivalent: "")
         main.addItem(submenu: help, title: "Help")

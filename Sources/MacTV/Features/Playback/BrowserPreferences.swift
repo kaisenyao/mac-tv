@@ -24,4 +24,11 @@ struct BrowserPreferences {
         choices[profileID] = choice.rawValue
         defaults.set(choices, forKey: key)
     }
+
+    /// A removed profile's choice goes with it.
+    func forget(_ profileID: String) {
+        var choices = defaults.dictionary(forKey: key) as? [String: String] ?? [:]
+        guard choices.removeValue(forKey: profileID) != nil else { return }
+        defaults.set(choices, forKey: key)
+    }
 }

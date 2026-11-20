@@ -61,9 +61,10 @@ enum BiliShelfSource: String, CaseIterable {
         case .live: "直播"
         }
     }
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
     static var current: BiliShelfSource {
-        get { UserDefaults.standard.string(forKey: "bilibiliShelf").flatMap(BiliShelfSource.init) ?? .following }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "bilibiliShelf") }
+        get { ProfileSpace.current.defaults.string(forKey: "bilibiliShelf").flatMap(BiliShelfSource.init) ?? .following }
+        set { ProfileSpace.current.defaults.set(newValue.rawValue, forKey: "bilibiliShelf") }
     }
 }
 
@@ -94,8 +95,11 @@ enum NeteaseShelfSource: String, CaseIterable {
     }
 
     /// 以前"推荐歌单"里前两个是每日歌单；拆成两种以后，勾过推荐歌单的把每日歌单也勾上，主屏看到的和以前一样（只做一次）
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
+    private static var store: UserDefaults { ProfileSpace.current.defaults }
+
     static func migrateSplitLists() {
-        let store = UserDefaults.standard, key = "neteaseShelfSplitLists"
+        let store = store, key = "neteaseShelfSplitLists"
         guard !store.bool(forKey: key) else { return }
         store.set(true, forKey: key)
         let saved = store.stringArray(forKey: "neteaseShelfSources") ?? []
@@ -105,16 +109,16 @@ enum NeteaseShelfSource: String, CaseIterable {
     }
     static var selected: [NeteaseShelfSource] {
         get {
-            let saved = (UserDefaults.standard.stringArray(forKey: "neteaseShelfSources") ?? []).compactMap(NeteaseShelfSource.init)
+            let saved = (store.stringArray(forKey: "neteaseShelfSources") ?? []).compactMap(NeteaseShelfSource.init)
             return saved.isEmpty ? defaults : allCases.filter(saved.contains)
         }
-        set { UserDefaults.standard.set(newValue.map(\.rawValue), forKey: "neteaseShelfSources") }
+        set { store.set(newValue.map(\.rawValue), forKey: "neteaseShelfSources") }
     }
     /// 后台放歌时，顶部最前面加一页"正在播放"（默认开着）
     static let nowPlayingKey = "nowPlaying"
     static var showsNowPlaying: Bool {
-        get { UserDefaults.standard.object(forKey: "neteaseShelfNowPlaying") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "neteaseShelfNowPlaying") }
+        get { store.object(forKey: "neteaseShelfNowPlaying") as? Bool ?? true }
+        set { store.set(newValue, forKey: "neteaseShelfNowPlaying") }
     }
     /// 设置那一行右边写的："每日推荐"、"正在播放、每日推荐"、"正在播放等 4 项"
     static var summary: String {
@@ -130,7 +134,8 @@ enum DedaoShelfSource {
     /// 新书推荐放几本（加上正在听的书一页，不超过 AppShelf.limit）
     static let newBookCount = 6
 
-    private static var store: UserDefaults { .standard }
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
+    private static var store: UserDefaults { ProfileSpace.current.defaults }
 
     /// 以前的两个开关（正在播放、继续学习）有一个开着，就算开着
     static var showsListening: Bool {
@@ -361,6 +366,15 @@ final class AppShelf: ObservableObject {
             withAnimation(Self.pageAnimation) { self.index[id] = min(next, pages.count - 1) }
             if self.target[id] == next { self.target[id] = nil }
         }
+    }
+
+    /// 测试用：这个应用顶部直接是这几页（不去网上取）
+    func show(_ id: String, pages: [AppShelfItem], label: String = "") {
+        fetched[id] = pages
+        items[id] = composed(id)
+        labels[id] = label
+        index[id] = 0
+        target[id] = nil
     }
 
     /// 换了一个人（个人资料）、退出了登录：这个应用（nil 是全部）顶部的东西清掉，按现在的账号重新取
@@ -818,13 +832,16 @@ struct AppShelfBanner: View {
                                    .init(color: .clear, location: 0.6)], startPoint: .leading, endPoint: .trailing)
         }
         .frame(width: canvas.width, height: canvas.height)
-        DedaoShelfBook(cover: item.image, size: book)
-            .scaleEffect(now && paused ? 0.94 : 1)
-            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: paused)
+        OneLayer {
+            DedaoShelfBook(cover: item.image, size: book)
+                .scaleEffect(now && paused ? 0.94 : 1)
+                .animation(.spring(response: 0.5, dampingFraction: 0.85), value: paused)
+        }
             .padding(.leading, bookX).padding(.top, top)
             .id("book-" + item.id)
             .transition(slide(160))
         VStack(alignment: .leading, spacing: 0) {
+            OneLayer {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
                     tag(item)
@@ -833,7 +850,7 @@ struct AppShelfBanner: View {
                         Text(badge)
                             .font(.system(size: 19, weight: .semibold))
                             .padding(.horizontal, 12).frame(height: 32)
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
+                            .overlay(PillOutline().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
                             .foregroundStyle(.white.opacity(0.85))
                     }
                 }
@@ -869,6 +886,8 @@ struct AppShelfBanner: View {
             // 字多得放不下（两行的书名、正在听一门课还有接下来两讲）时往上长，不把书名挤成一行
             .fixedSize(horizontal: false, vertical: true)
             .frame(height: Self.dedaoInfoHeight, alignment: .bottomLeading)
+            .foregroundStyle(.white)
+            }
             .id("info-" + item.id)
             .transition(slide(70))
             if expanded { buttons.padding(.top, 30) }
@@ -1026,6 +1045,42 @@ private struct RecordSleeve: View {
             Circle().fill(Color(white: 0.82)).frame(width: 14, height: 14)
         }
         .frame(width: disc, height: disc)
+    }
+}
+
+/// 换页时整块滑进滑出的那一块（封面、书、唱片、左边那一栏字）：画在它自己的一层里（一个 NSHostingView）。
+/// 滑的那一秒多，SwiftUI 每一帧只挪这一层、改它的透明度，不用把里面每个字、每个形状、每个影子都重算一遍、
+/// 一个个去改它们的图层（一页一百多帧，主线程省掉大半）。里面的东西照常画，环境（字体、颜色……）照原样带进去
+private struct OneLayer<Content: View>: NSViewRepresentable {
+    @ViewBuilder let content: () -> Content
+
+    struct Hosted: View {
+        let content: Content
+        let environment: EnvironmentValues
+        var body: some View { content.environment(\.self, environment).ignoresSafeArea() }
+    }
+
+    /// 量大小要用 NSHostingController（NSHostingView 自己不会按给的宽高量）
+    final class Coordinator {
+        var controller: NSHostingController<Hosted>?
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let controller = NSHostingController(rootView: Hosted(content: content(), environment: context.environment))
+        controller.sizingOptions = []        // 大小由外面这一层定（sizeThatFits），不靠 Auto Layout
+        controller.safeAreaRegions = []
+        controller.view.clipsToBounds = false  // 影子画在框外面
+        context.coordinator.controller = controller
+        return controller.view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.controller?.rootView = Hosted(content: content(), environment: context.environment)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        context.coordinator.controller?.sizeThatFits(in: CGSize(width: proposal.width ?? .infinity, height: proposal.height ?? .infinity))
     }
 }
 

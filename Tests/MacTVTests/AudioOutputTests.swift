@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreAudio
 import Foundation
 import Testing
@@ -106,10 +107,74 @@ struct AudioOutputTests {
         #expect(tv.activeSheet == nil)
     }
 
+    /// Outputs come and go while the picker is open (AirPods connect, a display's audio comes back): focus stays
+    /// on the row it was on, so the highlight never ends up on another output or slider.
+    @Test
+    func pickerFocusFollowsItsRowAsOutputsChange() {
+        let display = AudioOutputDevice(id: 89, name: "XG27UCS", transport: 0x64707274, isDefault: true, uid: "EDID-1")
+        let speakers = AudioOutputDevice(id: 73, name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn,
+                                         isDefault: false, uid: "BuiltInSpeakerDevice")
+        let airPods = AudioOutputDevice(id: 12, name: "AirPods Pro", transport: kAudioDeviceTransportTypeBluetooth,
+                                        isDefault: false, uid: "AIRPODS")
+        let before = [display, speakers]
+        let after = [airPods, display, speakers]
+        // The same output, wherever it is now.
+        #expect(AudioPickerPanel.row(1, from: before, to: after) == 2)
+        #expect(AudioPickerPanel.row(0, from: before, to: after) == 1)
+        // The same slider: Volume, then Navigation Clicks.
+        #expect(AudioPickerPanel.row(2, from: before, to: after) == 3)
+        #expect(AudioPickerPanel.row(3, from: before, to: after) == 4)
+        #expect(AudioPickerPanel.row(3, from: after, to: before) == 2)
+        // The display's audio comes back with a new Core Audio ID: still the same output.
+        let reborn = AudioOutputDevice(id: 95, name: "XG27UCS", transport: 0x64707274, isDefault: true, uid: "EDID-1")
+        #expect(AudioPickerPanel.row(0, from: before, to: [speakers, reborn]) == 1)
+        // The focused output went away: the one now in its place, or the first row when none are left.
+        #expect(AudioPickerPanel.row(1, from: before, to: [display]) == 0)
+        #expect(AudioPickerPanel.row(0, from: before, to: []) == 0)
+    }
+
     @Test
     func controlCenterItemsExcludeSounds() {
         #expect(!ControlCenterPanel.Item.allCases.contains(where: { "\($0)" == "sounds" }))
-        #expect(ControlCenterPanel.neighbour(of: .sleepTimer, .down) == .controller)
-        #expect(ControlCenterPanel.neighbour(of: .controller, .up) == .sleepTimer)
+        #expect(ControlCenterPanel.neighbour(of: .sleepTimer, .down) == .stayAwake)
+        #expect(ControlCenterPanel.neighbour(of: .stayAwake, .up) == .sleepTimer)
+    }
+}
+
+/// Interface sounds across an output switch: the next press is heard, and nothing pressed meanwhile is saved up
+/// and played at once. No sound is played here: the engines are never started.
+@Suite @MainActor
+struct FeedbackOutputTests {
+    @Test
+    func aStuckOutputIsReplacedAndTapsNeverPileUp() {
+        typealias State = Feedback.OutputState
+        #expect(Feedback.outputState(running: false, runningFor: nil, renderAge: nil) == State.idle)
+        #expect(Feedback.outputState(running: true, runningFor: 0.05, renderAge: nil) == State.starting)
+        #expect(Feedback.outputState(running: true, runningFor: 2, renderAge: 0.01) == State.rendering)
+        // Started a while ago and silent since (the output changed under it): start over, dropping what waits.
+        #expect(Feedback.outputState(running: true, runningFor: 2, renderAge: nil) == State.stalled)
+        #expect(Feedback.outputState(running: true, runningFor: 2, renderAge: 1.5) == State.stalled)
+    }
+
+    @Test
+    func switchingOutputsStartsAFreshEngine() async throws {
+        let suite = "MacTVTests.\(UUID().uuidString)"
+        defer { TestDefaults.remove(suite) }
+        let feedback = Feedback(preferences: Preferences(defaults: TestDefaults.named(suite)))
+        let first = feedback.engine
+        let firstPlayers = feedback.players
+
+        feedback.outputChanged()
+        #expect(feedback.engine !== first)
+        #expect(!feedback.engine.isRunning)   // the next sound starts it, on the output in use then
+        #expect(feedback.players.count == 3)
+        #expect(feedback.players.allSatisfy { $0.engine === feedback.engine })
+        #expect(feedback.players.allSatisfy { player in !firstPlayers.contains { $0 === player } })
+        #expect(feedback.engine.mainMixerNode.outputVolume == feedback.volume)
+
+        // macOS changing the output's format under the engine does the same.
+        let second = feedback.engine
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: second)
+        #expect(await eventually { feedback.engine !== second })
     }
 }

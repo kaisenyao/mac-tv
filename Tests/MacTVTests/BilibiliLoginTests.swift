@@ -38,10 +38,12 @@ struct BilibiliLoginTests {
     }
 
     /// 焦点同一时刻只在一处：从卡片往左是左边栏，Esc 回来；往上是头像，确认打开菜单，返回回到头像，往下回到卡片。
-    /// 焦点不在卡片上时没有"选中的卡片"（长按确认不会弹出卡片菜单、不会提前准备视频）
+    /// 焦点不在卡片上时没有"选中的卡片"（长按确认不会弹出卡片菜单、不会提前准备视频）。
+    /// （有登录过的账号才有菜单；一个都没有时选头像直接打开登录页，见 BilibiliLoginPageTests）
     @Test @MainActor
     func focusMovesBetweenAreas() {
         let store = BilibiliStore()
+        store.pretendSavedAccounts([BiliSavedAccount(mid: 1, name: "甲")])
         #expect(store.focus == .rows && store.module(horizontal: true) == .strip)
         store.handle(.move(.left))
         #expect(store.focus == .sidebar && store.module(horizontal: true) == .drawer && store.module(horizontal: false) == .picker)

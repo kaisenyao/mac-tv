@@ -6,6 +6,8 @@ import SwiftUI
 /// lock-screen clock at the top centre.
 struct Screensaver: View {
     @Environment(\.canvasSize) private var canvas
+    /// 24-Hour Time: the clock changes the moment it's switched.
+    @ObservedObject private var preferences = Preferences.shared
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -20,7 +22,7 @@ struct Screensaver: View {
                         Text(context.date.formatted(.dateTime.weekday(.wide).month(.wide).day()))
                             .font(.tv(.callout))
                             .foregroundStyle(.white.opacity(0.85))
-                        Text(context.date.formatted(.dateTime.hour(.defaultDigits(amPM: .omitted)).minute()))
+                        Text(TimeOfDay.text(context.date, twentyFour: preferences.twentyFourHourTime, meridiem: false))
                             .font(.system(size: 230, weight: .bold))
                             .monospacedDigit()
                             .foregroundStyle(.white.opacity(0.92))

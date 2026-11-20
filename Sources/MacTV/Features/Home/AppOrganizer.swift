@@ -1,13 +1,78 @@
 import SwiftUI
 
-/// App identities, rather than row indices, keep selection on the same app as its position changes.
+/// Arrange Apps shows Home as it is: the dock (Home's top row) in its glass, the rest of the apps below in
+/// Home's six columns, then Add App and Settings, which stay last. Select picks the focused app up and the
+/// D-pad moves it, the others making room; Select again puts it down and Back puts it back where it was.
+/// Moving an app into a full dock moves the dock's last app to the first place below; moving one out brings
+/// the first app below up into the dock. Press and hold Select on an app for Hide (and, for an app someone
+/// added, Delete for Everyone). The pointer drags apps directly.
+///
+/// App identities, rather than positions, keep the selection on the same app as things move.
 struct AppOrganizer: Equatable {
-    enum Action: Int, CaseIterable {
-        case pin, earlier, later
+    /// Home's columns: the dock and each row below hold six.
+    static let columns = AppLibrary.dockSize
+
+    /// The app picked up, and where it's going in Home's order. `rest` is the order without it, so the apps
+    /// it passes go back to their places when it moves on.
+    struct Lift: Equatable {
+        let id: String
+        var rest: [String]
+        var index: Int
+
+        init(id: String, in order: [String]) {
+            self.id = id
+            rest = order.filter { $0 != id }
+            index = order.firstIndex(of: id) ?? 0
+        }
+
+        /// Home's order with the app where it's going.
+        var order: [String] {
+            var order = rest
+            order.insert(id, at: clamped(index))
+            return order
+        }
+
+        /// A place it can actually take.
+        func clamped(_ index: Int) -> Int { min(max(index, 0), rest.count) }
+
+        /// Where the D-pad takes it, nil at an edge.
+        func step(_ direction: RemoteCommand.Direction) -> Int? {
+            AppOrganizer.step(from: index, direction, count: rest.count + 1)
+        }
+    }
+
+    /// What press and hold offers for an app.
+    enum Action: Equatable { case editHomeScreen, hide, deleteForEveryone }
+
+    /// Press and hold Select on an app: its menu, then, for Delete for Everyone, the question before the app
+    /// goes from everyone's Home. The question starts on Cancel.
+    enum Menu: Equatable {
+        case actions(row: Int)
+        case confirmDelete(row: Int)
+
+        static let cancelRow = 0, deleteRow = 1
     }
 
     var selectedID: String?
-    var action: Action = .pin
+    var lift: Lift?
+    var menu: Menu?
+    /// Opened by holding Select on a Home Screen app: its menu, with Edit Home Screen first. Back, Hide or Delete
+    /// return to Home; Edit Home Screen stays, with the app picked up.
+    var fromHome = false
+
+    /// Where the D-pad goes from a place among `count` apps laid out as on Home, six to a row; nil at an edge.
+    /// Down to a shorter last row lands on its last app.
+    static func step(from index: Int, _ direction: RemoteCommand.Direction, count: Int) -> Int? {
+        let row = index / columns, column = index % columns
+        switch direction {
+        case .left: return column > 0 ? index - 1 : nil
+        case .right: return column < columns - 1 && index + 1 < count ? index + 1 : nil
+        case .up: return row > 0 ? index - columns : nil
+        case .down:
+            if index + columns < count { return index + columns }
+            return (row + 1) * columns < count ? count - 1 : nil
+        }
+    }
 }
 
 extension TVController {
@@ -18,54 +83,258 @@ extension TVController {
         } else {
             focusedID = nil
         }
-        organizer = AppOrganizer(selectedID: arrangedServices.first(where: { $0.id == focusedID })?.id
-                                 ?? arrangedServices.first?.id)
+        let order = appOrder
+        organizer = AppOrganizer(selectedID: order.contains(focusedID ?? "") ? focusedID : order.first)
     }
 
-    /// Call after a library refresh, including edits made by the phone while this sheet is open.
+    /// What Arrange Apps shows: Home's order, with an app that's being moved where it's going.
+    var organizerOrder: [String] { organizer?.lift?.order ?? appOrder }
+
+    /// What press and hold offers for an app: Hide for every app, Delete for Everyone for an app someone added, and,
+    /// held on Home, Edit Home Screen first.
+    func organizerActions(for id: String) -> [AppOrganizer.Action] {
+        let added = library.containsAddedApp(id) && !Catalog.services.contains(where: { $0.id == id })
+        return (organizer?.fromHome == true ? [.editHomeScreen] : []) + [.hide] + (added ? [.deleteForEveryone] : [])
+    }
+
+    /// Focus is on an app on the Home Screen itself (no app open, no sheet): holding Select opens its menu.
+    var homeAppFocused: Bool {
+        guard mode == .launcher, activeSheet == nil, !bilibiliOpen, !neteaseOpen, !browserOpen, !dedaoOpen, movies == nil,
+              case .app(let index) = focus else { return false }
+        return services.indices.contains(index) && appOrder.contains(services[index].id)
+    }
+
+    /// Press and hold Select on a Home Screen app, as on Apple TV: Edit Home Screen, Hide and, for an app someone
+    /// added, Delete for Everyone, in Arrange Apps' menu.
+    func openHomeAppMenu() -> Bool {
+        guard homeAppFocused, case .app(let index) = focus else { return false }
+        organizer = AppOrganizer(selectedID: services[index].id, menu: .actions(row: 0), fromHome: true)
+        return true
+    }
+
+    /// Call after a library refresh, including edits made by the phone while this sheet is open: an app
+    /// being moved keeps its place among the apps as they are now.
     func reconcileOrganizerSelection() {
         guard var panel = organizer else { return }
-        if !arrangedServices.contains(where: { $0.id == panel.selectedID }) {
-            panel.selectedID = arrangedServices.first?.id
-            organizer = panel
+        let order = appOrder
+        if var lift = panel.lift {
+            if order.contains(lift.id) {
+                lift.rest = order.filter { $0 != lift.id }
+                lift.index = lift.clamped(lift.index)
+                panel.lift = lift
+            } else {
+                panel.lift = nil
+            }
         }
+        if !order.contains(panel.selectedID ?? "") {
+            panel.selectedID = order.first
+            panel.menu = nil
+        }
+        if panel != organizer { organizer = panel }
     }
 
     func handleOrganizer(_ command: RemoteCommand) {
         guard var panel = organizer else { return }
-        let apps = arrangedServices
-        let index = apps.firstIndex { $0.id == panel.selectedID } ?? 0
+        if let menu = panel.menu {
+            handleOrganizerMenu(menu, command)
+            return
+        }
         switch command {
         case .back:
-            organizer = nil
-            return
-        case .move(.up), .move(.down):
-            guard !apps.isEmpty else { return }
-            let offset: Int
-            if case .move(.up) = command { offset = -1 } else { offset = 1 }
-            panel.selectedID = apps[min(max(index + offset, 0), apps.count - 1)].id
-        case .move(.left):
-            panel.action = AppOrganizer.Action(rawValue: max(panel.action.rawValue - 1, 0)) ?? .pin
-        case .move(.right):
-            panel.action = AppOrganizer.Action(rawValue: min(panel.action.rawValue + 1, AppOrganizer.Action.allCases.count - 1)) ?? .later
+            if panel.lift != nil {
+                panel.lift = nil            // Back puts it back where it was: nothing was saved yet
+                organizer = panel
+            } else {
+                organizer = nil
+            }
+        case .move(let direction):
+            if var lift = panel.lift {
+                guard let index = lift.step(direction) else { return }
+                lift.index = index
+                panel.lift = lift
+            } else {
+                let order = appOrder
+                guard let id = panel.selectedID, let index = order.firstIndex(of: id),
+                      let next = AppOrganizer.step(from: index, direction, count: order.count) else { return }
+                panel.selectedID = order[next]
+            }
+            organizer = panel
         case .select:
-            guard let id = panel.selectedID else { return }
-            activateOrganizerAction(panel.action, for: id)
-            return
+            if panel.lift != nil {
+                dropOrganizerApp()
+            } else if let id = panel.selectedID, appOrder.contains(id) {
+                panel.lift = AppOrganizer.Lift(id: id, in: appOrder)
+                organizer = panel
+            }
         default:
             return
         }
-        organizer = panel
     }
 
-    func activateOrganizerAction(_ action: AppOrganizer.Action, for id: String) {
-        guard organizer != nil, arrangedServices.contains(where: { $0.id == id }) else { return }
-        organizer = AppOrganizer(selectedID: id, action: action)
-        switch action {
-        case .pin: setPinned(id, !isPinned(id))
-        case .earlier: moveApp(id, by: -1)
-        case .later: moveApp(id, by: 1)
+    /// Puts the app being moved down where it is, saving Home's order if it changed.
+    func dropOrganizerApp() {
+        guard var panel = organizer, let lift = panel.lift else { return }
+        panel.lift = nil
+        panel.selectedID = lift.id
+        organizer = panel
+        if lift.order != appOrder { moveApp(lift.id, to: lift.index) }
+    }
+
+    // MARK: Press and hold
+
+    /// Press and hold Select on an app: its menu. Not while an app is being moved.
+    func openOrganizerMenu() -> Bool {
+        guard var panel = organizer, panel.lift == nil, panel.menu == nil,
+              let id = panel.selectedID, appOrder.contains(id) else { return false }
+        panel.menu = .actions(row: 0)
+        organizer = panel
+        return true
+    }
+
+    /// The menu or question that press and hold opened is showing: it goes, as with Back (from Home, back to Home).
+    func closeOrganizerMenu() -> Bool {
+        guard organizer?.menu != nil else { return false }
+        if organizer?.fromHome == true { organizer = nil } else { organizer?.menu = nil }
+        return true
+    }
+
+    private func handleOrganizerMenu(_ menu: AppOrganizer.Menu, _ command: RemoteCommand) {
+        guard let id = organizer?.selectedID else { return }
+        switch (menu, command) {
+        case (_, .back):
+            _ = closeOrganizerMenu()
+        case (.actions(let row), .move(let direction)) where direction == .up || direction == .down:
+            let next = min(max(row + (direction == .down ? 1 : -1), 0), organizerActions(for: id).count - 1)
+            if next != row { organizer?.menu = .actions(row: next) }
+        case (.actions(let row), .select), (.confirmDelete(let row), .select):
+            chooseOrganizerMenuRow(row)
+        case (.confirmDelete(let row), .move(let direction)):
+            let next = direction == .up || direction == .left ? AppOrganizer.Menu.cancelRow : AppOrganizer.Menu.deleteRow
+            if next != row { organizer?.menu = .confirmDelete(row: next) }
+        default:
+            break
         }
+    }
+
+    /// A row of the menu chosen: Hide hides the app here; Delete for Everyone asks first.
+    func chooseOrganizerMenuRow(_ row: Int) {
+        guard let panel = organizer, let menu = panel.menu, let id = panel.selectedID else { return }
+        switch menu {
+        case .actions:
+            let actions = organizerActions(for: id)
+            guard actions.indices.contains(row) else { return }
+            switch actions[row] {
+            case .editHomeScreen:
+                // Arrange Apps, with this app picked up to move; Select puts it down.
+                organizer?.menu = nil
+                organizer?.fromHome = false
+                organizer?.lift = AppOrganizer.Lift(id: id, in: appOrder)
+            case .hide: removeOrganizerApp(id) { hideApp($0) }
+            case .deleteForEveryone: organizer?.menu = .confirmDelete(row: AppOrganizer.Menu.cancelRow)
+            }
+        case .confirmDelete:
+            if row == AppOrganizer.Menu.deleteRow {
+                removeOrganizerApp(id) { deleteAppForEveryone($0) }
+            } else {
+                _ = closeOrganizerMenu()
+            }
+        }
+    }
+
+    /// Hides or deletes an app; focus goes to the app that takes its place.
+    private func removeOrganizerApp(_ id: String, _ remove: (String) -> Void) {
+        let order = appOrder
+        guard let index = order.firstIndex(of: id) else { return }
+        organizer?.menu = nil
+        organizer?.selectedID = order.indices.contains(index + 1) ? order[index + 1] : (index > 0 ? order[index - 1] : nil)
+        if organizer?.fromHome == true { organizer = nil }   // held on Home: back to Home
+        remove(id)
+    }
+
+    // MARK: The pointer
+
+    /// A click on an app: it takes focus, and an app being moved goes down where it is.
+    func organizerClick(_ id: String) {
+        guard organizer != nil else { return }
+        if organizer?.menu != nil { organizer?.menu = nil; return }
+        if organizer?.lift != nil { dropOrganizerApp(); return }
+        if organizer?.selectedID != id, appOrder.contains(id) { organizer?.selectedID = id }
+    }
+
+    /// Pressing and holding an app with the pointer: its menu.
+    func organizerHold(_ id: String) {
+        guard organizer?.lift == nil, appOrder.contains(id) else { return }
+        organizer?.selectedID = id
+        organizer?.menu = nil
+        if openOrganizerMenu() { feedback.play(.select, from: .pointer) }
+    }
+
+    /// The pointer starts dragging an app: it's picked up.
+    func beginOrganizerDrag(_ id: String) {
+        guard var panel = organizer, appOrder.contains(id) else { return }
+        if panel.lift?.id == id { return }
+        panel.menu = nil
+        panel.selectedID = id
+        panel.lift = AppOrganizer.Lift(id: id, in: appOrder)
+        organizer = panel
+        feedback.play(.select, from: .pointer)
+    }
+
+    /// The dragged app is over another place: the others make room, with the move sound.
+    func dragOrganizerApp(to index: Int) {
+        guard var lift = organizer?.lift else { return }
+        let target = lift.clamped(index)
+        guard target != lift.index else { return }
+        lift.index = target
+        organizer?.lift = lift
+        feedback.play(.step, from: .pointer)
+    }
+
+    func endOrganizerDrag() {
+        guard organizer?.lift != nil else { return }
+        dropOrganizerApp()
+        feedback.play(.select, from: .pointer)
+    }
+}
+
+// MARK: - The sheet
+
+/// Where everything sits, in the sheet's own coordinates: Home's tiles, dock, columns and gaps.
+struct ArrangeGrid {
+    static let space = "arrange-apps"
+    static let tile = CGSize(width: 250, height: 150)
+    static let spacing: CGFloat = 28
+    /// The dock's padding either side of its row, as on Home.
+    static let inset: CGFloat = 44
+    static let width: CGFloat = 1728
+    static let dockTop: CGFloat = 96
+    static let dockHeight: CGFloat = 220
+    /// Room under a row for the focused app's name, as on Home.
+    static let rowGap: CGFloat = 80
+    /// Home's second row sits 60 points below the dock.
+    static let belowTop = dockTop + dockHeight + 60
+
+    /// Every tile, Add App and Settings included.
+    let count: Int
+
+    var rows: Int { max((count + AppOrganizer.columns - 1) / AppOrganizer.columns, 1) }
+    var height: CGFloat { Self.belowTop + CGFloat(max(rows - 1, 1)) * (Self.tile.height + Self.rowGap) }
+
+    /// The middle of the tile at a place in Home's order.
+    static func center(of index: Int) -> CGPoint {
+        let row = index / AppOrganizer.columns, column = index % AppOrganizer.columns
+        let x = inset + CGFloat(column) * (tile.width + spacing) + tile.width / 2
+        if row == 0 { return CGPoint(x: x, y: dockTop + dockHeight / 2) }
+        return CGPoint(x: x, y: belowTop + CGFloat(row - 1) * (tile.height + rowGap) + tile.height / 2)
+    }
+
+    /// The place under a point, for the pointer: the dock and the gap just below it are the dock's row.
+    static func index(at point: CGPoint) -> Int {
+        let column = min(max(Int(((point.x - inset + spacing / 2) / (tile.width + spacing)).rounded(.down)), 0),
+                         AppOrganizer.columns - 1)
+        if point.y < dockTop + dockHeight + 30 { return column }
+        let row = 1 + max(0, Int(((point.y - belowTop + rowGap / 2) / (tile.height + rowGap)).rounded(.down)))
+        return row * AppOrganizer.columns + column
     }
 }
 
@@ -73,105 +342,180 @@ struct AppOrganizerSheet: View {
     @ObservedObject var tv: TVController
     @Environment(\.canvasSize) private var canvas
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Where the pointer has hold of the dragged tile, from its middle.
+    @State private var grab: CGSize = .zero
+    @State private var pointer: CGPoint?
+
+    private static let top: CGFloat = 64
 
     var body: some View {
-        let apps = tv.arrangedServices
-        VStack(alignment: .leading, spacing: 22) {
-            HStack {
-                Text("Arrange Apps").font(.system(size: 48, weight: .heavy)).tracking(-1)
-                Spacer()
-                Button("Done") { tv.organizer = nil }
-                    .font(.system(size: 24, weight: .semibold))
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 26).padding(.vertical, 14)
-                    .background(.white.opacity(0.12), in: Capsule())
-            }
+        let panel = tv.organizer ?? AppOrganizer()
+        let order = tv.organizerOrder
+        let apps = Dictionary(tv.arrangedServices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Add App and Settings stay last, as on Home; they don't move.
+        let fixed = tv.services.filter { $0.kind == .addApp || $0.kind == .settings }
+        let grid = ArrangeGrid(count: order.count + fixed.count)
+        let focused = (panel.lift?.id ?? panel.selectedID).flatMap { order.firstIndex(of: $0) }
+        let shift = scroll(to: focused)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(Array(apps.enumerated()), id: \.element.id) { index, service in
-                            appRow(service, position: index + 1)
-                                .id(service.id)
+        ZStack(alignment: .topLeading) {
+            Text("Arrange Apps").font(.tv(.title3, emphasized: true))
+            GlassDock()
+                .frame(width: ArrangeGrid.width, height: ArrangeGrid.dockHeight)
+                .offset(y: ArrangeGrid.dockTop)
+                .allowsHitTesting(false)
+            ForEach(Array(order.enumerated()), id: \.element) { index, id in
+                if let service = apps[id] { tile(service, at: index, panel: panel) }
+            }
+            ForEach(Array(fixed.enumerated()), id: \.element.id) { offset, service in
+                AppTile(service: service, focused: false, tilt: .zero)
+                    .position(ArrangeGrid.center(of: order.count + offset))
+                    .allowsHitTesting(false)
+            }
+            if let menu = panel.menu, let id = panel.selectedID, let index = order.firstIndex(of: id) {
+                menuCard(menu, for: id, name: apps[id]?.name ?? "", at: index)
+                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                    .zIndex(10)
+            }
+        }
+        .frame(width: ArrangeGrid.width, height: grid.height, alignment: .topLeading)
+        .coordinateSpace(name: ArrangeGrid.space)
+        .offset(x: (canvas.width - ArrangeGrid.width) / 2, y: Self.top - shift)
+        .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+        .clipped()
+        .foregroundStyle(.white)
+        .animation(reduceMotion ? nil : Motion.focus, value: order)
+        .animation(reduceMotion ? nil : Motion.navigate, value: shift)
+        .animation(Motion.focus, value: panel)
+    }
+
+    /// How far the sheet scrolls up so the focused row, with its name, stays on screen.
+    private func scroll(to index: Int?) -> CGFloat {
+        guard let index, index >= AppOrganizer.columns else { return 0 }
+        let bottom = ArrangeGrid.center(of: index).y + ArrangeGrid.tile.height / 2
+        return max(0, Self.top + bottom + 100 - canvas.height)
+    }
+
+    private func tile(_ service: Service, at index: Int, panel: AppOrganizer) -> some View {
+        let lifted = panel.lift?.id == service.id
+        let focused = lifted || (panel.lift == nil && panel.selectedID == service.id)
+        let follows = lifted && pointer != nil
+        let center = follows ? CGPoint(x: pointer!.x - grab.width, y: pointer!.y - grab.height) : ArrangeGrid.center(of: index)
+        // As on Home, the focused app's name shows under the rows below the dock.
+        let named = focused && !follows && index >= AppOrganizer.columns
+        return AppTile(service: service, focused: focused, tilt: .zero)
+            .scaleEffect(lifted ? 1.06 : 1)
+            .shadow(color: .black.opacity(lifted ? 0.5 : 0), radius: lifted ? 40 : 0, y: lifted ? 34 : 0)
+            .modifier(Wiggle(active: lifted && !reduceMotion))
+            .overlay(alignment: .bottom) {
+                Text(service.name)
+                    .font(.tv(.caption1))
+                    .fixedSize()
+                    .offset(y: 50)
+                    .opacity(named ? 1 : 0)
+                    .animation(Motion.focus, value: named)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { tv.organizerClick(service.id) }
+            .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 6) { tv.organizerHold(service.id) }
+            .simultaneousGesture(drag(service.id, from: ArrangeGrid.center(of: index)))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(service.name)
+            .accessibilityAddTraits(focused ? .isSelected : [])
+            .position(center)
+            // The dragged tile stays under the pointer; the others ease into their new places.
+            .transaction { if follows { $0.animation = nil } }
+            .zIndex(lifted ? 3 : focused ? 2 : 1)
+    }
+
+    private func drag(_ id: String, from center: CGPoint) -> some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named(ArrangeGrid.space))
+            .onChanged { value in
+                if pointer == nil || tv.organizer?.lift?.id != id {
+                    grab = CGSize(width: value.startLocation.x - center.x, height: value.startLocation.y - center.y)
+                    tv.beginOrganizerDrag(id)
+                }
+                pointer = value.location
+                tv.dragOrganizerApp(to: ArrangeGrid.index(at: CGPoint(x: value.location.x - grab.width,
+                                                                       y: value.location.y - grab.height)))
+            }
+            .onEnded { _ in
+                pointer = nil
+                tv.endOrganizerDrag()
+            }
+    }
+
+    /// Press and hold's menu, beside the app, or the question before Delete for Everyone.
+    private func menuCard(_ menu: AppOrganizer.Menu, for id: String, name: String, at index: Int) -> some View {
+        let width: CGFloat = 470
+        let center = ArrangeGrid.center(of: index)
+        let column = index % AppOrganizer.columns
+        let reach = ArrangeGrid.tile.width * 0.57 + 32 + width / 2
+        return VStack(alignment: .leading, spacing: 10) {
+            switch menu {
+            case .actions(let row):
+                ForEach(Array(tv.organizerActions(for: id).enumerated()), id: \.offset) { offset, action in
+                    switch action {
+                    case .editHomeScreen:
+                        menuRow("Edit Home Screen", systemImage: "square.grid.3x3", focused: row == offset, destructive: false) {
+                            tv.chooseOrganizerMenuRow(offset)
                         }
-                        if apps.isEmpty {
-                            Text("No Apps")
-                                .font(.system(size: 26)).padding(40)
+                    case .hide:
+                        menuRow("Hide", systemImage: "eye.slash", focused: row == offset, destructive: false) {
+                            tv.chooseOrganizerMenuRow(offset)
+                        }
+                    case .deleteForEveryone:
+                        menuRow("Delete for Everyone", systemImage: "trash", focused: row == offset, destructive: true) {
+                            tv.chooseOrganizerMenuRow(offset)
                         }
                     }
-                    .padding(8)
                 }
-                .frame(height: min(550, max(280, canvas.height - 450)))
-                .onAppear { scrollToSelection(proxy) }
-                .onChange(of: tv.organizer?.selectedID) { _, _ in scrollToSelection(proxy) }
-                .onChange(of: apps.map(\.id)) { _, _ in scrollToSelection(proxy) }
+            case .confirmDelete(let row):
+                Text("Delete “\(name)” for Everyone?")
+                    .font(.tv(.callout, emphasized: true))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 8)
+                menuRow("Cancel", systemImage: nil, focused: row == AppOrganizer.Menu.cancelRow, destructive: false) {
+                    tv.chooseOrganizerMenuRow(AppOrganizer.Menu.cancelRow)
+                }
+                menuRow("Delete for Everyone", systemImage: "trash", focused: row == AppOrganizer.Menu.deleteRow, destructive: true) {
+                    tv.chooseOrganizerMenuRow(AppOrganizer.Menu.deleteRow)
+                }
             }
         }
-        .padding(48)
-        .frame(width: 1340, alignment: .leading)
-        .tvGlass(in: RoundedRectangle(cornerRadius: 44, style: .continuous))
-        .foregroundStyle(.white)
-        .frame(width: canvas.width, height: canvas.height)
+        .padding(22)
+        .frame(width: width, alignment: .leading)
+        .tvGlass(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 30, y: 16)
+        .position(x: column < AppOrganizer.columns - 2 ? center.x + reach : center.x - reach, y: center.y)
     }
 
-    private func scrollToSelection(_ proxy: ScrollViewProxy) {
-        guard let id = tv.organizer?.selectedID else { return }
-        withAnimation(reduceMotion ? nil : Motion.navigate) { proxy.scrollTo(id, anchor: .center) }
+    private func menuRow(_ title: String, systemImage: String?, focused: Bool, destructive: Bool,
+                         action: @escaping () -> Void) -> some View {
+        HStack(spacing: 16) {
+            if let systemImage { Image(systemName: systemImage).frame(width: 34) }
+            Text(title)
+            Spacer(minLength: 0)
+        }
+        .font(.tv(.body, emphasized: true))
+        .foregroundStyle(destructive ? Color(hex: "#FF453A") : (focused ? .black : .white))
+        .padding(.horizontal, 22)
+        .frame(height: 66)
+        .focusPlatter(RoundedRectangle(cornerRadius: 18, style: .continuous), focused: focused, glass: false)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: action)
     }
+}
 
-    private func appRow(_ service: Service, position: Int) -> some View {
-        let selected = tv.organizer?.selectedID == service.id
-        let pinned = tv.isPinned(service.id)
-        return HStack(spacing: 16) {
-            Text("\(position)")
-                .font(.system(size: 22, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(.white.opacity(0.55)).frame(width: 38)
-            Button {
-                tv.organizer?.selectedID = service.id
-            } label: {
-                HStack(spacing: 14) {
-                    Image(systemName: pinned ? "star.fill" : "app")
-                        .font(.system(size: 25)).foregroundStyle(pinned ? .yellow : .white.opacity(0.65))
-                        .frame(width: 30)
-                    Text(service.name).font(.system(size: 27, weight: .semibold)).lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            actionButton(.pin, title: pinned ? "Unfavorite" : "Favorite", symbol: pinned ? "star.slash" : "star",
-                         service: service, enabled: true)
-            actionButton(.earlier, title: "Move Up", symbol: "arrow.up", service: service,
-                         enabled: tv.canMoveApp(service.id, by: -1))
-            actionButton(.later, title: "Move Down", symbol: "arrow.down", service: service,
-                         enabled: tv.canMoveApp(service.id, by: 1))
-        }
-        .padding(.horizontal, 20).padding(.vertical, 18)
-        .background(.white.opacity(selected ? 0.13 : 0.05), in: RoundedRectangle(cornerRadius: 22))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22)
-                .strokeBorder(.white.opacity(selected ? 0.5 : 0), lineWidth: 2)
-                .allowsHitTesting(false)
-        }
-        .animation(reduceMotion ? nil : Motion.focus, value: selected)
-    }
+/// The lifted app's gentle wiggle, as Apple TV's while it moves an app. It runs only while an app is lifted,
+/// a few degrees at 30 frames a second on that one tile.
+private struct Wiggle: ViewModifier {
+    let active: Bool
 
-    private func actionButton(_ action: AppOrganizer.Action, title: String, symbol: String,
-                              service: Service, enabled: Bool) -> some View {
-        let focused = tv.organizer?.selectedID == service.id && tv.organizer?.action == action
-        return Button {
-            tv.activateOrganizerAction(action, for: service.id)
-        } label: {
-            Label(title, systemImage: symbol)
-                .font(.system(size: 22, weight: .semibold))
-                .frame(width: 190, height: 54)
-                .foregroundStyle(focused ? .black : .white)
-                .background(focused ? .white : .white.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
-                .opacity(enabled ? 1 : 0.35)
+    func body(content: Content) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            content.rotationEffect(.degrees(active ? sin(t * 2 * .pi * 2.4) * 1.3 : 0))
         }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .accessibilityLabel("\(title) \(service.name)")
-        .animation(reduceMotion ? nil : Motion.focus, value: focused)
     }
 }

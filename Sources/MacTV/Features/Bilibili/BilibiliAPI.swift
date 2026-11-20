@@ -51,16 +51,17 @@ struct BiliTrend: Hashable, Sendable {
     let icon: URL?
 }
 
-/// 搜索历史：在这台 Mac 上搜过的词，最新的在前，最多记 20 个
+/// 搜索历史：在这台 Mac 上搜过的词，最新的在前，最多记 20 个。每个人（个人资料）各记各的（见 ProfileSpace）
 enum BiliSearchHistory {
     private static let key = "bilibiliSearchHistory"
-    static var all: [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+    private static var store: UserDefaults { ProfileSpace.current.defaults }
+    static var all: [String] { store.stringArray(forKey: key) ?? [] }
     static func add(_ keyword: String) {
         let word = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !word.isEmpty else { return }
-        UserDefaults.standard.set(Array(([word] + all.filter { $0 != word }).prefix(20)), forKey: key)
+        store.set(Array(([word] + all.filter { $0 != word }).prefix(20)), forKey: key)
     }
-    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
+    static func clear() { store.removeObject(forKey: key) }
 }
 
 /// 一个 UP 主

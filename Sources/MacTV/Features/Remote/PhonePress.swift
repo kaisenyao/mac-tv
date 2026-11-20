@@ -10,8 +10,8 @@ import AppKit
 /// |---|---|---|
 /// | 上下左右 | 走一格 | 按 Mac 的按键重复速度一直走；网易云播放界面里左右是快退 / 快进，松手从那里接着放 |
 /// | OK（确认） | 确认 | 卡片菜单、看视频时右边的面板，开着时再按住收起；没有菜单的地方松手时是一次确认 |
-/// | 返回 | 返回 | 回主屏（和按住 Esc 一样） |
-/// | 主屏 | 回主屏 | 控制中心，开着时再按住收起（和 Siri Remote 上按住电视键一样） |
+/// | 返回 | 返回（应用最上一层是回主屏，应用留在后台） | 回主屏，应用留在后台（和按住 Esc 一样，见 AppQuit） |
+/// | 主屏 | 回主屏；连按两下是 App Switcher | 控制中心，开着时再按住收起（和 Siri Remote 上按住电视键一样） |
 ///
 /// 按住时手机每隔一会儿发一次 alive；万一"松开"在网络上丢了，Mac 一秒多收不到就当松开了，不会一直走下去
 @MainActor
@@ -52,7 +52,7 @@ final class PhonePresses {
     private func begin(_ key: Key, tv: TVController, source: Feedback.Source) {
         switch key {
         case .back:
-            tv.handle(.home, from: source)                      // 按住返回 = 回主屏
+            tv.handle(.home, from: source)                      // 按住返回 = 回主屏，应用留在后台（见 AppQuit）
             holding[key] = .done
         case .home:
             tv.handle(.controlCenter, from: source)             // 按住主屏 = 控制中心（开着时再按住收起）

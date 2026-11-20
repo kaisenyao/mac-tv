@@ -392,22 +392,3 @@ private struct DedaoTranscriptColumn: View, Equatable {
         }
     }
 }
-
-/// 进度条（播放界面、右上角）
-struct DedaoProgressBar: View {
-    let time: Double
-    let duration: Double
-    var dark = false
-    var height: CGFloat = 10
-
-    var body: some View {
-        GeometryReader { geo in
-            let fraction = duration > 0 ? min(1, max(0, time / duration)) : 0
-            ZStack(alignment: .leading) {
-                Capsule().fill((dark ? Color.black : .white).opacity(0.18))
-                Capsule().fill(dark ? Color.black.opacity(0.8) : .white).frame(width: max(height, geo.size.width * fraction))
-            }
-        }
-        .frame(height: height)
-    }
-}

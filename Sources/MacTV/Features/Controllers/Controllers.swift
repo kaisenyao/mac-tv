@@ -8,15 +8,22 @@ struct ControllerInfo: Equatable {
     var battery: Float?
     var charging = false
 
+    /// The charge as a whole percentage, when the controller reports it.
+    var percent: Int? { battery.map { Int(($0 * 100).rounded()) } }
+
     var batterySymbol: String {
         if charging { return "battery.100percent.bolt" }
-        guard let battery else { return "battery.100percent" }
-        switch battery {
-        case ..<0.15: return "battery.0percent"
-        case ..<0.4: return "battery.25percent"
-        case ..<0.65: return "battery.50percent"
-        case ..<0.9: return "battery.75percent"
-        default: return "battery.100percent"
+        return percent.map(Self.batterySymbol) ?? "battery.100percent"
+    }
+
+    /// The battery symbol for a charge of 0–100%: a controller's, or the Siri Remote's.
+    static func batterySymbol(_ percent: Int) -> String {
+        switch percent {
+        case ..<15: "battery.0percent"
+        case ..<40: "battery.25percent"
+        case ..<65: "battery.50percent"
+        case ..<90: "battery.75percent"
+        default: "battery.100percent"
         }
     }
 }
@@ -36,6 +43,9 @@ final class ControllerInput {
     private weak var tv: TVController?
     private var held: RemoteCommand.Direction?
     private var repeatTimer: Timer?
+    /// B is down: let go soon it's Back; held past the hold time it's Home (see AppQuit).
+    private var backTimer: Timer?
+    private var backHeld = false
     private var observers: [NSObjectProtocol] = []
 
     init(tv: TVController) {
@@ -62,7 +72,7 @@ final class ControllerInput {
         // A PlayStation controller's light bar glows Mac TV's phosphor green.
         controller.light?.color = GCColor(red: 0.25, green: 0.94, blue: 0.56)
         press(pad.buttonA, .select)
-        press(pad.buttonB, .back)
+        pressBack(pad.buttonB)
         press(pad.buttonX, .playPause)
         press(pad.buttonMenu, .home)
         press(pad.leftShoulder, .seek(forward: false))
@@ -77,6 +87,30 @@ final class ControllerInput {
         stopRepeat()
         let next = GCController.controllers().first { $0 !== controller && $0.extendedGamepad != nil }
         tv?.controllerChanged(Self.info(for: controller), connected: false, remaining: next.map(Self.info(for:)))
+    }
+
+    /// B, as Esc on the keyboard: a press is Back when it's let go; held half a second, Home.
+    private func pressBack(_ button: GCControllerButtonInput) {
+        button.pressedChangedHandler = { [weak self] _, _, pressed in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if pressed {
+                    self.backHeld = false
+                    self.backTimer?.invalidate()
+                    self.backTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self else { return }
+                            self.backHeld = true
+                            self.send(.home)
+                        }
+                    }
+                } else {
+                    self.backTimer?.invalidate()
+                    self.backTimer = nil
+                    if !self.backHeld { self.send(.back) }
+                }
+            }
+        }
     }
 
     private func press(_ button: GCControllerButtonInput, _ command: RemoteCommand) {

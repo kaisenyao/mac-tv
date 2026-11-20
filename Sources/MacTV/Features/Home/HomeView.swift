@@ -22,6 +22,7 @@ private struct Layout {
 
 struct HomeView: View {
     @ObservedObject var tv: TVController
+    @ObservedObject private var siriRemote = SiriRemoteStatus.shared
     @Environment(\.canvasSize) private var canvas
     @Namespace private var pills
 
@@ -53,44 +54,46 @@ struct HomeView: View {
                 // An expanded banner takes the whole screen; the dock slides away, off the bottom.
                 .offset(y: gridOffset)
 
-            // The status row: always the same pills, Control Center or not. Up from the Top Shelf focuses it;
-            // Left and Right move along it, skipping the clock.
-            GlassGroup { HStack(spacing: 14) {
-                // While the Mac can't sleep with its lid closed, say so where it's always seen.
-                if tv.lidSleepOff {
-                    let focused = tv.focus == .status(.lid)
-                    Label("Lid Sleep Off", systemImage: "moon.zzz")
-                        .font(.tv(.caption2))
-                        .padding(.horizontal, 20)
-                        .frame(height: 50)
-                        .foregroundStyle(focused ? .black : .white)
-                        .focusPlatter(Capsule(), focused: focused)
-                        .contentShape(Capsule())
-                        .onTapGesture { tv.activateStatus(.lid) }
-                        .tvGlassID("lid", in: pills)
+            // The status row, as Apple TV's: the time, small status glyphs (a connected remote, the lid staying
+            // awake), the Control Center button and the profile. Up from the Top Shelf focuses it; Left and Right
+            // move between the button and the profile.
+            // At Apple TV's own sizes: the time in 24-point type, a 52-point button and a small avatar.
+            GlassGroup { HStack(spacing: 16) {
+                StatusClock(twentyFour: tv.preferences.twentyFourHourTime)
+                    .padding(.trailing, 4)
+                ForEach(statusGlyphs, id: \.self) { symbol in
+                    Image(systemName: symbol)
+                        .font(.system(size: 20, weight: .medium))
+                        .opacity(0.9)
+                        .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
+                        .transition(.opacity)
                 }
                 // Control Center: white while it's open or focused, like Apple TV's.
                 let lit = tv.focus == .status(.controlCenter) || tv.controlCenter != nil
-                Image(systemName: "switch.2")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(lit ? .black : .white)
-                    .frame(width: 50, height: 50)
-                    .focusPlatter(Circle(), focused: lit)
-                    .contentShape(Circle())
-                    .onTapGesture { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) }
-                    .tvGlassID("control-center", in: pills)
-                ClockPill().tvGlassID("clock", in: pills)
+                Button { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) } label: {
+                    Image(systemName: "switch.2")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(lit ? .black : .white)
+                        .frame(width: 52, height: 52)
+                        .focusPlatter(Circle(), focused: lit)
+                        .contentShape(Circle())
+                        .scaleEffect(lit ? 1.08 : 1)
+                        .tvGlassID("control-center", in: pills)
+                }
+                .buttonStyle(PressDip())
                 let profileFocused = tv.focus == .status(.profile)
-                ProfileAvatar(profile: tv.profile, size: 50)
-                    .overlay(Circle().strokeBorder(.white, lineWidth: profileFocused ? 3 : 0).padding(-5))
-                    .contentShape(Circle())
-                    .onTapGesture { tv.activateStatus(.profile) }
+                Button { tv.activateStatus(.profile) } label: {
+                    ProfileAvatar(profile: tv.profile, size: 38)
+                        .overlay(Circle().strokeBorder(.white, lineWidth: profileFocused ? 2.5 : 0).padding(-4))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(PressDip())
             } }
                 .animation(Motion.focus, value: tv.focus)
-                .animation(Motion.appear, value: tv.lidSleepOff)
+                .animation(Motion.appear, value: statusGlyphs)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 96)
-                .padding(.top, 56)
+                .padding(.trailing, 80)
+                .padding(.top, 48)
                 .modifier(ClearsCornerForNotices(notices: tv.notices, inGrid: tv.inGrid))
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
@@ -99,6 +102,28 @@ struct HomeView: View {
         .animation(Motion.navigate, value: focusedRow)
         .animation(Motion.navigate, value: shelfFocused)
         .animation(Motion.appear, value: tv.shelfAppIndex)
+    }
+}
+
+extension HomeView {
+    /// The status row's glyphs: a Siri Remote or game controller that's connected, and the lid staying awake.
+    private var statusGlyphs: [String] {
+        [siriRemote.connected ? "appletvremote.gen4.fill" : nil, tv.controller == nil ? nil : "gamecontroller.fill",
+         tv.lidSleepOff ? "laptopcomputer" : nil].compactMap { $0 }
+    }
+}
+
+/// The status row's time, plain like Apple TV's, 12- or 24-hour as Settings › General says.
+private struct StatusClock: View {
+    let twentyFour: Bool
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            Text(TimeOfDay.text(context.date, twentyFour: twentyFour))
+                .font(.system(size: 24, weight: .semibold))
+                .monospacedDigit()
+                .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
+        }
     }
 }
 
@@ -113,10 +138,13 @@ private struct ClearsCornerForNotices: ViewModifier {
     }
 }
 
+/// The time in a glass pill (Movies' corner), 12- or 24-hour as Settings › General says.
 struct ClockPill: View {
+    let twentyFour: Bool
+
     var body: some View {
         TimelineView(.everyMinute) { context in
-            Text(context.date.formatted(date: .omitted, time: .shortened))
+            Text(TimeOfDay.text(context.date, twentyFour: twentyFour))
                 .font(.tv(.caption1))
                 .monospacedDigit()
                 .padding(.horizontal, 20)
@@ -191,18 +219,6 @@ struct AppCell: View {
         let index = item.index, service = item.service
         let focused = tv.focus == .app(index)
         TiltingAppTile(pointer: tv.pointerTilt, service: service, focused: focused)
-            .overlay(alignment: .topTrailing) {
-                if tv.isPinned(service.id) {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(.yellow)
-                        .padding(9)
-                        .background(.black.opacity(0.7), in: Circle())
-                        .padding(10)
-                        .accessibilityLabel("Favorite")
-                        .allowsHitTesting(false)
-                }
-            }
             .overlay(alignment: .bottom) {
                 Text(service.name)
                     .font(.tv(.caption1))

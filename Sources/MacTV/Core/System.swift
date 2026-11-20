@@ -196,6 +196,14 @@ struct PowerStatus: Equatable {
 /// when power or displays change, so Mac TV re-applies it while the option is on. A guard
 /// process (`--lid-guard`) hands it back if Mac TV quits or crashes.
 enum LidSleep {
+    /// The Mac has a lid: only a laptop's power manager reports `AppleClamshellState`. Read once.
+    static let available: Bool = {
+        let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard root != 0 else { return false }
+        defer { IOObjectRelease(root) }
+        return IORegistryEntryCreateCFProperty(root, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0) != nil
+    }()
+
     @discardableResult
     static func setPrevented(_ prevented: Bool) -> Bool {
         let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))

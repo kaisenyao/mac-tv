@@ -53,8 +53,8 @@ enum SiriRemoteAction: Equatable {
     case press(PhonePresses.Key, PhonePresses.Phase)
     case playPause
     case volume(Int), mute
-    /// 电源键：屏幕亮着就关，关着就开
-    case power
+    /// The Power button, as on Apple TV: pressed, it wakes a display that's off (awake, nothing); held, Sleep Now
+    case power, powerHold
     /// 沿外圈转了一格：+1 顺时针，-1 逆时针（一圈 8 格）
     case wheel(Int)
     /// 在触控面上滑：和手机遥控器触控板上的双指滑动一样
@@ -72,7 +72,8 @@ enum SiriRemoteAction: Equatable {
 ///   (directions 0.35 s, the rest 0.5 s), then "still held" every 0.3 s until release.
 ///   What a tap and a hold do is PhonePresses' job: the same as the keyboard.
 /// - Volume acts on press and repeats while held (after 0.45 s, every 0.16 s), like the phone's volume keys.
-/// - Play/Pause, Mute and Power act on press.
+/// - Play/Pause and Mute act on press. Power is a press (on release) or, held 0.5 s, a hold.
+/// - Siri does nothing yet.
 struct SiriRemoteButtons {
     static let directionHold: TimeInterval = 0.35
     static let buttonHold: TimeInterval = 0.5
@@ -103,13 +104,15 @@ struct SiriRemoteButtons {
             return [Self.volume(button)]
         case .playPause: held[button] = Held(); return [.playPause]
         case .mute: held[button] = Held(); return [.mute]
-        case .power: held[button] = Held(); return [.power]
-        default: held[button] = Held(); return []      // Siri：先不用（以后给语音助手）
+        case .power: held[button] = Held(deadline: time + Self.buttonHold); return []
+        default: held[button] = Held(); return []      // Siri: nothing yet
         }
     }
 
     mutating func release(_ button: SiriRemoteButton, at time: TimeInterval) -> [SiriRemoteAction] {
-        guard let state = held.removeValue(forKey: button), let key = Self.key(button) else { return [] }
+        guard let state = held.removeValue(forKey: button) else { return [] }
+        if button == .power { return state.holding ? [] : [.power] }
+        guard let key = Self.key(button) else { return [] }
         return [.press(key, state.holding ? .release : .tap)]
     }
 
@@ -122,6 +125,10 @@ struct SiriRemoteButtons {
                 actions.append(.press(key, state.holding ? .alive : .hold))
                 state.holding = true
                 state.deadline = time + Self.aliveInterval
+            } else if button == .power {
+                actions.append(.powerHold)
+                state.holding = true
+                state.deadline = nil
             } else {
                 actions.append(Self.volume(button))
                 state.deadline = time + Self.volumeInterval
@@ -148,7 +155,7 @@ struct SiriRemoteButtons {
         case .right: .right
         case .select: .select
         case .back: .back
-        case .tv: .home        // TV 键 = 手机上的主屏键（按一下回主屏，按住控制中心）
+        case .tv: .home        // the TV button, as the phone's: Home; twice, the App Switcher; held, Control Center
         default: nil
         }
     }
@@ -701,10 +708,12 @@ extension TVController {
     var otherRemoteConnected: Bool { SiriRemoteStatus.shared.connected || controller != nil }
 
     /// A Siri Remote or game controller connected or was used: the pairing sheet shown at launch
-    /// goes away (as it does when the phone connects), and Setup's remote step moves on.
+    /// goes away (as it does when the phone connects), and Setup's remote step shows it connected.
+    /// A Siri Remote connecting is when Mac TV asks to read its buttons (Input Monitoring).
     func noteOtherRemote() {
         remoteCoordinator.noteOtherRemote()
         notePhoneDuringSetup()
+        if SiriRemoteStatus.shared.connected { askForInputMonitoring() }
     }
 
     /// Everything goes the way the phone remote's does, so both remotes feel the same.
@@ -715,7 +724,8 @@ extension TVController {
         case .playPause: handle(.playPause, from: .siriRemote)
         case .volume(let delta): handle(.volume(delta), from: .siriRemote)
         case .mute: handle(.mute, from: .siriRemote)
-        case .power: handle(displaysSleeping ? .screenOn : .screenOff, from: .siriRemote)
+        case .power: if displaysSleeping { handle(.screenOn, from: .siriRemote) }   // awake: nothing, as on Apple TV
+        case .powerHold: handle(.sleepMac, from: .siriRemote)                         // Control Center's Sleep Now
         case .wheel(let step): handle(.wheel(step), from: .siriRemote)
         // 和手机点按区上的滑动一样交给 TrackpadGestures：焦点跟着手指走（像 Apple TV），弹出的面板里也是那里管（一次滑动走一格）
         case .swipe(let dx, let dy, let phase):

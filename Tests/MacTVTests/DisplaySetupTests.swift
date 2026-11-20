@@ -12,8 +12,8 @@ import Testing
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let suite = "MacTV.DisplayTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
         let tv = TVController(library: AppLibrary(folder: folder))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -62,14 +62,5 @@ import Testing
             try png.write(to: output.appendingPathComponent("pairing-\(Int(size.width)).png"))
             renderWindow.close()
         }
-    }
-
-    @Test func displayStepWrapsAroundConnectedDisplays() {
-        let ids = ["mac", "tv", "projector"]
-        #expect(TVMode.steppedDisplay(ids, from: "mac", step: 1) == "tv")
-        #expect(TVMode.steppedDisplay(ids, from: "projector", step: 1) == "mac")
-        #expect(TVMode.steppedDisplay(ids, from: "mac", step: -1) == "projector")
-        #expect(TVMode.steppedDisplay(ids, from: "disconnected", step: 1) == "tv")
-        #expect(TVMode.steppedDisplay([], from: "mac", step: 1) == nil)
     }
 }

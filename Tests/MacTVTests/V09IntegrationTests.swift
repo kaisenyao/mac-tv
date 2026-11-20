@@ -12,40 +12,38 @@ import Testing
         try body(folder)
     }
 
-    @Test func profilesKeepIndependentPinsOrderAndAppIdentifiers() throws {
+    @Test func profilesKeepTheirOwnOrderAndShareTheAppsTheyAdd() throws {
         try withFolder { folder in
             let first = AppLibrary(folder: folder)
             let other = AppLibrary(profileID: "other", folder: folder)
-            let url = try #require(URL(string: "https://example.com"))
-            let a = first.add(name: "Video", url: url, bundleID: nil)
-            let b = other.add(name: "Video", url: url, bundleID: nil)
+            let a = first.add(name: "Video", url: URL(string: "https://example.com"), bundleID: nil)
+            let b = other.add(name: "Video", url: URL(string: "https://example.org"), bundleID: nil)
             #expect(a.id != b.id)
-            #expect(first.setPinned("youtube", true))
-            #expect(other.setPinned("netease", true))
-            #expect(first.move("movies", by: -1))
-            let expected = first.services().map(\.id)
-            #expect(AppLibrary(folder: folder).services().map(\.id) == expected)
-            #expect(!other.isPinned("youtube"))
-            #expect(!first.isPinned("netease"))
-            #expect(AppLibrary(profileID: "other", folder: folder).isPinned("netease"))
+            #expect(first.move("youtube", to: 0))
+            #expect(other.move("netease", to: 0))
+            #expect(AppLibrary(folder: folder).arrangement().first == "youtube")
+            let reloaded = AppLibrary(profileID: "other", folder: folder)
+            #expect(reloaded.arrangement().first == "netease")
+            #expect(Array(reloaded.arrangement().suffix(2)) == [a.id, b.id])
+            #expect(Array(AppLibrary(folder: folder).arrangement().suffix(2)) == [a.id, b.id])
         }
     }
 
-    @Test func switchingProfilesPreservesFolderAndRestoresFavourites() throws {
+    @Test func switchingProfilesPreservesFolderAndRestoresEachHomeOrder() throws {
         _ = NSApplication.shared
         try withFolder { folder in
             let profiles = ProfileStore(folder: folder)
             let second = profiles.add(named: "Second")
             let tv = TVController(library: AppLibrary(folder: folder), profiles: profiles)
-            #expect(tv.setPinned("youtube", true))
+            #expect(tv.moveApp("youtube", to: 0))
             tv.switchProfile(to: second.id)
             #expect(tv.profile.id == second.id)
             #expect(tv.library.storageFolder == folder)
-            #expect(!tv.isPinned("youtube"))
-            #expect(tv.setPinned("netease", true))
+            #expect(tv.appOrder.first != "youtube")
+            #expect(tv.moveApp("netease", to: 0))
             tv.switchProfile(to: Profile.mainID)
-            #expect(tv.isPinned("youtube"))
-            #expect(!tv.isPinned("netease"))
+            #expect(tv.appOrder.first == "youtube")
+            #expect(tv.appOrder.firstIndex(of: "netease") != 0)
         }
     }
 
@@ -62,9 +60,9 @@ import Testing
             #expect(tv.topShelfPreferences != nil)
             tv.handleTopShelfPreferences(.back)
             #expect(tv.settings?.section == .apps)
-            #expect(SettingsPanel.Section.watching.rows.contains(.playbackCheck))
+            #expect(SettingsPanel.Section.apps.rows == [.addApp, .arrangeApps, .topShelfPreferences, .movies])
             tv.setFocus(.status(.profile))
-            #expect(tv.setPinned("movies", true))
+            #expect(tv.moveApp("movies", to: 0))
             #expect(tv.focus == .status(.profile))
         }
     }
@@ -85,12 +83,13 @@ import Testing
         }
     }
 
-    @Test func completedIconsStayWithOriginatingProfile() throws {
+    @Test func anIconArrivingAfterASwitchIsEveryones() throws {
         _ = NSApplication.shared
         try withFolder { folder in
             let original = AppLibrary(folder: folder)
-            let active = AppLibrary(profileID: "second", folder: folder)
             let app = original.add(name: "Video", url: URL(string: "https://example.com"), bundleID: nil)
+            // The icon arrives once another profile is watching.
+            let active = AppLibrary(profileID: "second", folder: folder)
             let tv = TVController(library: active)
             let image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
                 NSColor.red.setFill(); NSBezierPath(rect: rect).fill(); return true
@@ -100,11 +99,12 @@ import Testing
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
             tv.useIcon(png, for: app.id, in: original)
             #expect(FileManager.default.fileExists(atPath: original.iconFile(for: app.id).path))
-            #expect(!active.containsAddedApp(app.id))
+            #expect(tv.services.first { $0.id == app.id }?.iconFile != nil, "the app is everyone's, icon and all")
             let saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("apps.json"))) as? [String: Any])
             let added = try #require(saved["added"] as? [[String: Any]])
             #expect(added.first?["accent"] != nil)
-            original.remove(app.id)
+            // Deleted for everyone: an icon arriving late doesn't bring it back.
+            #expect(original.deleteForEveryone(app.id) == .deleted)
             tv.useIcon(png, for: app.id, in: original)
             #expect(!FileManager.default.fileExists(atPath: original.iconFile(for: app.id).path))
         }

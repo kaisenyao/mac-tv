@@ -77,7 +77,7 @@ enum Catalog {
                 icon: "youtube.png", accent: "#FF2D2D", deep: "#2B0606",
                 userAgent: UserAgent.smartTV, dpadNavigation: false),
         // 原生页面（Features/Browser）：电视上的 Safari，开始页有 Safari 的收藏、常去网站和历史
-        Service(id: "browser", name: "Browser", kind: .web(URL(string: "https://www.google.com")!),
+        Service(id: "browser", name: "Web", kind: .web(URL(string: "https://www.google.com")!),
                 icon: "browser.png", accent: "#2A6CF0", deep: "#0A1F45"),
         Service(id: "movies", name: "Movies", kind: .movies, accent: "#5E5CE6", deep: "#14133A"),
         Service(id: "iina", name: "IINA", kind: .app(bundleID: "com.colliderli.iina"),

@@ -150,7 +150,8 @@ final class NeteaseStore: ObservableObject {
     let clock = NeteaseClock()
     var time: Double { clock.time }
     var duration: Double { clock.duration }
-    @Published private(set) var nowPlayingVisible = false {
+    /// 播放界面开着。只有这里自己改它；能从外面设，是给测试摆出"开着播放界面时回主屏"那个样子
+    @Published var nowPlayingVisible = false {
         // 播放界面一打开，就在后台把这首歌的歌手页、专辑页取好：点歌手名字、专辑进去时不用等
         didSet {
             guard nowPlayingVisible, !oldValue else { return }
@@ -176,9 +177,13 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var qualityIndex = 0
     @Published private(set) var actualLevel = ""
     /// 这个账号最高能听到哪一档（会员等级决定，和歌无关）。登录后问一次，之后每首歌的结果顺便更新；记在本机
-    @Published private(set) var accountMax = UserDefaults.standard.string(forKey: "neteaseAccountMax") ?? "" {
-        didSet { UserDefaults.standard.set(accountMax, forKey: "neteaseAccountMax") }
+    @Published private(set) var accountMax = NeteaseStore.store.string(forKey: "neteaseAccountMax") ?? "" {
+        didSet { if !reloading { Self.store.set(accountMax, forKey: "neteaseAccountMax") } }
     }
+    /// 网易云的设置、登录、播放进度都是每个人（个人资料）各一份：在现在在看的这个人的设置里（第一个人是原来的地方）
+    private static var store: UserDefaults { ProfileSpace.current.defaults }
+    /// 换了人，正在把他的设置读进来：不往回存，也不做改设置时要做的事
+    private var reloading = false
     private static let order = ["standard", "higher", "exhigh", "lossless", "hires", "jyeffect", "sky", "dolby", "jymaster"]
     private static func rank(_ level: String) -> Int { order.firstIndex(of: level) ?? -1 }
     /// 这首歌（用你的账号）最高能放到哪一档。还没问到时为空
@@ -194,7 +199,9 @@ final class NeteaseStore: ObservableObject {
 
     /// 问一次账号的上限：用一首确定有"超清母带"的歌按最高档去要，服务器给回来的那一档就是这个账号能到的最高一档
     private func probeAccountMax() async {
-        guard let found = await NeteaseAPI.address(song: Self.referenceSong, level: "jymaster") else { return }
+        let epoch = ProfileSpace.current.epoch
+        guard let found = await NeteaseAPI.address(song: Self.referenceSong, level: "jymaster"),
+              ProfileSpace.isCurrent(epoch) else { return }   // 问的时候换了人：那是上一个人的账号
         noteReachable(found.level)
     }
     /// 一首有超清母带的歌，只用来问账号上限
@@ -205,8 +212,8 @@ final class NeteaseStore: ObservableObject {
         if Self.rank(level) > Self.rank(accountMax) { accountMax = level }
     }
     /// 设置页里的音质：全局的，每首歌都按它去要（歌或账号没有这一档，服务器给能给的最高一档）
-    @Published private(set) var preferredLevel = UserDefaults.standard.string(forKey: "neteaseQuality") ?? "exhigh" {
-        didSet { UserDefaults.standard.set(preferredLevel, forKey: "neteaseQuality") }
+    @Published private(set) var preferredLevel = NeteaseStore.store.string(forKey: "neteaseQuality") ?? "exhigh" {
+        didSet { if !reloading { Self.store.set(preferredLevel, forKey: "neteaseQuality") } }
     }
     /// 设置页里能选的档位：知道账号上限时只列到上限（选不到的不列）。最好的在最上面
     var settableQualities: [Quality] {
@@ -232,23 +239,24 @@ final class NeteaseStore: ObservableObject {
     @Published private(set) var settingsOpen = false
     @Published private(set) var settingIndex = 0
     /// 后台播放：开着时长按 Esc 回主屏，歌接着放；关着时回主屏就像退出了应用，歌停掉，下次进来从首页开始
-    @Published private(set) var backgroundPlay = UserDefaults.standard.object(forKey: "neteaseBackground") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(backgroundPlay, forKey: "neteaseBackground") }
+    @Published private(set) var backgroundPlay = NeteaseStore.store.object(forKey: "neteaseBackground") as? Bool ?? true {
+        didSet { if !reloading { Self.store.set(backgroundPlay, forKey: "neteaseBackground") } }
     }
     /// 平衡音量：每首歌按网易云给的响度增益调音量，换歌时不会忽大忽小（和网易云客户端的同名设置一样）
-    @Published private(set) var balanceVolume = UserDefaults.standard.object(forKey: "neteaseBalance") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(balanceVolume, forKey: "neteaseBalance"); applyVolume() }
+    @Published private(set) var balanceVolume = NeteaseStore.store.object(forKey: "neteaseBalance") as? Bool ?? true {
+        didSet { if !reloading { Self.store.set(balanceVolume, forKey: "neteaseBalance"); applyVolume() } }
     }
     /// 记住播放进度：下次打开时停在上次那首歌、那个位置（暂停着，按播放接着听）
-    @Published private(set) var rememberProgress = UserDefaults.standard.object(forKey: "neteaseRemember") as? Bool ?? true {
+    @Published private(set) var rememberProgress = NeteaseStore.store.object(forKey: "neteaseRemember") as? Bool ?? true {
         didSet {
-            UserDefaults.standard.set(rememberProgress, forKey: "neteaseRemember")
+            guard !reloading else { return }
+            Self.store.set(rememberProgress, forKey: "neteaseRemember")
             if rememberProgress { saveQueue(); saveProgress() } else { Self.forgetProgress() }
         }
     }
     /// 同步听歌记录：在这里听的歌告诉网易云，手机上的"最近播放"、听歌排行、推荐都算上
-    @Published private(set) var syncHistory = UserDefaults.standard.object(forKey: "neteaseHistory") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(syncHistory, forKey: "neteaseHistory") }
+    @Published private(set) var syncHistory = NeteaseStore.store.object(forKey: "neteaseHistory") as? Bool ?? true {
+        didSet { if !reloading { Self.store.set(syncHistory, forKey: "neteaseHistory") } }
     }
 
     func isOn(_ setting: Setting) -> Bool {
@@ -273,7 +281,7 @@ final class NeteaseStore: ObservableObject {
         var title: String { ["list": "列表循环", "shuffle": "随机播放", "single": "单曲循环"][rawValue] ?? "" }
         var symbol: String { ["list": "repeat", "shuffle": "shuffle", "single": "repeat.1"][rawValue] ?? "repeat" }
     }
-    @Published private(set) var mode = PlayMode(rawValue: UserDefaults.standard.string(forKey: "neteaseMode") ?? "") ?? .list
+    @Published private(set) var mode = PlayMode(rawValue: NeteaseStore.store.string(forKey: "neteaseMode") ?? "") ?? .list
     private let player = PlaybackVolume.attached(AVPlayer())   // 电视的音量调不了时，音量键调它（见 PlaybackVolume）
     private var timeObserver: Any?
     private var bag: Set<AnyCancellable> = []
@@ -281,6 +289,7 @@ final class NeteaseStore: ObservableObject {
     private var open = false
 
     init() {
+        NeteaseAPI.useProfile(.current)   // 登录信息是现在在看的这个人的（见 ProfileSpace）
         NeteaseShelfSource.migrateSplitLists()
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] now in
             MainActor.assumeIsolated {
@@ -357,9 +366,15 @@ final class NeteaseStore: ObservableObject {
     /// 放久了（一刻钟）再进来会在后台悄悄更新一次，不打断眼前的内容。
     private func prepare() {
         guard preparing == nil else { return }
+        let epoch = ProfileSpace.current.epoch
         preparing = Task { @MainActor in
-            defer { preparing = nil }
-            if account == nil { account = NeteaseAPI.hasLogin ? await NeteaseAPI.account() : nil }
+            // 中途换了人（个人资料）：这一趟是上一个人的，什么都不留（换人时已经另起一趟）
+            defer { if ProfileSpace.isCurrent(epoch) { preparing = nil } }
+            if account == nil {
+                let found = NeteaseAPI.hasLogin ? await NeteaseAPI.account() : nil
+                guard ProfileSpace.isCurrent(epoch) else { return }
+                account = found
+            }
             checked = true
             if account == nil { startLogin(); return }
             if needsRestore { needsRestore = false; restoreProgress() }
@@ -367,16 +382,19 @@ final class NeteaseStore: ObservableObject {
         }
     }
 
-    func closed() {
+    /// keepingScreen：回主屏、网易云留在后台（见 AppQuit）：正在放的那一页（播放界面、播放列表）留着，再点进来还是它；
+    /// 只收起一时的东西（菜单、打字、音质栏、登录）
+    func closed(keepingScreen: Bool = false) {
         open = false
         loginTask?.cancel()
         stopLogin()
         endEditing()
         menu = nil
         menuParents = []
+        qualityVisible = false
+        guard !keepingScreen else { return }
         topFocus = nil
         nowPlayingVisible = false
-        qualityVisible = false
         queueVisible = false
     }
 
@@ -424,14 +442,18 @@ final class NeteaseStore: ObservableObject {
             try? await Task.sleep(for: .seconds(10))
             if let self, self.loginWatch != nil, self.loginImage == nil { self.loginSlow = true }
         }
+        // 登录是这个人的（他的网页数据、他的设置）：中途换了人就停，登上的不算到下一个人身上
+        let epoch = ProfileSpace.current.epoch, webStore = tv.profile.websiteDataStore
         loginWatch = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(1200))
-                guard let self, !Task.isCancelled, let tv = self.tv else { return }
-                let cookies = await tv.profile.websiteDataStore.httpCookieStore.allCookies().filter { $0.domain.hasSuffix("163.com") }
+                guard let self, !Task.isCancelled, ProfileSpace.isCurrent(epoch) else { return }
+                let cookies = await webStore.httpCookieStore.allCookies().filter { $0.domain.hasSuffix("163.com") }
                 guard cookies.contains(where: { $0.name == "MUSIC_U" && !$0.value.isEmpty }) else { continue }
-                NeteaseAPI.importLogin(Dictionary(cookies.map { ($0.name, $0.value) }, uniquingKeysWith: { a, _ in a }))
+                guard NeteaseAPI.importLogin(Dictionary(cookies.map { ($0.name, $0.value) }, uniquingKeysWith: { a, _ in a }),
+                                             epoch: epoch) else { return }
                 guard let account = await NeteaseAPI.account() else { continue }
+                guard ProfileSpace.isCurrent(epoch) else { return }
                 self.loginWatch = nil
                 self.stopLogin()
                 self.account = account
@@ -457,15 +479,17 @@ final class NeteaseStore: ObservableObject {
         let service = Service(id: Self.loginID, name: "网易云音乐", kind: .web(url), accent: "#E60026", deep: "#2B0206")
         tv.playbackCoordinator.playWeb(service, url: url)
         loginTask?.cancel()
+        let epoch = ProfileSpace.current.epoch, webStore = tv.profile.websiteDataStore
         loginTask = Task { @MainActor [weak self] in
             for _ in 0..<300 {
                 try? await Task.sleep(for: .seconds(2))
-                guard let self, !Task.isCancelled, let tv = self.tv else { return }
+                guard let self, !Task.isCancelled, let tv = self.tv, ProfileSpace.isCurrent(epoch) else { return }
                 guard case .player(let service) = tv.mode, service.id == Self.loginID else { return }
-                let cookies = await tv.profile.websiteDataStore.httpCookieStore.allCookies().filter { $0.domain.hasSuffix("163.com") }
+                let cookies = await webStore.httpCookieStore.allCookies().filter { $0.domain.hasSuffix("163.com") }
                 guard cookies.contains(where: { $0.name == "MUSIC_U" && !$0.value.isEmpty }) else { continue }
-                NeteaseAPI.importLogin(Dictionary(cookies.map { ($0.name, $0.value) }, uniquingKeysWith: { a, _ in a }))
-                if let account = await NeteaseAPI.account() {
+                guard NeteaseAPI.importLogin(Dictionary(cookies.map { ($0.name, $0.value) }, uniquingKeysWith: { a, _ in a }),
+                                             epoch: epoch) else { return }
+                if let account = await NeteaseAPI.account(), ProfileSpace.isCurrent(epoch) {
                     self.account = account
                     tv.returnToNetease()
                     return
@@ -579,6 +603,7 @@ final class NeteaseStore: ObservableObject {
     /// 首页从上到下：每日推荐、每日歌单、推荐歌单、我的歌单（第一个就是"我喜欢的音乐"）、排行榜
     private func loadHome() async {
         guard let account else { return }
+        let epoch = ProfileSpace.current.epoch
         loading = true
         async let daily = NeteaseAPI.daily()
         async let picks = NeteaseAPI.recommendedPlaylists()
@@ -587,6 +612,8 @@ final class NeteaseStore: ObservableObject {
         async let played = NeteaseAPI.recentSongs()
         let lists = await NeteaseAPI.playlists(user: account.id)
         let recommended = await daily
+        // 取的时候换了人（个人资料）：这是上一个人的首页，不摆
+        guard ProfileSpace.isCurrent(epoch) else { return }   // 其余几个还没回来的随之取消
         if !recommended.isEmpty { dailySongs = recommended }
         func build(_ todays: [NeteasePlaylist], _ batch: [NeteasePlaylist], _ charts: [NeteasePlaylist]) -> [Row] {
             var built: [Row] = []
@@ -602,6 +629,7 @@ final class NeteaseStore: ObservableObject {
         // 先到的先摆出来，其余几排随后补上
         if home.isEmpty { withAnimation(Motion.navigate) { home = build([], [], []) } }
         let (recommendedLists, charts, likedIDs, recent) = await (picks, tops, hearts, played)
+        guard ProfileSpace.isCurrent(epoch) else { return }
         guard self.account == account else { loading = false; return }
         let batch = Self.batch(of: recommendedLists.more, turn: picksTurn)
         if !recommendedLists.daily.isEmpty || !batch.isEmpty {
@@ -631,6 +659,7 @@ final class NeteaseStore: ObservableObject {
         Task { @MainActor in
             for list in lists.prefix(4) where songCache[list.id] == nil {
                 let songs = await NeteaseAPI.songs(playlist: list.id)
+                guard ProfileSpace.isCurrent(epoch) else { return }
                 if !songs.isEmpty { songCache[list.id] = songs }
             }
         }
@@ -889,8 +918,9 @@ final class NeteaseStore: ObservableObject {
         case .select: activate()
         case .playPause: playPauseHere()
         case .back:
-            // 在搜索结果里：Esc 回到首页
+            // 在搜索结果里：Esc 回到首页；首页就是最上一层：回主屏，网易云留在后台（见 AppQuit）
             if results != nil { withAnimation(Motion.navigate) { results = nil; query = ""; rowIndex = 0 } }
+            else { tv?.goHome() }
         default: break
         }
     }
@@ -1524,8 +1554,9 @@ final class NeteaseStore: ObservableObject {
     /// 我的歌单变了（新建、改名）：重新取一遍，首页那一排当场换掉
     private func refreshMyLists() async {
         guard let account else { return }
+        let epoch = ProfileSpace.current.epoch
         let lists = await NeteaseAPI.playlists(user: account.id)
-        guard !lists.isEmpty else { return }
+        guard !lists.isEmpty, ProfileSpace.isCurrent(epoch) else { return }
         myLists = lists
         replaceListsRow()
     }
@@ -1571,7 +1602,7 @@ final class NeteaseStore: ObservableObject {
 
     private func setMode(_ value: PlayMode) {
         mode = value
-        UserDefaults.standard.set(value.rawValue, forKey: "neteaseMode")
+        Self.store.set(value.rawValue, forKey: "neteaseMode")
     }
 
     /// 放这首歌，songs 是接着往下放的队列。已经在放这一首的话，只是回到播放界面。
@@ -1722,10 +1753,14 @@ final class NeteaseStore: ObservableObject {
         let seconds = Int(listened.rounded())
         guard seconds >= Self.reportThreshold(duration: song.duration) else { return }
         let source = queueSource
+        // 用现在这个人的登录信息报：换人时停下的那一首，报到听它的人的账号上（不是下一个人的）
+        let login = NeteaseAPI.login
         Task { @MainActor in
-            let ok = await NeteaseAPI.reportPlay(song: song.id, seconds: seconds, finished: finished, playlist: source)
+            let ok = await NeteaseAPI.$pinned.withValue(login) {
+                await NeteaseAPI.reportPlay(song: song.id, seconds: seconds, finished: finished, playlist: source)
+            }
             Log.playback.info("网易云听歌记录：听了 \(seconds, privacy: .public) 秒（\(finished ? "放完" : "切走", privacy: .public)），上报\(ok ? "成功" : "失败", privacy: .public)")
-            guard ok else { return }
+            guard ok, NeteaseAPI.isCurrent(login) else { return }
             guard !recentSongs.isEmpty else { return }   // 原来没有这张卡片：等下次刷新首页再出现，免得那一排突然多一张、焦点错位
             recentSongs.removeAll { $0 == song }
             recentSongs.insert(song, at: 0)
@@ -1740,7 +1775,12 @@ final class NeteaseStore: ObservableObject {
 
     /// 播放列表存成一个文件（三千首约 800 KB，在后台写），放到哪了存在设置里（每十秒写一个数）
     struct SavedQueue: Codable, Sendable { var songs: [NeteaseSong]; var index: Int; var source: Int }
-    private static var queueFile: URL { AppFolder.url.appendingPathComponent("netease-queue.json") }
+    /// 第一个人的还在 Mac TV 文件夹里原来的地方；别的人的在他自己的文件夹里（Apps/netease，见 AppStorage）
+    private static var queueFile: URL {
+        let space = ProfileSpace.current
+        let folder = space.isMain ? space.folder : space.storage(for: appID).folder
+        return folder.appendingPathComponent("netease-queue.json")
+    }
     private var savedAt = 0.0
     private var queueSave: Task<Void, Never>?
     /// 应用刚打开，或者上次是"退出"（后台播放关着时回主屏、去开别的应用）：进来时恢复上次的歌
@@ -1750,10 +1790,10 @@ final class NeteaseStore: ObservableObject {
         guard rememberProgress, let current, player.currentItem != nil else { return }   // 还没载好（恢复没成）时不写，免得把记下的位置冲掉
         let position = playbackTime()
         savedAt = position
-        UserDefaults.standard.set(current.id, forKey: "neteaseLastSong")
-        UserDefaults.standard.set(position, forKey: "neteaseLastPosition")
+        Self.store.set(current.id, forKey: "neteaseLastSong")
+        Self.store.set(position, forKey: "neteaseLastPosition")
         // 这首已经听了多久也记着：直接退出 Mac TV 再打开，接着累计，听够了照样进听歌记录
-        UserDefaults.standard.set(listened, forKey: "neteaseLastListened")
+        Self.store.set(listened, forKey: "neteaseLastListened")
     }
 
     /// 换歌后一秒再存播放列表：连着按下一首时只存最后一次
@@ -1788,18 +1828,18 @@ final class NeteaseStore: ObservableObject {
 
     static func forgetProgress() {
         try? FileManager.default.removeItem(at: queueFile)
-        UserDefaults.standard.removeObject(forKey: "neteaseLastSong")
-        UserDefaults.standard.removeObject(forKey: "neteaseLastPosition")
-        UserDefaults.standard.removeObject(forKey: "neteaseLastListened")
+        Self.store.removeObject(forKey: "neteaseLastSong")
+        Self.store.removeObject(forKey: "neteaseLastPosition")
+        Self.store.removeObject(forKey: "neteaseLastListened")
     }
 
     /// 上次的歌：载好、停在上次的位置，不出声。按播放（或空格、媒体键）接着听
     private func restoreProgress() {
         guard rememberProgress, current == nil, let saved = Self.savedQueue() else { return }
-        let lastID = UserDefaults.standard.integer(forKey: "neteaseLastSong")
+        let lastID = Self.store.integer(forKey: "neteaseLastSong")
         let index = saved.songs.firstIndex { $0.id == lastID } ?? min(max(0, saved.index), saved.songs.count - 1)
         let song = saved.songs[index]
-        let position = Self.resumePosition(saved: song.id == lastID ? UserDefaults.standard.double(forKey: "neteaseLastPosition") : 0,
+        let position = Self.resumePosition(saved: song.id == lastID ? Self.store.double(forKey: "neteaseLastPosition") : 0,
                                            duration: song.duration)
         queue = saved.songs
         queueIndex = index
@@ -1807,7 +1847,7 @@ final class NeteaseStore: ObservableObject {
         upcoming = nil
         Log.playback.info("网易云恢复上次的歌：列表 \(saved.songs.count, privacy: .public) 首中的第 \(index + 1, privacy: .public) 首，从 \(Int(position), privacy: .public) 秒")
         play(song, resumeAt: position, startPaused: true)
-        if song.id == lastID { listened = max(0, UserDefaults.standard.double(forKey: "neteaseLastListened")) }
+        if song.id == lastID { listened = max(0, Self.store.double(forKey: "neteaseLastListened")) }
     }
 
     private static func savedQueue() -> SavedQueue? {
@@ -2281,8 +2321,14 @@ extension TVController {
     /// 关着时就像退出了应用，歌停掉
     func leaveNetease() {
         guard neteaseOpen else { return }
-        neteaseStore.closed()
-        if !neteaseStore.backgroundPlay { neteaseStore.quit() }
+        if neteaseStore.backgroundPlay {
+            // 网易云留在后台：歌接着放，正在看的那一页（比如播放界面）留着
+            neteaseStore.closed(keepingScreen: true)
+        } else {
+            neteaseStore.closed()
+            neteaseStore.quit()
+            Log.app.notice("Stopped netease on Home: its Background Playback is off")
+        }
         neteaseOpen = false
     }
 
@@ -2363,12 +2409,6 @@ extension NeteaseStore {
     func showNowPlaying() {
         guard current != nil else { return }
         withAnimation(Motion.navigate) { nowPlayingVisible = true }
-    }
-
-    /// 现在放到第几秒（每一帧直接问播放器，主屏顶部的黑胶跟着它转）
-    var playbackSeconds: Double {
-        let now = player.currentTime().seconds
-        return now.isFinite ? now : 0
     }
 
     /// 封面的大图（主屏顶部右边那张）
@@ -2478,5 +2518,86 @@ extension NeteaseStore {
         menuParents = []
         withAnimation(Motion.focus) { menu = nil }
         return true
+    }
+}
+
+// MARK: 每个人（个人资料）各一份（见 ProfileApp）
+
+extension NeteaseStore: ProfileApp {
+    /// 新的人从这些设置开始（和第一次打开网易云一样）
+    static var registeredDefaults: [String: Any] {
+        ["neteaseQuality": "exhigh", "neteaseBackground": true, "neteaseBalance": true, "neteaseRemember": true,
+         "neteaseHistory": true, "neteaseMode": PlayMode.list.rawValue]
+    }
+
+    /// 要换人了：在放的歌是这个人的，后台播放开着也停下；放到哪了、播放列表存进他自己那里，下次他回来接着听
+    func profileWillChange() {
+        shelfRefresh?.cancel()
+        if current != nil { stop() } else { flushQueue() }
+        needsRestore = true
+    }
+
+    /// 换了人：登录、设置、首页、缓存全换成这个人的（什么都不删，上一个人的都还在他自己那里）
+    func profileChanged() {
+        NeteaseAPI.useProfile(.current)
+        loginTask?.cancel()
+        stopLogin()
+        preparing?.cancel()
+        preparing = nil
+        queueSave?.cancel()
+        queueSave = nil
+        reloadSettings()
+        account = nil
+        checked = false
+        loading = false
+        home = []
+        page = nil
+        pageHistory = []
+        settingsOpen = false
+        settingIndex = 0
+        results = nil
+        query = ""
+        lastKeyword = ""
+        editing = false
+        naming = nil
+        menu = nil
+        menuParents = []
+        topFocus = nil
+        rowIndex = 0
+        columns = [:]
+        liked = []
+        myLists = []
+        dailySongs = []
+        recentSongs = []
+        dailyLists = []
+        batchLists = []
+        picksTurn = 0
+        songCache.removeAll()
+        pageCache.removeAll()
+        pageFetching.removeAll()
+        prepared.removeAll()
+        preparedLyrics.removeAll()
+        upcoming = nil
+        songLevel = nil
+        songMax = ""
+        loadedAt = .distantPast
+        needsRestore = true
+        NeteaseShelfSource.migrateSplitLists()
+        preload()
+    }
+
+    /// 这个人自己的设置（没改过的是默认的）。读进来不往回存
+    private func reloadSettings() {
+        let store = Self.store
+        reloading = true
+        defer { reloading = false }
+        accountMax = store.string(forKey: "neteaseAccountMax") ?? ""
+        preferredLevel = store.string(forKey: "neteaseQuality") ?? "exhigh"
+        backgroundPlay = store.object(forKey: "neteaseBackground") as? Bool ?? true
+        balanceVolume = store.object(forKey: "neteaseBalance") as? Bool ?? true
+        rememberProgress = store.object(forKey: "neteaseRemember") as? Bool ?? true
+        syncHistory = store.object(forKey: "neteaseHistory") as? Bool ?? true
+        mode = PlayMode(rawValue: store.string(forKey: "neteaseMode") ?? "") ?? .list
+        applyVolume()
     }
 }

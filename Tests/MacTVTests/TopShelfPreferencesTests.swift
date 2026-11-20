@@ -48,7 +48,7 @@ import Testing
             #expect(Set(tv.topShelfApps.map(\.id)) == AppShelf.services)
             #expect(Array(tv.topShelfApps.map(\.id).prefix(home.count)) == home)
             // 主屏上挪到最前面，这里也是第一行
-            #expect(tv.setPinned("youtube", true))
+            #expect(tv.moveApp("youtube", to: 0))
             #expect(tv.topShelfApps.first?.id == "youtube")
             #expect(tv.topShelfApps.map(\.name).contains("网易云音乐"))
         }
@@ -95,6 +95,8 @@ import Testing
             DedaoShelfSource.hiddenCategories = []
             try open(tv, DedaoStore.appID)
             #expect(tv.topShelfOptions(DedaoStore.appID).map(\.title) == ["正在播放", "新书推荐", "历史", "AI"])
+            // 两组各一行小标题：放什么，新书从哪些分类里挑
+            #expect(tv.topShelfOptions(DedaoStore.appID).map(\.header) == ["内容", nil, "分类", nil])
             press(tv, 2)
             #expect(DedaoShelfSource.hiddenCategories == ["历史"])
             press(tv, 3)   // 最后一个分类：留着

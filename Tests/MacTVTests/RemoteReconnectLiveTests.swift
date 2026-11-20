@@ -15,8 +15,8 @@ struct RemoteReconnectLiveTests {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)", isDirectory: true)
         let suite = "MacTVTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: folder) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite); try? FileManager.default.removeItem(at: folder) }
         let name = try #require(LAN.bonjourName())
         let port: UInt16 = 28765
         let nameOrigin = "http://\(name):\(port)", loopOrigin = "http://127.0.0.1:\(port)"

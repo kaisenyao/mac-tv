@@ -47,10 +47,13 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published private(set) var qualityIndex = 0
     @Published private(set) var qualityID = 0
     /// 想要的清晰度上限，记住上次的选择；默认 1080P 高码率
+    /// 清晰度、倍速、字幕、弹幕、弹幕设置都是每个人（个人资料）各自的，在他自己的设置里（见 ProfileSpace）
     var preferredQuality: Int {
-        get { UserDefaults.standard.object(forKey: "bilibiliQuality") as? Int ?? 112 }
-        set { UserDefaults.standard.set(newValue, forKey: "bilibiliQuality") }
+        get { ProfileSpace.current.defaults.object(forKey: "bilibiliQuality") as? Int ?? 112 }
+        set { ProfileSpace.current.defaults.set(newValue, forKey: "bilibiliQuality") }
     }
+    /// 换了人，正在把他的设置读进来：不往回存，也不做改设置时要做的事
+    private var reloadingSettings = false
 
     enum Outcome { case stay, close }
 
@@ -85,24 +88,24 @@ final class BilibiliNativePlayer: ObservableObject {
         value.formatted(.number.precision(.fractionLength(0...2)).locale(Locale(identifier: "en_US_POSIX"))) + "×"
     }
     /// 倍速：记住上次选的，下一个视频也按它放（设置页里也能改）。只管视频，直播一直是 1 倍速
-    @Published var speed = UserDefaults.standard.object(forKey: "bilibiliSpeed") as? Double ?? 1.0 {
+    @Published var speed = ProfileSpace.current.defaults.object(forKey: "bilibiliSpeed") as? Double ?? 1.0 {
         didSet {
-            UserDefaults.standard.set(speed, forKey: "bilibiliSpeed")
+            if !reloadingSettings { ProfileSpace.current.defaults.set(speed, forKey: "bilibiliSpeed") }
             guard !isLive else { return }
             player.defaultRate = Float(speed)
             if player.timeControlStatus != .paused, player.rate > 0 { player.rate = Float(speed) }
         }
     }
     /// 有字幕时自动打开（在面板里选了"关闭"或某种语言，这个也跟着变）
-    @Published var subtitlesOn = UserDefaults.standard.object(forKey: "bilibiliSubtitles") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(subtitlesOn, forKey: "bilibiliSubtitles") }
+    @Published var subtitlesOn = ProfileSpace.current.defaults.object(forKey: "bilibiliSubtitles") as? Bool ?? true {
+        didSet { if !reloadingSettings { ProfileSpace.current.defaults.set(subtitlesOn, forKey: "bilibiliSubtitles") } }
     }
     /// 弹幕开关：记住上次的选择（面板里、设置页里都能改）。打开时这个视频还没取过弹幕就现取；
     /// 直播间是打开就连弹幕服务器、关上就断开
-    @Published var danmakuOn = UserDefaults.standard.object(forKey: "bilibiliDanmaku") as? Bool ?? true {
+    @Published var danmakuOn = ProfileSpace.current.defaults.object(forKey: "bilibiliDanmaku") as? Bool ?? true {
         didSet {
-            guard danmakuOn != oldValue else { return }
-            UserDefaults.standard.set(danmakuOn, forKey: "bilibiliDanmaku")
+            guard danmakuOn != oldValue, !reloadingSettings else { return }
+            ProfileSpace.current.defaults.set(danmakuOn, forKey: "bilibiliDanmaku")
             if let video = current, video.isLive {
                 if danmakuOn { connectLiveDanmaku(video) } else { disconnectLiveDanmaku() }
             } else if danmakuOn, danmakuAll.isEmpty, let video = current, let cid = stream?.cid {
@@ -124,7 +127,7 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published var danmakuStyle = BiliDanmakuStyle.load() {
         didSet {
             guard danmakuStyle != oldValue else { return }
-            danmakuStyle.save()
+            if !reloadingSettings { danmakuStyle.save() }
             danmakuLayout = BiliDanmakuLayout(style: danmakuStyle)
             relayoutDanmaku()
         }
@@ -136,6 +139,19 @@ final class BilibiliNativePlayer: ObservableObject {
 
     let player = PlaybackVolume.attached(AVPlayer())   // 电视的音量调不了时，音量键调它（见 PlaybackVolume）
     var cookie: () async -> String = { "" }
+    /// 现在这个人的登录信息，绑在他身上：停下时报"看到哪了"、补发的点赞在换了人以后才发出去，用的也还是他的
+    var cookieOfNow: () -> (() async -> String) = { { "" } }
+
+    /// 换了人（个人资料）：他自己的倍速、字幕、弹幕和弹幕设置（没改过的是默认的）。读进来不往回存
+    func reloadSettings() {
+        reloadingSettings = true
+        defer { reloadingSettings = false }
+        let store = ProfileSpace.current.defaults
+        speed = store.object(forKey: "bilibiliSpeed") as? Double ?? 1.0
+        subtitlesOn = store.object(forKey: "bilibiliSubtitles") as? Bool ?? true
+        danmakuOn = store.object(forKey: "bilibiliDanmaku") as? Bool ?? true
+        danmakuStyle = BiliDanmakuStyle.load()
+    }
     /// 签名用的密钥（取字幕要用），由外面接上
     var signingKey: () async -> String? = { nil }
     /// 登录的账号编号（0 = 没登录）：没登录时面板里不放点赞、投币、收藏；收藏要用它找收藏夹
@@ -669,6 +685,14 @@ final class BilibiliNativePlayer: ObservableObject {
         player.play()
     }
 
+    /// 回主屏（哔哩哔哩到后台，和 Apple TV 一样）：视频停在这里（报一下看到哪了），再进来还是这个视频、暂停着
+    func pauseForBackground() {
+        guard current != nil, player.timeControlStatus != .paused else { return }
+        userPaused = true
+        player.pause()
+        report()
+    }
+
     /// 同上，顺便把控制条露出来（画面上没有别的东西盖着时）
     private func togglePauseShowingControls() {
         guard current != nil, !failed else { return }
@@ -683,7 +707,8 @@ final class BilibiliNativePlayer: ObservableObject {
         let finished = duration > 0 && duration - time < 5
         if seconds > 3 || finished {
             BiliResume.save(bvid: video.bvid, cid: cid, seconds: finished ? -1 : seconds)
-            Task { [cookie] in
+            let cookie = cookieOfNow()   // 换人时停下的这一下：报到看它的人的账号上
+            Task {
                 await BiliAPI.reportProgress(bvid: video.bvid, cid: cid, seconds: finished ? -1 : seconds, cookie: await cookie())
             }
         }
@@ -1224,7 +1249,8 @@ extension BilibiliNativePlayer {
         likeSettle = nil
         let want = relation.liked, id = aid
         guard pending, id > 0, want != likeConfirmed else { return }
-        Task { [cookie] in _ = await BiliAPI.setLiked(aid: id, want, cookie: await cookie()) }
+        let cookie = cookieOfNow()
+        Task { _ = await BiliAPI.setLiked(aid: id, want, cookie: await cookie()) }
     }
 
     /// 把面板上的点赞样子同步到账号上：已经一样就不发；在路上时不再发，等它回来再看要不要补一次

@@ -78,7 +78,7 @@ final class TVController: NSObject, ObservableObject {
     // 是焦点跟着手指走，像 Apple TV：往右 / 上滑焦点往右 / 上，长条、区域之间、挑选、面板里都一样，甩出去的惯性也接着往这边走；
     // 门槛、惯性、声音、震动和触控板一样。拖进度谁来的都是手指往右往前（TrackpadGestures.towardsNext）。
     // 鼠标：点一下选中并打开，按住弹出菜单；停在上面只是轻轻浮起、不改选中，一按键或一滑动就收起（PointerActivity）。
-    // 键盘：方向键就是光标方向；回车确认、长按回车菜单（开着时再长按收起，见 toggle）；Esc 返回、长按 Esc 回主屏。
+    // 键盘：方向键就是光标方向；回车确认、长按回车菜单（开着时再长按收起，见 toggle）；Esc 返回、长按 Esc 问要不要退出前面这个应用（见 AppQuit）。
     // 核对用的现象（不是依据）：长条里选中是加框；挑选里选中是变白。
     enum Module { case strip, picker, drawer, scrub, off }
 
@@ -138,6 +138,8 @@ final class TVController: NSObject, ObservableObject {
     /// 按住确认打开的那个正在最上面：收起它（连同里面的几层），同按返回。条件和 openHoldMenu 一样
     func closeHoldMenu() -> Bool {
         if browserPageInFront { return browserStore.closeHoldMenu() }
+        if browserOpen, mode == .launcher { return browserStore.closeHistoryRowMenu() || browserStore.closeItemMenu() }
+        if activeSheet == .organizer { return closeOrganizerMenu() }   // Arrange Apps: an app's menu
         guard mode == .launcher, activeSheet == nil else { return false }
         if bilibiliOpen, !bilibiliStore.editing {
             let player = bilibiliStore.player
@@ -154,6 +156,11 @@ final class TVController: NSObject, ObservableObject {
     /// 按住确认会打开的东西（和 main.swift 里按住回车是同一套条件）。打开了返回 true
     func openHoldMenu() -> Bool {
         if browserPageInFront { return browserStore.openMenu() }   // 浏览器的网页：标签栏的"⋯"菜单
+        if browserOpen, mode == .launcher, activeSheet == nil {   // Web：History 的一行、开始页上一个网站的菜单
+            return browserStore.historyState != nil ? browserStore.openHistoryRowMenu() : browserStore.openItemMenu()
+        }
+        if activeSheet == .organizer { return openOrganizerMenu() }    // Arrange Apps: an app's menu (Hide)
+        if homeAppFocused { return openHomeAppMenu() }                // Home: an app's menu (Edit Home Screen, Hide)
         guard mode == .launcher, activeSheet == nil else { return false }
         if bilibiliOpen, !bilibiliStore.editing {
             let store = bilibiliStore, player = store.player
@@ -217,21 +224,36 @@ final class TVController: NSObject, ObservableObject {
         didSet { if sheets.pairing != oldValue.pairing { pairingChanged() } }
     }
     @Published var playerFailure: PlayerFailure?
+    /// The apps in the background, most recent first, and what each looked like when it went there (see AppQuit).
+    @Published var backgroundApps: [Service] = []
+    var appSnapshots: [String: NSImage] = [:]
+    /// The last press of Home: a second one soon after opens the App Switcher.
+    var lastHomePress: Date?
+    /// ⌘Q is down, and Mac TV quits if it stays down (see AppQuit).
+    var quitKeyHeld = false
+    var quitKeyPresses = 0
+    /// Quits Mac TV once ⌘Q has been held. A test puts in its own.
+    var terminate: () -> Void = { NSApp.terminate(nil) }
     /// The Movies app's screen, while it's open.
     @Published var movies: MoviesBrowser?
-    /// 哔哩哔哩的原生页面（自用分支）
-    let bilibiliStore = BilibiliStore()
+    /// 哔哩哔哩的原生页面（自用分支）。这几个应用的数据是每个人（个人资料）各一份：
+    /// 建它们之前 ProfileSpace.current 已经是在看的这个人（见 init），换人时各自重新读（见 ProfileApp）
+    let bilibiliStore: BilibiliStore
     @Published var bilibiliOpen = false
-    let neteaseStore = NeteaseStore()
+    let neteaseStore: NeteaseStore
     @Published var neteaseOpen = false
     /// 浏览器的开始页开着（见 BrowserStore）
     @Published var browserOpen = false
-    let browserStore = BrowserStore()
+    let browserStore: BrowserStore
     /// 得到（听书、课程）的原生页面开着（见 DedaoStore）
     @Published var dedaoOpen = false
-    let dedaoStore = DedaoStore()
+    let dedaoStore: DedaoStore
     /// Who's watching: their apps and their sign-ins.
     @Published var profile: Profile
+    /// Where each profile keeps its own things (see ProfileSpace).
+    let spaces: ProfileSpaces
+    /// The apps that keep their data per profile, told when someone else starts watching.
+    let profileApps = ProfileAppRegistry()
 
     /// The focused button on Mac TV's own Brave screen.
     @Published var braveFocus = 0
@@ -270,7 +292,8 @@ final class TVController: NSObject, ObservableObject {
     var localMoviePlayer: String { playbackCoordinator.localMoviePlayer }
     var iinaPlaybackError: String? { playbackCoordinator.iinaPlaybackError }
     var iinaPlaybackStatus: String { playbackCoordinator.iinaPlaybackStatus }
-    var externalBrowser: BraveSession? { playbackCoordinator.externalBrowser }
+    /// Brave in front (not in the background since Home).
+    var externalBrowser: BraveSession? { playbackCoordinator.externalInBackground ? nil : playbackCoordinator.externalBrowser }
     var externalBrowserService: Service? { playbackCoordinator.externalBrowserService }
     var externalBrowserError: String? { playbackCoordinator.externalBrowserError }
     var externalBrowserOpening: Bool { playbackCoordinator.externalBrowserOpening }
@@ -370,11 +393,13 @@ final class TVController: NSObject, ObservableObject {
 
     override convenience init() {
         let store = ProfileStore()
-        self.init(library: AppLibrary(profileID: store.current.id), profiles: store)
+        self.init(library: AppLibrary(profileID: store.current.id), profiles: store, spaces: .live)
     }
 
+    /// `spaces` is where each profile keeps its things: the real places for the app, and for a test (when
+    /// it's left out) everything inside the library's folder.
     init(library: AppLibrary, profiles: ProfileStore? = nil, browserPreferences: BrowserPreferences? = nil,
-         services appServices: AppServices = AppServices()) {
+         services appServices: AppServices = AppServices(), spaces: ProfileSpaces? = nil) {
         preferences = appServices.preferences
         movieLibrary = appServices.movieLibrary
         jellyfin = appServices.jellyfin
@@ -386,8 +411,20 @@ final class TVController: NSObject, ObservableObject {
         self.profiles = store
         self.profile = store.current
         self.library = library
+        // Who's watching is settled before the apps read anything they keep per profile.
+        let spaces = spaces ?? .sandbox(library.storageFolder)
+        self.spaces = spaces
+        ProfilePhotos.shared.spaces = spaces   // profile photos are in each profile's folder
+        let space = spaces.enter(store.current.id)
+        appServices.preferences.use(space)
+        appServices.movieLibrary.use(space)
+        bilibiliStore = BilibiliStore()
+        neteaseStore = NeteaseStore()
+        browserStore = BrowserStore(space: space)
+        dedaoStore = DedaoStore()
         let pc = PlaybackCoordinator(jellyfin: appServices.jellyfin)
         let rc = RemoteCoordinator()
+        rc.shortcutsProfileChanged(space)
         let dc = DisplayCoordinator(preferences: appServices.preferences)
         let ac = AudioCoordinator()
         self.playbackCoordinator = pc
@@ -406,6 +443,11 @@ final class TVController: NSObject, ObservableObject {
             $0.sink { [weak self] in self?.objectWillChange.send() }
         }
         services = library.services()
+        // 哔哩哔哩、网易云、得到、浏览器：每个人（个人资料）一份数据，换人时各自重新读（见 ProfileApp）
+        profileApps.register(bilibiliStore)
+        profileApps.register(neteaseStore)
+        profileApps.register(dedaoStore)
+        profileApps.register(browserStore)
     }
 
     // MARK: - Screensaver and sleep timer
@@ -467,9 +509,7 @@ final class TVController: NSObject, ObservableObject {
         case .setup: handleSetup(command); return
         case .profilePicker: handleProfiles(command); return
         case .audioPicker: handleAudioPicker(command); return
-        case .playbackCheck:
-            switch command { case .back, .select: playbackCheck = nil; default: break }
-            return
+        case .appSwitcher: handleAppSwitcher(command); return
         case .topShelfPreferences: handleTopShelfPreferences(command); return
         case .addApp: handleAdder(command); return
         case .pairing: handlePairing(command); return
@@ -510,7 +550,9 @@ final class TVController: NSObject, ObservableObject {
             switch focus {
             case .status: setFocus(shelfCount > 0 ? .shelf(0) : .app(shelfAppIndex))
             case .shelf: setFocus(.app(shelfAppIndex))
-            case .app: if inGrid { setFocus(.app(0)) }
+            case .app(let index):
+                // As on Apple TV: from the grid, up to the first app; on the top row's first app, the screen saver.
+                if inGrid { setFocus(.app(0)) } else if index == 0 { showScreensaver() }
             }
         case .pointer(let dx, let dy): movePointer(dx: dx, dy: dy)
         case .click: clickPointer()
@@ -586,7 +628,10 @@ final class TVController: NSObject, ObservableObject {
             return
         case .home:
             // 控制中心开着时：按一下 TV / 主屏键只把它收起来（按住拉下来、按一下收回去，和 Apple TV 一样）
-            if controlCenter != nil { controlCenter = nil; return }
+            // 从控制中心打开的面板（连接遥控器、音频）还盖在上面时，就照常回主屏
+            if controlCenter != nil, sheets.top == .controlCenter { controlCenter = nil; return }
+            // 连按两下：App Switcher（见 AppQuit）；开着时再按是关上它、回主屏
+            if pressHome() { return }
             goHome(); return
         case .swipe(let dx, let dy, let phase, let focusFollowsFinger):
             // 手机触控板上的双指滑动：和 Mac 触控板上滑一样（同一套门槛、惯性、声音）。
@@ -649,7 +694,7 @@ final class TVController: NSObject, ObservableObject {
         case .controlCenter:
             guard setup == nil, profilePicker == nil else { return }
             if controlCenter != nil {
-                controlCenter = nil
+                sheets.closeDismissible()   // with whatever it opened over itself
             } else {
                 if mode != .launcher || movies != nil { goHome() }
                 sheets.closeDismissible()
@@ -659,7 +704,7 @@ final class TVController: NSObject, ObservableObject {
         default: break
         }
 
-        if playbackCoordinator.externalBrowser != nil {
+        if externalBrowser != nil {
             if NSApp.isActive {
                 switch command {
                 case .move, .select, .back: handleBrowserScreen(command); return
@@ -734,13 +779,16 @@ final class TVController: NSObject, ObservableObject {
         case .web, .app, .steam: closeNetease()
         case .movies, .addApp, .settings: break
         }
-        playbackCoordinator.closeIINAPlayback()
-        playbackCoordinator.closeExternalBrowser()
+        // What's in front goes to the background, as Home sends it; nothing closes (see AppQuit)
+        if mode != .launcher || movies != nil || playbackCoordinator.iinaOpen || externalBrowser != nil { goHome() }
         playbackCoordinator.resetPlaybackRequest()
         sheets.closeDismissible()
         switch service.kind {
         case .web(let url):
-            playbackCoordinator.playWeb(service, url: url)
+            // In the background since Home: back to it as it was.
+            if !playbackCoordinator.resumeParkedWeb(service), !playbackCoordinator.resumeExternalBrowser(service) {
+                playbackCoordinator.playWeb(service, url: url)
+            }
         case .app(let bundleID):
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
             launchedAppID = bundleID
@@ -750,7 +798,7 @@ final class TVController: NSObject, ObservableObject {
             openedSteam = true
             if appID != SteamLibrary.bigPicture.appID { watchForSteamGame() }
         case .movies:
-            openMovies()
+            if !playbackCoordinator.resumeMovies() { openMovies() }
         case .addApp:
             adder = AppAdder()
         case .settings:
@@ -758,18 +806,14 @@ final class TVController: NSObject, ObservableObject {
         }
     }
 
+    /// Home, from the Home button, holding Back, or Back at an app's top level: the app in front goes to the
+    /// background, as on Apple TV (see AppQuit). Apps quit from the App Switcher.
     func goHome() {
-        playbackCoordinator.closeIINAPlayback()
-        playbackCoordinator.closeExternalBrowser()
-        playbackCoordinator.resetPlaybackRequest()
-        playbackCoordinator.clearCurrentLocalMovie()
-        playbackCoordinator.stopMoviePlayer()
+        noteAppInBackground()   // before anything changes, while it still shows (see AppQuit)
+        playbackCoordinator.resetPlaybackRequest()   // a movie or page still opening doesn't open
+        playbackCoordinator.sendToBackground(movies: movies)
         movies = nil
-        closeBilibili()
-        leaveNetease()
-        closeBrowser()
-        closeDedao()
-        playbackCoordinator.closeWebPlayback()
+        sendAppsToBackground()
         mode = .launcher
         sheets.closeDismissible()
         playerFailure = nil
