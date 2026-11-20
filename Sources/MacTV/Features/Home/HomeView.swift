@@ -418,3 +418,53 @@ enum SettingsTile {
         return image
     }()
 }
+
+// MARK: A TV press with nothing to do
+
+/// Pressed on Home: the apps give in a little and settle back, as an iPhone's Home Screen does, with Mac TV's own
+/// curves (a press in, focus's curve back). The wallpaper stays.
+struct HomeBounce: ViewModifier {
+    let nudge: HomeNudge
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.keyframeAnimator(initialValue: 1.0, trigger: nudge) { view, scale in
+            view.scaleEffect(scale)
+        } keyframes: { _ in
+            KeyframeTrack(\.self) {
+                if nudge.kind == .bounce, nudge.count > 0, !reduceMotion {
+                    SpringKeyframe(0.97, duration: 0.18, spring: .smooth(duration: 0.18))
+                    SpringKeyframe(1, duration: 0.32, spring: .smooth(duration: 0.32))
+                } else {
+                    LinearKeyframe(1, duration: 0.01)
+                }
+            }
+        }
+    }
+}
+
+/// Pressed twice with no app in the background: the frosted backdrop the App Switcher opens on comes over Home, at
+/// the pace sheets appear, finds nothing to show and goes again.
+struct HomeEmptySwitcher: ViewModifier {
+    let nudge: HomeNudge
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            SheetBackdrop()
+                .keyframeAnimator(initialValue: 0.0, trigger: nudge) { view, shown in
+                    view.opacity(shown)
+                } keyframes: { _ in
+                    KeyframeTrack(\.self) {
+                        if nudge.kind == .nothingInBackground, nudge.count > 0 {
+                            SpringKeyframe(1, duration: 0.25, spring: .smooth(duration: 0.35))
+                            LinearKeyframe(1, duration: 0.1)
+                            SpringKeyframe(0, duration: 0.35, spring: .smooth(duration: 0.35))
+                        } else {
+                            LinearKeyframe(0, duration: 0.01)
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+        }
+    }
+}

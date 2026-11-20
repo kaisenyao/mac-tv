@@ -42,12 +42,15 @@ struct RootView: View {
                         .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
                         .accessibilityHidden(tv.activeSheet != nil || tv.screensaver)
                 } else if !tv.screensaver {
-                    Wallpaper().ignoresSafeArea()
-                    TVCanvas { HomeView(tv: tv) }
-                        .ignoresSafeArea()
-                        // A Home Screen app's menu is on Home itself (see AppOrganizer.onHome): Home takes its clicks.
-                        .allowsHitTesting((tv.activeSheet == nil || tv.organizer?.onHome == true) && !tv.screensaver)
-                        .accessibilityHidden(tv.activeSheet != nil || tv.screensaver)
+                    ZStack {
+                        Wallpaper().ignoresSafeArea()
+                        TVCanvas { HomeView(tv: tv).modifier(HomeBounce(nudge: tv.homeNudge)) }
+                            .ignoresSafeArea()
+                            // A Home Screen app's menu is on Home itself (see AppOrganizer.onHome): Home takes its clicks.
+                            .allowsHitTesting((tv.activeSheet == nil || tv.organizer?.onHome == true) && !tv.screensaver)
+                            .accessibilityHidden(tv.activeSheet != nil || tv.screensaver)
+                    }
+                    .modifier(HomeEmptySwitcher(nudge: tv.homeNudge))
                 }
             }
             // Sheets over whatever is in front: Home, an app, a web page or a movie (Control Center opens over them)

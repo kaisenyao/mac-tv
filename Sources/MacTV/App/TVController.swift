@@ -236,6 +236,8 @@ final class TVController: NSObject, ObservableObject {
     var appSnapshots: [String: NSImage] = [:]
     /// The last TV press: a second one from the same device soon after opens the App Switcher (see AppQuit).
     var lastTVPress: TVPress?
+    /// Home's answer to a TV press with nothing to do: a bounce, or a blur for an empty App Switcher (see HomeNudge).
+    @Published var homeNudge = HomeNudge()
     /// TV standby: Mac TV turned the display off and paused everything (see Standby). Not macOS's own display sleep.
     @Published var standby = false
     /// macOS's memory pressure, while Mac TV runs (see memoryPressure)

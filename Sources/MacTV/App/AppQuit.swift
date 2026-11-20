@@ -25,6 +25,15 @@ struct TVPress {
     let origin: String?
 }
 
+/// Home answering a TV press that has nothing to do, as an iPhone's Home Screen does. Pressed on Home: its apps
+/// give a small bounce. Pressed twice with no app in the background: Home blurs and comes back, an App Switcher with
+/// nothing in it. `count` makes each press play again.
+struct HomeNudge: Equatable {
+    enum Kind: Equatable { case bounce, nothingInBackground }
+    var kind = Kind.bounce
+    var count = 0
+}
+
 /// The App Switcher: every open app, most recent first; the one it was opened from first (Mac TV decision).
 struct AppSwitcher: Equatable {
     /// The focused card: an index into `TVController.backgroundApps`.
@@ -79,11 +88,13 @@ extension TVController {
         }
         if let last = lastTVPress, last.source == source, now.timeIntervalSince(last.time) < InputTiming.doublePress {
             lastTVPress = nil
-            openAppSwitcher(returningTo: last.origin)
+            if backgroundApps.isEmpty { nudgeHome(.nothingInBackground) } else { openAppSwitcher(returningTo: last.origin) }
             return
         }
         let origin = appInFront?.id
+        let onHomeAlready = origin == nil && mode == .launcher && activeSheet == nil
         goHome()
+        if onHomeAlready { nudgeHome(.bounce) }
         lastTVPress = TVPress(time: now, source: source, origin: origin)
     }
 
@@ -112,6 +123,11 @@ extension TVController {
 
     /// The App Switcher, on `origin`'s card (the app the first TV press left), or the most recent app from Home.
     /// Nothing open: nothing to switch to, so it doesn't open.
+    /// Home's answer to a press with nothing to do (see HomeNudge).
+    func nudgeHome(_ kind: HomeNudge.Kind) {
+        homeNudge = HomeNudge(kind: kind, count: homeNudge.count + 1)
+    }
+
     func openAppSwitcher(returningTo origin: String?) {
         guard !backgroundApps.isEmpty else { return }
         let index = origin.flatMap { id in backgroundApps.firstIndex { $0.id == id } } ?? 0
