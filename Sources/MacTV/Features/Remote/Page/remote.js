@@ -370,7 +370,7 @@ function chipItems(s) {
     { id: 'shortcut', title: 'Run Shortcut', icon: 'shortcut', enabled: false },
     { id: 'screensaver', title: 'Screen Saver', icon: 'screensaver', enabled: false },
     { id: 'sleepTimer', title: 'Sleep Timer', icon: 'sleep', value: s.sleepMinutes ? timeText(s.sleepMinutes) : undefined, enabled: !guest, phone: true },
-    { id: 'files', title: 'Files on Mac', icon: 'files', enabled: !guest, phone: true },
+    { id: 'files', title: 'Finder', icon: 'files', enabled: !guest, phone: true },
   ];
 }
 function renderChips(items) {
@@ -611,7 +611,7 @@ function renderApps(focused = appFocus()) {
     // 最后两格：Mac 上的文件，和加一个应用
     const files = document.createElement('button');
     files.className = 'app files';
-    files.innerHTML = '<span class="tile"><span class="art"><svg viewBox="0 0 44 44" aria-hidden="true"><use href="#icon-files"/></svg></span></span><span class="name">Files on Mac</span>';
+    files.innerHTML = '<span class="tile"><span class="art"><img src="/icon/finder" alt=""></span></span><span class="name">Finder</span>';
     files.onclick = openFiles;
     const add = document.createElement('button');
     add.className = 'app add';

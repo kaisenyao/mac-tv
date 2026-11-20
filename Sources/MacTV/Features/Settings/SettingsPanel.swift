@@ -1118,16 +1118,6 @@ struct SettingsPages: View {
                 if let avatar = hero.avatar {
                     ProfileAvatar(profile: avatar, size: 280)
                         .transition(.opacity)
-                } else if panel.page == nil, panel.section == .general, let gears = SettingsTile.gears {
-                    // General is Settings itself: its icon, as on the Home Screen (silver, the gears on a dark disc).
-                    ZStack {
-                        LinearGradient(colors: [Color(hex: "#DEDEE1"), Color(hex: "#A2A2A7")], startPoint: .top, endPoint: .bottom)
-                        Image(nsImage: gears).resizable().interpolation(.high).frame(width: 224, height: 224)
-                    }
-                    .frame(width: 280, height: 280)
-                    .clipShape(RoundedRectangle(cornerRadius: 66, style: .continuous))
-                    .id(hero.symbol)
-                    .transition(.opacity)
                 } else {
                     // A quick crossfade as focus moves between sections, or between the remotes.
                     Image(systemName: hero.symbol)

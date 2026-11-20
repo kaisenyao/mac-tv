@@ -230,20 +230,39 @@ struct CaretText: View {
     var body: some View {
         HStack(spacing: 0) {
             if text.isEmpty {
-                if caret != nil { bar }
+                if caret != nil { Caret(moved: caret) }
                 Text(placeholder).opacity(0.4).lineLimit(1)
             } else {
                 let split = text.index(text.startIndex, offsetBy: min(max(caret ?? text.count, 0), text.count))
                 Text(text[..<split]).lineLimit(1).truncationMode(.head).layoutPriority(1)
-                if caret != nil { bar }
+                if caret != nil { Caret(moved: "\(caret ?? 0)|\(text)") }
                 Text(text[split...]).lineLimit(1)
             }
         }
         .transaction { $0.animation = nil }
     }
+}
 
-    /// As tall as a line of the text around it.
-    private var bar: some View {
-        Text("|").hidden().frame(width: 3).overlay(Rectangle().opacity(0.85)).padding(.horizontal, 1)
+/// The insertion point, as in any Mac or Apple TV text field: a thin line between two letters that takes no room, so
+/// the letters never move apart for it. It blinks, and stays lit while you type or move it, blinking again once you
+/// stop: each change to `moved` starts it lit.
+private struct Caret<Moved: Equatable>: View {
+    let moved: Moved
+    @State private var since = Date()
+
+    private static var half: TimeInterval { 0.5 }
+
+    var body: some View {
+        // As tall as a line of the text around it, and no wider than nothing.
+        Text("|").hidden().frame(width: 0)
+            .overlay {
+                TimelineView(.periodic(from: since, by: Self.half)) { context in
+                    let lit = Int(max(0, context.date.timeIntervalSince(since)) / Self.half) % 2 == 0
+                    Capsule().frame(width: 3)
+                        .opacity(lit ? 0.9 : 0)
+                        .animation(.easeInOut(duration: 0.12), value: lit)
+                }
+            }
+            .onChange(of: moved) { since = Date() }
     }
 }

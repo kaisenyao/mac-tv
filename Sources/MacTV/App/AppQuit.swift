@@ -197,15 +197,22 @@ extension TVController {
             }
             return
         }
-        guard let view = window?.contentView, view.bounds.width > 1,
-              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        let size = NSSize(width: width, height: (width * view.bounds.height / view.bounds.width).rounded())
-        let image = NSImage(size: size)
-        image.lockFocus()
-        rep.draw(in: NSRect(origin: .zero, size: size))
-        image.unlockFocus()
-        appSnapshots[id] = image
+        // The window's layers as they're already drawn, composited straight to card size. It runs before Home shows,
+        // so it must be quick: `cacheDisplay` redrew the whole window at full resolution first, seconds with glass
+        // and artwork, and the TV button waited for it.
+        guard let view = window?.contentView, let layer = view.layer, view.bounds.width > 1 else { return }
+        let pixels = (width: Int(width), height: Int((width * view.bounds.height / view.bounds.width).rounded()))
+        guard let context = CGContext(data: nil, width: pixels.width, height: pixels.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return }
+        if layer.isGeometryFlipped {
+            context.translateBy(x: 0, y: CGFloat(pixels.height))
+            context.scaleBy(x: 1, y: -1)
+        }
+        context.scaleBy(x: CGFloat(pixels.width) / view.bounds.width, y: CGFloat(pixels.height) / view.bounds.height)
+        layer.render(in: context)
+        guard let picture = context.makeImage() else { return }
+        appSnapshots[id] = NSImage(cgImage: picture, size: NSSize(width: pixels.width, height: pixels.height))
     }
 
     /// Quits an app (from the App Switcher, a profile switch): everything it was playing stops (positions saved and

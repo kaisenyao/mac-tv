@@ -30,7 +30,7 @@ enum RemoteShortcuts {
         Entry(id: "shortcut", title: "Run Shortcut", icon: "shortcut", app: nil),
         Entry(id: "screensaver", title: "Screen Saver", icon: "screensaver", app: nil),
         Entry(id: "sleepTimer", title: "Sleep Timer", icon: "sleep", app: nil),
-        Entry(id: "files", title: "Files on Mac", icon: "files", app: nil),
+        Entry(id: "files", title: "Finder", icon: "files", app: nil),
         Entry(id: "bilibili.danmaku", title: "弹幕", icon: "danmaku", app: "bilibili"),
         Entry(id: "bilibili.quality", title: "清晰度", icon: "quality", app: "bilibili"),
         Entry(id: "bilibili.speed", title: "倍速", icon: "speed", app: "bilibili"),

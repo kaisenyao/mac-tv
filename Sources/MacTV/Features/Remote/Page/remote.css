@@ -257,8 +257,9 @@
   .app.current .art { box-shadow:0 0 0 3px var(--sheet), 0 0 0 5px var(--blue); overflow:visible; }
   .app.current .art img { border-radius:17px; }
   .app.current .name { color:var(--blue-text); font-weight:600; }
-  .app.files .art { background:#fff; box-shadow:0 0 0 1px #e0e0e5; }
-  .app.files .art svg { width:34px; height:34px; }
+  /* Finder：这台 Mac 自己的 Finder 图标。macOS 的图标四周留了一圈透明边（圆角方块约占 80%），放大到和别的图标一样满 */
+  .app.files .art { background:transparent; box-shadow:none; }
+  .app.files .art img { transform:scale(1.24); }
   .app.add .art { background:linear-gradient(#1BC7FC, #027AFF); }  /* Store：蓝底白色的 A，和电视上一样 */
   .app.add .art svg { width:36px; height:32px; }
   .playing { position:absolute; right:-4px; bottom:-4px; height:22px; padding:0 7px; border:2px solid var(--sheet); border-radius:11px; background:var(--label); display:flex; align-items:center; gap:2px; }

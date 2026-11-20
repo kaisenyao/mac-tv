@@ -182,6 +182,7 @@ extension TVController {
     }
 
     func iconPNG(for id: String) -> Data? {
-        services.first { $0.id == id }.flatMap { Icons.png(for: $0) }
+        if id == Icons.finderID { return Icons.finderPNG }
+        return services.first { $0.id == id }.flatMap { Icons.png(for: $0) }
     }
 }
