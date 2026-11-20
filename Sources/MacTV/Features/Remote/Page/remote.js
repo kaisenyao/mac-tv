@@ -171,6 +171,8 @@ async function request(path, body, authenticated = true, cancelSignal = null) {
   if (cancelSignal?.aborted) throw new Error('cancelled');
   const controller = new AbortController();
   const credential = key;
+  const polling = authenticated && !body && path === '/state';
+  const known = polling && lastState && lastState.key === credential ? lastState : null;
   let timer, cancel;
   const interrupted = new Promise((_, reject) => {
     timer = setTimeout(() => { controller.abort(); reject(new Error('Request timed out.')); }, 9000);
@@ -184,7 +186,9 @@ async function request(path, body, authenticated = true, cancelSignal = null) {
     return await Promise.race([interrupted, (async () => {
       const res = await fetch(path, {
         method: body ? 'POST' : 'GET',
-        headers: authenticated ? { 'Content-Type': 'application/json', 'X-Couch-Key': credential } : { 'Content-Type': 'application/json' },
+        headers: authenticated
+          ? { 'Content-Type': 'application/json', 'X-Couch-Key': credential, ...(known ? { 'If-None-Match': known.tag } : {}) }
+          : { 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
@@ -193,8 +197,13 @@ async function request(path, body, authenticated = true, cancelSignal = null) {
         if (key === credential) { key = ''; store.set(''); showPair(); }
         throw new Error('unpaired');
       }
+      if (known && res.status === 304) return JSON.parse(known.json);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.statusText);
+      if (polling) {
+        const tag = res.headers && typeof res.headers.get === 'function' ? res.headers.get('ETag') : null;
+        lastState = tag ? { key: credential, tag, json: JSON.stringify(data) } : null;
+      }
       return data;
     })()]);
   } finally {
@@ -202,6 +211,9 @@ async function request(path, body, authenticated = true, cancelSignal = null) {
     if (cancelSignal) cancelSignal.removeEventListener('abort', cancel);
   }
 }
+// The last /state this page got and its ETag: while nothing on the TV changes, the Mac answers 304 with no body
+// and the page uses this one again (a fresh copy each time, so editing an answer never changes the saved one).
+let lastState = null;
 function api(path, body, signal) { return request(path, body, true, signal); }
 
 // Keep a small bounded queue: repeats are dropped under load and urgent actions jump ahead.
@@ -301,6 +313,7 @@ async function readState() {
     renderChips(chipItems(s));
     const focused = appFocus();
     apps = s.apps;
+    if (Number.isInteger(s.dockSize) && s.dockSize > 0) dockSize = s.dockSize;
     canRestore = s.canRestore;
     // 电视上开着的应用：网页、IINA 和影片在 current 里；B站、网易云、得到是 Mac TV 自己的页面，在快捷键的 context 里
     const context = s.shortcuts && typeof s.shortcuts.context === 'string' && s.shortcuts.context !== 'home' ? s.shortcuts.context : '';
@@ -482,8 +495,27 @@ function renderPlayerChoices(current, braveInstalled) {
     choiceRow('Brave', braveInstalled ? '' : 'Not installed', current === 'brave', !braveInstalled && current !== 'brave', () => choosePlayer('brave')));
 }
 
-// Apps sheet: launch tiles, or accessible controls for arranging the same apps.
-let editing = false;
+// Apps sheet: launch tiles. Edit arranges them as the iPhone Home Screen does: the icons jiggle; on top, in a frame,
+// the TV's dock (Home's top row, its first six apps), and the other apps below in Home's order. Long-press an app
+// and drag it; the others make room. Into a full dock, its last app moves to the first place below; out of the dock,
+// the first app below comes up into it. "−" offers Hide, and Delete for Everyone for an app someone added. The TV
+// takes each drop at once (/apps/place); what changes on the TV arrives with the next state and moves the icons
+// here. One haptic on pick-up and one on drop, a tick each time the others make room. Only the jiggle runs on its
+// own, only while editing, and only as a CSS transform.
+let editing = false, dockSize = 6;
+const appOrder = (list = apps) => list.map(app => app.id);
+const sameOrder = (a, b) => a.join() === b.join();
+// The Mac's rule (AppLibrary.move): the app comes out of Home's order and goes back in at `index`
+function placeApp(order, id, index) {
+  const rest = order.filter(item => item !== id);
+  rest.splice(Math.min(Math.max(index, 0), rest.length), 0, id);
+  return rest;
+}
+// The app list in a new order, before the TV confirms it
+function reorderedApps(order) {
+  const byId = new Map(apps.map(app => [app.id, app]));
+  return order.filter(id => byId.has(id)).map(id => byId.get(id));
+}
 function appFocus() {
   const active = document.activeElement;
   if (!$('#apps').contains(active) || !active.dataset.appId) return null;
@@ -502,13 +534,6 @@ function appArt(app) {
     art.textContent = app.name.slice(0, 1).toUpperCase();
   }
   return art;
-}
-function favouriteBadge() {
-  const badge = document.createElement('span');
-  badge.className = 'favourite';
-  badge.textContent = '★';
-  badge.setAttribute('aria-hidden', 'true');
-  return badge;
 }
 function appMessage(message, error = false) {
   const note = $('#apps-msg');
@@ -542,7 +567,7 @@ async function changeApp(path, body, message) {
     renderApps(canRestoreFocus ? focused : null);
   }
 }
-// 一个应用的格子：图标（电视上正开着的一圈蓝、字是 "On TV"；在放声音的右下角一个小黑块；收藏的右上角一颗星）
+// 一个应用的格子：图标（电视上正开着的一圈蓝、字是 "On TV"；在放声音的右下角一个小黑块）
 function appTile(app) {
   const b = document.createElement('button');
   b.className = app.id === onTV ? 'app current' : 'app';
@@ -558,12 +583,11 @@ function appTile(app) {
     playing.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
     tile.append(playing);
   }
-  if (app.pinned) tile.append(favouriteBadge());
   const name = document.createElement('span');
   name.className = 'name';
   name.textContent = app.id === onTV ? 'On TV' : app.name;
   b.append(tile, name);
-  b.setAttribute('aria-label', `Open ${app.name}${app.id === onTV ? ', on TV' : ''}${app.pinned ? ', favorite' : ''}`);
+  b.setAttribute('aria-label', `Open ${app.name}${app.id === onTV ? ', on TV' : ''}`);
   b.onclick = () => {
     closeSheets();
     send('launch', { id: app.id });
@@ -571,51 +595,21 @@ function appTile(app) {
   return b;
 }
 function renderApps(focused = appFocus()) {
+  // A finger is moving an app: what the TV says meanwhile waits for the drop
+  if (drag) { renderLater = true; return; }
+  renderLater = false;
   const box = $('#apps');
   const sheet = $('#apps-sheet .sheet');
   const scrollTop = sheet.scrollTop;
-  box.textContent = '';
-  box.classList.toggle('editing', editing);
   box.setAttribute('aria-busy', String(appMutationPending));
-  for (const app of apps) {
-    if (!editing) { box.appendChild(appTile(app)); continue; }
-    const card = document.createElement('div');
-    card.className = 'app-editor';
-    const head = document.createElement('div');
-    head.className = 'app-editor-head';
-    const icon = document.createElement('span');
-    icon.className = 'app';
-    icon.appendChild(appArt(app));
-    const name = document.createElement('span');
-    name.className = 'app-editor-name';
-    name.textContent = app.name;
-    head.append(icon, name);
-    const actions = document.createElement('div');
-    actions.className = 'app-actions';
-    const action = (kind, label, description, available, path, body, message) => {
-      const button = document.createElement('button');
-      button.className = kind;
-      button.textContent = label;
-      button.dataset.appId = app.id;
-      button.dataset.action = kind;
-      button.setAttribute('aria-label', description);
-      button.disabled = appMutationPending || !available;
-      button.onclick = () => changeApp(path, body, message);
-      actions.appendChild(button);
-      return button;
-    };
-    const pin = action('pin', app.pinned ? '★ Unfavorite' : '☆ Favorite', `${app.pinned ? 'Unfavorite' : 'Favorite'} ${app.name}`, true,
-      '/apps/pin', { id: app.id, pinned: !app.pinned }, `${app.name} ${app.pinned ? 'unfavorited' : 'favorited'}.`);
-    pin.setAttribute('aria-pressed', String(!!app.pinned));
-    action('remove', 'Remove', `Remove ${app.name}`, true, '/apps/remove', { id: app.id }, `Removed ${app.name}.`);
-    action('earlier', '↑ Move Up', `Move ${app.name} up`, !!app.canMoveEarlier,
-      '/apps/move', { id: app.id, offset: -1 }, `Moved ${app.name} up.`);
-    action('later', '↓ Move Down', `Move ${app.name} down`, !!app.canMoveLater,
-      '/apps/move', { id: app.id, offset: 1 }, `Moved ${app.name} down.`);
-    card.append(head, actions);
-    box.appendChild(card);
-  }
-  if (!editing) {
+  if (editing) {
+    renderArrangement(box);
+  } else {
+    arranged = null;
+    closeAppMenu();
+    box.textContent = '';
+    box.classList.remove('editing');
+    for (const app of apps) box.appendChild(appTile(app));
     // 最后两格：Mac 上的文件，和加一个应用
     const files = document.createElement('button');
     files.className = 'app files';
@@ -635,17 +629,276 @@ function renderApps(focused = appFocus()) {
   $('#restore').disabled = appMutationPending;
   $('#apps-title').textContent = editing ? 'Edit Apps' : 'Open on TV';
   if (focused && $('#apps-sheet').classList.contains('show') && !$('#pair').classList.contains('show')) {
-    const buttons = [...box.querySelectorAll('button[data-app-id]')];
+    const buttons = [...box.querySelectorAll('[data-app-id]')];
     const sameApp = buttons.filter(button => button.dataset.appId === focused.id && !button.disabled);
     const target = sameApp.find(button => button.dataset.action === focused.action) || sameApp[0]
       || buttons.find(button => button.dataset.appId === apps[Math.min(Math.max(focused.index, 0), apps.length - 1)]?.id && !button.disabled)
       || $('#edit-apps');
-    target.focus({ preventScroll: true });
+    if (document.activeElement !== target) target.focus({ preventScroll: true });
   }
   sheet.scrollTop = scrollTop;
 }
-$('#edit-apps').onclick = () => { editing = !editing; appMessage(''); renderApps(); };
+$('#edit-apps').onclick = () => { if (drag) return; editing = !editing; appMessage(''); renderApps(); };
 $('#restore').onclick = () => changeApp('/apps/restore', {}, 'Restored built-in apps.');
+
+// Edit's dock, the grid below it and a tile per app, kept while editing: when the order changes (here or on the TV)
+// the same tiles move to their new places (FLIP, a transform), rather than being drawn again
+let arranged = null;
+function renderArrangement(box) {
+  if (!arranged) {
+    box.textContent = '';
+    box.classList.add('editing');
+    const dock = document.createElement('div');
+    dock.className = 'dock';
+    const row = document.createElement('div');
+    row.className = 'app-grid';
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', 'Dock');
+    dock.append(row);
+    const below = document.createElement('div');
+    below.className = 'app-grid';
+    box.append(dock, below);
+    arranged = { dock, row, below, tiles: new Map() };
+  }
+  const seen = new Set();
+  for (const app of apps) {
+    seen.add(app.id);
+    let tile = arranged.tiles.get(app.id);
+    if (!tile) {
+      tile = document.createElement('div');
+      tile.className = 'app';
+      tile.dataset.appId = app.id;
+      tile.dataset.action = 'arrange';
+      tile.tabIndex = 0;
+      tile.setAttribute('role', 'button');
+      tile.setAttribute('aria-roledescription', 'app');
+      arranged.tiles.set(app.id, tile);
+    }
+    const look = JSON.stringify([app.name, !!app.icon, !!app.added]);
+    if (tile.dataset.look !== look) fillArrangeTile(tile, app, look);
+    tile.querySelector('.hide-badge').disabled = appMutationPending;
+  }
+  for (const [id, tile] of arranged.tiles) if (!seen.has(id)) { tile.remove(); arranged.tiles.delete(id); }
+  placeTiles(appOrder());
+}
+// An app while editing: its icon with the "−" (the iPhone Home Screen's remove badge), and its name
+function fillArrangeTile(tile, app, look) {
+  const face = document.createElement('span');
+  face.className = 'tile';
+  face.append(appArt(app));
+  const badge = document.createElement('button');
+  badge.className = 'hide-badge';
+  badge.setAttribute('aria-label', `Remove ${app.name}`);
+  badge.setAttribute('aria-haspopup', 'menu');
+  const sign = document.createElement('span');
+  sign.className = 'sign minus';
+  sign.setAttribute('aria-hidden', 'true');
+  badge.append(sign);
+  badge.onclick = () => {
+    if (Date.now() - droppedAt < 500) return;   // the end of a drag that started near it
+    if (openMenu?.parentElement === tile) closeAppMenu(); else appMenu(tile, app);
+  };
+  face.append(badge);
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = app.name;
+  tile.setAttribute('aria-label', app.name);
+  tile.replaceChildren(face, name);
+  tile.dataset.look = look;
+}
+// Puts each tile in its place: the first six in the dock, the rest below. Tiles that move glide from where they
+// were; `still` (the one under the finger) follows the finger instead.
+function placeTiles(order, still = null) {
+  const { row, below, tiles } = arranged;
+  const moving = [...tiles.values()].filter(tile => tile !== still && tile.isConnected);
+  const was = new Map(moving.map(tile => [tile, tile.getBoundingClientRect()]));
+  moving.forEach(tile => tile.getAnimations().forEach(run => run.cancel()));
+  const focused = document.activeElement;
+  const placed = order.map(id => tiles.get(id)).filter(Boolean);
+  row.append(...placed.slice(0, dockSize));
+  below.append(...placed.slice(dockSize));
+  if (focused && focused !== document.activeElement && focused.isConnected) focused.focus({ preventScroll: true });
+  if (unseen() || calm()) return;
+  for (const tile of moving) {
+    const from = was.get(tile), to = tile.getBoundingClientRect();
+    const dx = from.left - to.left, dy = from.top - to.top;
+    if (!from.width || (!dx && !dy)) continue;
+    tile.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+}
+// "−" on an app: a small menu with Hide (this profile only) and, for an app someone added, Delete for Everyone
+let openMenu = null;
+function appMenu(tile, app) {
+  closeAppMenu();
+  if (drag || appMutationPending) return;
+  const menu = document.createElement('div');
+  menu.className = 'app-menu';
+  menu.setAttribute('role', 'menu');
+  const item = (label, danger, act) => {
+    const button = document.createElement('button');
+    button.setAttribute('role', 'menuitem');
+    button.textContent = label;
+    if (danger) button.className = 'danger';
+    button.onclick = e => { e.stopPropagation(); closeAppMenu(); act(); };
+    menu.append(button);
+  };
+  item('Hide', false, () => hideApp(app));
+  if (app.added) item('Delete for Everyone', true, () => deleteApp(app));
+  const sheet = $('#apps-sheet .sheet').getBoundingClientRect(), place = tile.getBoundingClientRect();
+  menu.classList.toggle('flip', place.left + place.width / 2 > sheet.left + sheet.width / 2);
+  tile.append(menu);
+  openMenu = menu;
+}
+function closeAppMenu() { openMenu?.remove(); openMenu = null; }
+document.addEventListener('pointerdown', e => {
+  if (openMenu && !openMenu.contains(e.target) && !e.target.closest?.('.hide-badge')) closeAppMenu();
+}, true);
+// Hide: off this profile's Home. A built-in app comes back with Restore built-in apps; one someone added, by adding it again
+function hideApp(app) {
+  if (drag || appMutationPending) return;
+  apps = apps.filter(item => item.id !== app.id);
+  if (!app.added) canRestore = true;
+  renderApps();
+  saveArrangement('/apps/remove', { id: app.id });
+}
+// Delete for Everyone: off every profile's Home, so it asks first
+function deleteApp(app) {
+  if (drag || appMutationPending || !confirm(`Delete “${app.name}” for Everyone?`)) return;
+  apps = apps.filter(item => item.id !== app.id);
+  renderApps();
+  saveArrangement('/apps/delete', { id: app.id });
+}
+// An edit while editing: the list here already shows it; the TV takes it, then its state settles any difference.
+// Quiet when it works (nothing to read), a message and the error haptic when it doesn't.
+async function saveArrangement(path, body) {
+  appMutationPending = true;
+  ++stateGeneration;
+  appMessage('');
+  try {
+    await api(path, body);
+  } catch (e) {
+    haptic('error');
+    appMessage(e.message === 'unpaired' ? 'Pair with the TV first.' : e.message, true);
+  }
+  try { await refresh(true); } finally {
+    appMutationPending = false;
+    renderApps();
+  }
+}
+
+// Long-press an app (300 ms; moving sooner is a scroll) and drag it. The tile under the finger follows it; the
+// others make room as it passes over their places, in the dock or below it.
+let drag = null, renderLater = false, droppedAt = 0;
+const PICK_UP_MS = 300, PICK_UP_SLOP = 8;
+$('#apps').addEventListener('pointerdown', e => {
+  if (!editing || drag || !arranged || appMutationPending || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  // What is really under the finger: the browser may hand a touch near the small "−" to the "−" itself
+  const under = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+  const tile = under.closest('.app[data-app-id]');
+  if (!tile || !arranged.tiles.has(tile.dataset.appId) || under.closest('.hide-badge, .app-menu')) return;
+  const finger = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  const listening = new AbortController();
+  const stop = () => { clearTimeout(timer); listening.abort(); };
+  const timer = setTimeout(() => { stop(); pickUp(tile, finger); }, PICK_UP_MS);
+  window.addEventListener('pointermove', ev => {
+    if (ev.pointerId !== finger.id) return;
+    if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > PICK_UP_SLOP) stop();
+    else { finger.x = ev.clientX; finger.y = ev.clientY; }
+  }, { signal: listening.signal });
+  for (const type of ['pointerup', 'pointercancel']) {
+    window.addEventListener(type, ev => { if (ev.pointerId === finger.id) stop(); }, { signal: listening.signal });
+  }
+});
+function pickUp(tile, finger) {
+  const id = tile.dataset.appId, start = appOrder();
+  if (!editing || drag || !arranged || appMutationPending || !tile.isConnected || !start.includes(id)) return;
+  closeAppMenu();
+  tile.getAnimations().forEach(run => run.cancel());
+  const centre = iconCentre(tile);
+  drag = { id, tile, pointer: finger.id, start, rest: start.filter(item => item !== id), index: start.indexOf(id),
+    x: finger.x, y: finger.y, tx: 0, ty: 0, grab: { x: finger.x - centre.x, y: finger.y - centre.y } };
+  tile.classList.add('lifted');
+  $('#apps').classList.add('dragging');
+  haptic('press');
+}
+// The place in Home's order under the middle of the dragged icon: the dock (and half the gap below it) holds the
+// first six, the grid below the rest
+function spotAt(x, y) {
+  const { dock, row, below } = arranged;
+  const inDock = y < dock.getBoundingClientRect().bottom + 9;
+  const grid = inDock ? row : below;
+  const r = grid.getBoundingClientRect(), style = getComputedStyle(grid);
+  const columns = Math.max(1, style.gridTemplateColumns.split(' ').filter(Boolean).length);
+  const gapX = parseFloat(style.columnGap) || 0, gapY = parseFloat(style.rowGap) || 0;
+  const cellW = (r.width - gapX * (columns - 1)) / columns, cellH = drag.tile.offsetHeight || 1;
+  const column = Math.min(columns - 1, Math.max(0, Math.floor((x - r.left + gapX / 2) / (cellW + gapX))));
+  const line = inDock ? 0 : Math.max(0, Math.floor((y - r.top + gapY / 2) / (cellH + gapY)));
+  return Math.min((inDock ? 0 : dockSize) + line * columns + column, drag.rest.length);
+}
+function dragTo(x, y) {
+  const d = drag;
+  d.x = x; d.y = y;
+  const index = spotAt(x - d.grab.x, y - d.grab.y);
+  if (index !== d.index) {
+    d.index = index;
+    placeTiles(placeApp(d.start, d.id, index), d.tile);
+    haptic('tick');
+  }
+  follow(d);
+}
+// The middle of a tile's icon where the grid puts it (the dock's icons are smaller than the ones below)
+function iconCentre(tile) {
+  const box = tile.getBoundingClientRect();
+  return { x: box.left + box.width / 2, y: box.top + (tile.querySelector('.tile')?.offsetHeight || box.height) / 2 };
+}
+// The dragged icon sits under the finger wherever its place in the grid is now
+function follow(d) {
+  d.tile.style.transform = '';
+  const home = iconCentre(d.tile);
+  d.tx = d.x - d.grab.x - home.x;
+  d.ty = d.y - d.grab.y - home.y;
+  d.tile.style.transform = `translate(${d.tx}px, ${d.ty}px)`;
+}
+// Lifting the finger drops it where it is (the TV takes it); the system taking the touch away puts it back
+function dropApp(cancelled = false) {
+  const d = drag;
+  if (!d) return;
+  drag = null;
+  droppedAt = Date.now();
+  $('#apps').classList.remove('dragging');
+  d.tile.classList.remove('lifted');
+  d.tile.style.transform = '';
+  const target = cancelled ? d.start : placeApp(d.start, d.id, d.index);
+  if (cancelled && arranged) placeTiles(d.start, d.tile);
+  if (!unseen() && !calm()) {
+    const home = iconCentre(d.tile), dx = d.x - d.grab.x - home.x, dy = d.y - d.grab.y - home.y;
+    if (dx || dy) d.tile.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+  if (!cancelled) haptic('press');
+  if (cancelled || sameOrder(target, d.start)) { if (renderLater) renderApps(); return; }
+  apps = reorderedApps(target);
+  saveArrangement('/apps/place', { id: d.id, index: d.index });
+}
+window.addEventListener('pointermove', e => { if (drag && e.pointerId === drag.pointer) dragTo(e.clientX, e.clientY); });
+window.addEventListener('pointerup', e => { if (drag && e.pointerId === drag.pointer) dropApp(); });
+window.addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.pointer) dropApp(true); });
+// While an app is lifted the finger moves it, not the sheet; a long press shows no callout
+document.addEventListener('touchmove', e => { if (drag && e.cancelable) e.preventDefault(); }, { passive: false });
+$('#apps').addEventListener('contextmenu', e => { if (editing && e.target.closest('.app')) e.preventDefault(); });
+// The keyboard (and a switch control): the arrow keys move the focused app one place earlier or later in Home's order
+$('#apps').addEventListener('keydown', e => {
+  if (!editing || drag || appMutationPending || !arranged) return;
+  const tile = e.target.closest?.('.app[data-app-id]');
+  const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+  if (!tile || e.target !== tile || !step) return;
+  e.preventDefault();
+  const order = appOrder(), id = tile.dataset.appId, index = order.indexOf(id) + step;
+  if (index < 0 || index >= order.length) return;
+  apps = reorderedApps(placeApp(order, id, index));
+  haptic('tick');
+  renderApps();
+  saveArrangement('/apps/place', { id, index });
+});
 
 // File IDs come from the server and remain opaque; names are always rendered as text.
 let fileTrail = [], fileEntries = [], fileNext = null, selectedMovie = null, fileGeneration = 0;
@@ -1190,6 +1443,7 @@ const closeSheets = (speed = 0) => {
   const closingText = $('#text-sheet').classList.contains('show');
   $$('.scrim.show').forEach(s => dismissSheet(s, Number(speed) || 0));
   if (closingText) $('#open-text').focus();
+  if (drag) dropApp(true);
   if (editing) { editing = false; whenHidden($('#apps-sheet'), () => renderApps()); }
 };
 function openSheet(selector) { closeSheets(); presentSheet($(selector)); }
@@ -1204,7 +1458,8 @@ $('#open-settings').onclick = () => openSettings();
 // 曲线弹回去。拉起来以后，手指下面那个按钮这一下不算点了。手指拉着时才动，不用定时器
 let pull = null, pulled = false;
 function pullStart(scrim, target, x, y, t) {
-  if (pull || !scrim.classList.contains('show') || target.closest('input, textarea, select, .handle')) return;
+  // (an app in Edit is for long-press and drag: a finger on it scrolls, but never pulls the sheet away)
+  if (pull || !scrim.classList.contains('show') || target.closest('input, textarea, select, .handle, .apps.editing .app')) return;
   const sheet = sheetOf(scrim), head = !!target.closest('.sheet-head');
   if (!head && sheet.scrollTop > 0) return;
   pull = { scrim, sheet, head, x, y, live: false, base: 0, off: 0, h: 1, dim: 1, trail: [{ y, t }] };

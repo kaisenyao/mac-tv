@@ -11,6 +11,9 @@ let package = Package(
             // The phone remote's web page (Features/Remote/RemotePage.swift serves it).
             resources: [.copy("Features/Remote/Page")]
         ),
-        .testTarget(name: "MacTVTests", dependencies: ["MacTV"], path: "Tests/MacTVTests")
+        // Keeps the tests away from Mac TV's real folders, the test runner's own preferences and the real Keychain
+        // (Tests/TestSandbox/TestSandbox.m).
+        .target(name: "TestSandbox", path: "Tests/TestSandbox", publicHeadersPath: "."),
+        .testTarget(name: "MacTVTests", dependencies: ["MacTV", "TestSandbox"], path: "Tests/MacTVTests")
     ]
 )

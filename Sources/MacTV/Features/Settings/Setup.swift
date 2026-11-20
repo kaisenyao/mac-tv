@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The first-run setup: a welcome, choosing the home screen's apps and pairing the phone remote.
+/// The first-run setup: a welcome, choosing the home screen's apps and connecting remotes.
 /// Shown once on a new install, driven by the D-pad, the keyboard or the mouse.
 struct SetupFlow: Equatable {
     enum Step: Int, CaseIterable {
@@ -10,8 +10,9 @@ struct SetupFlow: Equatable {
     var step: Step = .welcome
     /// In the apps step: the focused app, or the Continue button when it's past the last app.
     var index = 0
-    /// A phone opened the remote while the remote step was showing.
-    var phoneConnected = false
+    /// The remote step: Connect a Remote's pages, with the choice of what to connect (iPhone, Siri Remote, a game
+    /// controller) and Set Up Later. Each choice opens its own pairing page; Back returns to the choice.
+    var connect = SettingsPanel(section: .remotes, open: true, connectRemote: true, inSetup: true)
     /// The steps this run shows, in order.
     var steps: [Step] { Step.allCases }
 
@@ -43,10 +44,15 @@ extension TVController {
 
     func handleSetup(_ command: RemoteCommand) {
         guard var flow = setup else { return }
+        // Connecting remotes: Connect a Remote's own pages (see `pages`).
+        if flow.step == .remote {
+            handleSettings(command)
+            return
+        }
         switch command {
         case .back:
-            let steps = flow.steps
-            if let at = steps.firstIndex(of: flow.step), at > 0 { flow.step = steps[at - 1]; flow.index = 0 }
+            setupBack()
+            return
         case .select:
             setup = flow
             activateSetup(flow.step == .apps ? flow.index : 0)
@@ -87,14 +93,19 @@ extension TVController {
         setup = flow
     }
 
-    /// Called whenever a phone fetches the remote's state: on the remote step, that means it's paired.
+    /// A phone, Siri Remote or controller connected: on the remote step its row says so, and Set Up Later
+    /// becomes Continue. The person moves on when they're done; one can be connected after another.
     func notePhoneDuringSetup() {
-        guard let flow = setup, flow.step == .remote, !flow.phoneConnected else { return }
-        setup?.phoneConnected = true
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.6))
-            if self?.setup?.step == .remote { self?.advanceSetup() }
-        }
+        guard setup?.step == .remote else { return }
+        objectWillChange.send()
+    }
+
+    /// Back on the remote step's choice: the step before.
+    func setupBack() {
+        guard var flow = setup, let at = flow.steps.firstIndex(of: flow.step), at > 0 else { return }
+        flow.step = flow.steps[at - 1]
+        flow.index = 0
+        setup = flow
     }
 
     private func movedSetupFocus(from index: Int, _ direction: RemoteCommand.Direction) -> Int {
@@ -121,13 +132,24 @@ struct SetupScreen: View {
 
     var body: some View {
         let flow = tv.setup ?? SetupFlow()
+        if flow.step == .remote {
+            // Connect a Remote, as everywhere else, with the setup's dots under it.
+            SettingsPages(tv: tv, panel: flow.connect)
+                .overlay(alignment: .bottom) { dots(flow).padding(.bottom, 64) }
+                .transition(.opacity)
+        } else {
+            steps(flow)
+        }
+    }
+
+    private func steps(_ flow: SetupFlow) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             Group {
                 switch flow.step {
                 case .welcome: welcome
                 case .apps: apps(flow)
-                case .remote: remote(flow)
+                case .remote: EmptyView()
                 }
             }
             .id(flow.step)
@@ -175,49 +197,6 @@ struct SetupScreen: View {
             .padding(.top, 20)
             ShelfButton(title: "Continue", focused: flow.index == choices.count, glass: false) { tv.advanceSetup() }
                 .padding(.top, 16)
-        }
-    }
-
-    private func remote(_ flow: SetupFlow) -> some View {
-        VStack(spacing: 28) {
-            title("Use Your Phone as a Remote")
-            subtitle("Scan with your phone’s camera. A Siri Remote or game controller works too.")
-            HStack(alignment: .top, spacing: 36) {
-                if tv.remoteLinks.isEmpty {
-                    RoundedRectangle(cornerRadius: 28, style: .continuous).fill(.white.opacity(0.1))
-                        .frame(width: 300, height: 300)
-                        .overlay(Text("Connect to Wi-Fi\nor Tailscale").multilineTextAlignment(.center)
-                            .font(.tv(.caption2)).opacity(0.7))
-                }
-                ForEach(tv.remoteLinks) { link in
-                    VStack(spacing: 14) {
-                        if let qr = link.qr {
-                            Image(nsImage: qr).interpolation(.none).resizable()
-                                .frame(width: 240, height: 240)
-                                .padding(20)
-                                .background(.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-                        }
-                        Text(link.label).font(.tv(.caption2)).opacity(0.8)
-                        if let fallback = link.fallback {
-                            Text("or open \(fallback)").font(.tv(.caption2)).monospacedDigit().opacity(0.5)
-                        }
-                    }
-                }
-            }
-            .padding(.top, 12)
-            .opacity(flow.phoneConnected ? 0.35 : 1)
-            .overlay {
-                if flow.phoneConnected {
-                    Label("Remote Connected", systemImage: "checkmark.circle.fill")
-                        .font(.tv(.body, emphasized: true))
-                        .padding(.horizontal, 34).frame(height: 76)
-                        .background(Capsule().fill(Color(white: 0.16)))
-                        .transition(.scale(scale: 0.9).combined(with: .opacity))
-                }
-            }
-            .animation(Motion.appear, value: flow.phoneConnected)
-            ShelfButton(title: flow.phoneConnected ? "Continue" : "Skip for Now", focused: true, glass: false) { tv.advanceSetup() }
-                .padding(.top, 8)
         }
     }
 

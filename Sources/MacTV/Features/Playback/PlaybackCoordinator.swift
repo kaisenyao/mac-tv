@@ -37,13 +37,78 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         super.init()
     }
 
+    /// Something is playing in front. What Home sent to the background (paused, see AppQuit) doesn't count, so the
+    /// screen saver and updates go on as they do at Home.
     var isAnyPlaybackActive: Bool {
-        iinaSession != nil || externalBrowser != nil || moviePlayer != nil || webView != nil
+        ((iinaSession != nil || externalBrowser != nil) && !externalInBackground)
+            || (moviePlayer != nil && !movieInBackground) || webView != nil
     }
 
-    /// An IINA session is open, running or not: remote commands go to it.
+    /// An IINA session is open and in front, running or not: remote commands go to it.
     var iinaOpen: Bool {
-        iinaSession != nil
+        iinaSession != nil && !externalInBackground
+    }
+
+    // MARK: - In the background (Home, see AppQuit)
+
+    /// IINA or Brave, sent to the background by Home: still open behind Mac TV, IINA paused, until the app that
+    /// opened it is opened again. Presses stay with Mac TV meanwhile.
+    @Published private(set) var externalInBackground = false
+    /// Movies, sent to the background by Home: its screen and its player, paused where they were.
+    @Published private(set) var movieInBackground = false
+    private(set) var parkedMovies: MoviesBrowser?
+
+    /// Home: Movies (its library or its player), IINA and Brave go to the background. Nothing closes.
+    func sendToBackground(movies: MoviesBrowser?) {
+        if iinaSession != nil || externalBrowser != nil {
+            iinaSession?.pause()
+            externalInBackground = true
+        }
+        if let player = moviePlayer, tv?.mode == .movie {
+            player.background()
+            movieInBackground = true
+            tv?.displayCoordinator.releasePlaybackKeepAwake()
+        }
+        if let movies { parkedMovies = movies }
+    }
+
+    /// Opening Movies again: back to its screen and player as they were. False when it isn't in the background.
+    func resumeMovies() -> Bool {
+        if iinaSession != nil, externalInBackground {
+            externalInBackground = false
+            tv?.movies = parkedMovies
+            parkedMovies = nil
+            activateIINA()
+            return true
+        }
+        guard parkedMovies != nil || movieInBackground else { return false }
+        tv?.movies = parkedMovies ?? MoviesBrowser()
+        parkedMovies = nil
+        if movieInBackground, let player = moviePlayer {
+            movieInBackground = false
+            player.foreground()
+            tv?.setMode(.movie)
+            tv?.displayCoordinator.holdPlaybackKeepAwake(reason: "Watching a movie in Mac TV")
+        }
+        return true
+    }
+
+    /// Opening the website app that's playing in Brave in the background: back to it.
+    func resumeExternalBrowser(_ service: Service) -> Bool {
+        guard externalInBackground, externalBrowser != nil, externalBrowserService?.id == service.id else { return false }
+        externalInBackground = false
+        tv?.setMode(.player(service))
+        activateExternalBrowser()
+        return true
+    }
+
+    /// Movies quits: its screen and player in the background go.
+    func quitMovies() {
+        parkedMovies = nil
+        movieInBackground = false
+        closeIINAPlayback()
+        clearCurrentLocalMovie()
+        stopMoviePlayer()
     }
 
     func resetPlaybackRequest() {
@@ -59,6 +124,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
             player.stop()
             moviePlayer = nil
         }
+        movieInBackground = false
     }
 
     // MARK: - Web Playback
@@ -94,6 +160,57 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         closePopups()
         tv?.displayCoordinator.releasePlaybackKeepAwake()
     }
+
+    /// A website app (or YouTube) Home sent to the background: its page, paused and kept as it was, so opening the
+    /// app again comes back to the same place, as on Apple TV. One is kept at a time. Web keeps its own tabs, and
+    /// the apps' sign-in pages aren't kept.
+    private var parkedWeb: (service: Service, web: WKWebView, profile: String)?
+
+    /// Home over a page: pause it and keep it, or close it when it's one that isn't kept.
+    func parkWebPlayback() {
+        guard let web = webView, case .player(let service)? = tv?.mode, let profile = tv?.profile.id,
+              ![BrowserStore.pageID, BilibiliStore.loginID, NeteaseStore.loginID].contains(service.id) else {
+            closeWebPlayback()
+            return
+        }
+        web.pauseAllMediaPlayback(completionHandler: nil)
+        dropParkedWeb()
+        parkedWeb = (service, web, profile)
+        webView = nil
+        closePopups()
+        tv?.displayCoordinator.releasePlaybackKeepAwake()
+    }
+
+    /// Opening a website app that's in the background: its page as it was. False when there's none for it (or it
+    /// was someone else's, before a profile switch).
+    func resumeParkedWeb(_ service: Service) -> Bool {
+        guard let parked = parkedWeb, parked.service.id == service.id else { return false }
+        guard parked.profile == tv?.profile.id else {
+            dropParkedWeb()
+            return false
+        }
+        parkedWeb = nil
+        playbackRequest = UUID()
+        currentLocalMovie = nil
+        tv?.playerFailure = nil
+        webView = parked.web
+        tv?.setMode(.player(service))
+        tv?.clearPointer()
+        tv?.displayCoordinator.holdPlaybackKeepAwake(reason: "Watching \(service.name) in Mac TV")
+        tv?.bringToFront()
+        Task { @MainActor [weak self] in self?.tv?.window?.makeFirstResponder(parked.web) }
+        return true
+    }
+
+    /// The website app in the background quits (all of them with no id): its page goes.
+    func dropParkedWeb(_ id: String? = nil) {
+        guard let parked = parkedWeb, id == nil || parked.service.id == id else { return }
+        parked.web.stopLoading()
+        parkedWeb = nil
+    }
+
+    /// The website app kept in the background, if any.
+    var parkedWebID: String? { parkedWeb?.service.id }
 
     private func closePopups() {
         for popup in popups { popup.close() }
@@ -406,6 +523,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     func closeIINAPlayback(terminating: Bool = false) {
         let previous = iinaSession
         iinaSession = nil
+        if externalBrowser == nil { externalInBackground = false }
         iinaPlaybackError = nil
         iinaPlaybackStatus = ""
         previous?.close(immediate: terminating)
@@ -443,7 +561,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
                 var bar: CFTypeRef?
                 guard AXUIElementCopyAttributeValue(element, kAXMenuBarAttribute as CFString, &bar) == .success,
                       let bar else { continue }
-                if self.pressIINASubtitleSearch(unsafeBitCast(bar, to: AXUIElement.self), depth: 0) { return }
+                if self.pressIINASubtitleSearch(unsafeDowncast(bar, to: AXUIElement.self), depth: 0) { return }
             }
             self?.tv?.showToast("IINA Subtitle Search Isn't Available")
         }
@@ -475,8 +593,10 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         webView = nil
         currentLocalMovie = nil
         tv?.playerFailure = nil
-        moviePlayer?.stop()
-        moviePlayer = nil
+        if !movieInBackground {   // Movies in the background stays there
+            moviePlayer?.stop()
+            moviePlayer = nil
+        }
         tv?.setLaunchedAppID(nil)
         let session = BraveSession()
         externalBrowser = session
@@ -550,6 +670,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         let previous = externalBrowser
         externalBrowser = nil
         externalBrowserService = nil
+        if iinaSession == nil { externalInBackground = false }
         externalBrowserError = nil
         externalBrowserOpening = false
         do { try previous?.close() }

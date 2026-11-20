@@ -42,8 +42,10 @@ enum DedaoAPI {
         request.setValue(site.absoluteString, forHTTPHeaderField: "Origin")
         request.setValue(site.absoluteString + "/", forHTTPHeaderField: "Referer")
         request.setValue("web", forHTTPHeaderField: "Xi-DT")
-        if let csrf = DedaoCookies.value("csrfToken") { request.setValue(csrf, forHTTPHeaderField: "Xi-Csrf-Token") }
-        let cookie = DedaoCookies.header
+        // 发出去时是谁在看：回来时换了人，收到的 cookie 不记、结果不要（见 DedaoCookies）
+        let login = DedaoCookies.login
+        if let csrf = login.cookies["csrfToken"], !csrf.isEmpty { request.setValue(csrf, forHTTPHeaderField: "Xi-Csrf-Token") }
+        let cookie = DedaoCookies.header(login)
         if !cookie.isEmpty { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         if let json {
@@ -59,7 +61,9 @@ enum DedaoAPI {
             throw DedaoError.offline
         }
         guard let http = response as? HTTPURLResponse else { throw DedaoError.offline }
-        DedaoCookies.take(http, from: url)
+        DedaoCookies.take(http, from: url, sent: login)
+        // 换了人：这是上一个人的，当作取消（不提示出错）。指定了登录信息的（上一个人的回报）照样交回去
+        guard DedaoCookies.pinned != nil || DedaoCookies.isCurrent(login) else { throw CancellationError() }
         switch http.statusCode {
         case 401: throw DedaoError.signedOut
         case 496: throw DedaoError.verification
@@ -76,11 +80,12 @@ enum DedaoAPI {
     private static let preparing = Preparing()
 
     private static func prepare(force: Bool = false) async throws {
-        try await preparing.wait(force: force, hasToken: DedaoCookies.value("csrfToken") != nil) {
+        let login = DedaoCookies.login
+        try await preparing.wait(force: force, hasToken: login.cookies["csrfToken"].map { !$0.isEmpty } ?? false) {
             var request = URLRequest(url: site)
             request.setValue(agent, forHTTPHeaderField: "User-Agent")
             request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
-            let cookie = DedaoCookies.header
+            let cookie = DedaoCookies.header(login)
             if !cookie.isEmpty { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
             let response: URLResponse
             do { (_, response) = try await session.data(for: request) } catch {
@@ -88,8 +93,14 @@ enum DedaoAPI {
                 throw DedaoError.offline
             }
             guard let http = response as? HTTPURLResponse else { throw DedaoError.offline }
-            DedaoCookies.take(http, from: site)
+            DedaoCookies.take(http, from: site, sent: login)
         }
+    }
+
+    /// 换了人（个人资料）：之后用他的登录信息；首页要按他的 cookie 重新开一次
+    static func useProfile(_ space: ProfileSpace) {
+        DedaoCookies.useProfile(space)
+        preparing.forget()
     }
 
     /// 打开首页这一步：正在开的大家一起等它；开过了（而且 csrfToken 还在）就不再开
@@ -120,6 +131,9 @@ enum DedaoAPI {
         }
 
         func reset() { lock.withLock { ready = false } }
+
+        /// 换了人：正在开的那一次是上一个人的，新的请求不跟着它等
+        func forget() { lock.withLock { ready = false; running = nil } }
     }
 
     /// 得到的业务接口：回来的是 {"h":{"c":0,"e":""},"c":{…}}，c 是 0 才算成了，返回里面的 c
@@ -170,6 +184,7 @@ enum DedaoAPI {
     /// 扫了没有。扫好并在手机上确认了（status 1）：像网页版一样重新打开一次首页，收下登录的 cookie，
     /// 再问一下"我是谁"——答得上来才算登录好了。被取消时答 waiting（调用的人自己看是不是取消了）
     static func loginState(_ code: LoginCode) async -> LoginState {
+        let who = DedaoCookies.login   // 扫码的是这个人：中途换了人，登上的不算到下一个人身上
         let body: [String: Any] = ["keepLogin": true, "pname": "igetoauthpc", "qrCode": code.code, "scene": "registerlogin"]
         let answer: (Data, HTTPURLResponse)
         do {
@@ -188,8 +203,8 @@ enum DedaoAPI {
         switch status {
         case 1:
             try? await prepare(force: true)
-            if (try? await user()) != nil {
-                DedaoCookies.markSignedIn()
+            if (try? await user()) != nil, DedaoCookies.isCurrent(who) {
+                DedaoCookies.markSignedIn(who)
                 return .done
             }
             if Task.isCancelled { return .waiting }
@@ -796,75 +811,110 @@ enum DedaoError: Error, Equatable {
 }
 
 /// 得到的登录信息（cookie）：和网易云的一样（NeteaseAPI 的 jar），记在内存里，并存进这个应用自己的偏好设置，
-/// 只发给 dedao.cn。退出登录时删掉
+/// 只发给 dedao.cn。退出登录时删掉。
+/// 每个人（个人资料）一份，在他自己的设置里（第一个人还是原来的地方，见 ProfileSpace）。每个请求带着发出去时那个人的
+/// 登录信息：回来时已经换了人，回来的 cookie 不记，结果也不要
 enum DedaoCookies {
-    private static let storeKey = "dedaoLogin"
+    static let storeKey = "dedaoLogin"
     /// 自己记的一个标记（不发给得到）：扫码后问过"我是谁"、答上来了
     private static let marker = "__mactv_signed_in"
     /// 防火墙的 cookie 一直在换，不用存
     private static let passing: Set<String> = ["acw_tc", "aliyungf_tc", "acw_sc__v2", "ssxmod_itna", "ssxmod_itna2"]
+
+    /// 一个人的登录信息，和它属于哪一次换人以后（ProfileSpace.epoch）
+    struct Login: Sendable {
+        var cookies: [String: String]
+        var epoch: Int
+    }
+
+    private struct Jar {
+        var cookies: [String: String]
+        let epoch: Int
+        let defaults: UserDefaults
+        init(_ space: ProfileSpace) {
+            defaults = space.defaults
+            epoch = space.epoch
+            cookies = space.defaults.dictionary(forKey: DedaoCookies.storeKey) as? [String: String] ?? [:]
+        }
+    }
+
     /// 内存里的和存下来的都在这把锁里改（几个请求同时回来时，不会存进一份半新半旧的）
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var jar: [String: String] = load()
+    nonisolated(unsafe) private static var jar = Jar(ProfileSpace.current)
+    /// 这个任务里的请求用这一份登录信息、不用现在在看的人的：换人时上一个人还没报完的"听到哪了"用他自己的
+    @TaskLocal static var pinned: Login?
+
+    /// 换了人（个人资料）：之后的请求用他的登录信息
+    static func useProfile(_ space: ProfileSpace) {
+        lock.withLock { jar = Jar(space) }
+    }
+
+    /// 现在的登录信息（任务里指定了一份就是那一份）
+    static var login: Login {
+        if let pinned { return pinned }
+        return lock.withLock { Login(cookies: jar.cookies, epoch: jar.epoch) }
+    }
+
+    /// 这份登录信息的人还在看
+    static func isCurrent(_ login: Login) -> Bool { lock.withLock { jar.epoch == login.epoch } }
 
     /// 登录过：扫码后问过"我是谁"答上来了（标记），或者有得到自己的登录 cookie（GAT，之前的版本存的就是这样）
     static var signedIn: Bool { value(marker) != nil || value("GAT") != nil }
 
     /// 现在有哪些 cookie（只有名字，记日志用）
     static var names: String {
-        lock.withLock { jar.keys.filter { $0 != marker }.sorted().joined(separator: ",") }
+        login.cookies.keys.filter { $0 != marker }.sorted().joined(separator: ",")
     }
 
-    /// 扫码登录好了：记下标记，连同现在的 cookie 一起存下来
-    static func markSignedIn() {
+    /// 扫码登录好了：记下标记，连同现在的 cookie 一起存下来（扫码的时候换了人就不算）
+    static func markSignedIn(_ sent: Login) {
         lock.withLock {
-            jar[marker] = "1"
-            save(jar.filter { !passing.contains($0.key) })
+            guard jar.epoch == sent.epoch else { return }
+            jar.cookies[marker] = "1"
+            save(jar.cookies.filter { !passing.contains($0.key) })
         }
     }
 
     static func value(_ name: String) -> String? {
-        lock.withLock { jar[name].flatMap { $0.isEmpty ? nil : $0 } }
+        login.cookies[name].flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// 发给 dedao.cn 的 Cookie 头（网页版还会自己写一个 token = csrfToken）
-    static var header: String {
-        var all = lock.withLock { jar.filter { !$0.key.hasPrefix("__") } }
+    static func header(_ login: Login) -> String {
+        var all = login.cookies.filter { !$0.key.hasPrefix("__") }
         if all["token"] == nil, let csrf = all["csrfToken"] { all["token"] = csrf }
         return all.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
     }
 
-    /// 收下回应里的 Set-Cookie；登录相关的变了才存
-    static func take(_ response: HTTPURLResponse, from url: URL) {
+    /// 收下回应里的 Set-Cookie；登录相关的变了才存。发出去以后换了人：是上一个人的，不记
+    static func take(_ response: HTTPURLResponse, from url: URL, sent: Login) {
         let fields = response.allHeaderFields.reduce(into: [String: String]()) { result, pair in
             if let key = pair.key as? String, let value = pair.value as? String { result[key] = value }
         }
         let cookies = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
         guard !cookies.isEmpty else { return }
         lock.withLock {
-            let before = jar.filter { !passing.contains($0.key) }
+            guard jar.epoch == sent.epoch else { return }
+            let before = jar.cookies.filter { !passing.contains($0.key) }
             for cookie in cookies {
                 let expired = cookie.expiresDate.map { $0 < Date() } ?? false
-                jar[cookie.name] = expired || cookie.value.isEmpty ? nil : cookie.value
+                jar.cookies[cookie.name] = expired || cookie.value.isEmpty ? nil : cookie.value
             }
-            let after = jar.filter { !passing.contains($0.key) }
+            let after = jar.cookies.filter { !passing.contains($0.key) }
             if before != after, after[marker] != nil || after["GAT"] != nil { save(after) }
         }
     }
 
+    /// 退出登录（现在在看的这个人的）
     static func clear() {
         lock.withLock {
-            jar = [:]
-            UserDefaults.standard.removeObject(forKey: storeKey)
+            jar.cookies = [:]
+            jar.defaults.removeObject(forKey: storeKey)
         }
     }
 
     /// 只在锁里调
     private static func save(_ cookies: [String: String]) {
-        UserDefaults.standard.set(cookies, forKey: storeKey)
-    }
-
-    private static func load() -> [String: String] {
-        UserDefaults.standard.dictionary(forKey: storeKey) as? [String: String] ?? [:]
+        jar.defaults.set(cookies, forKey: storeKey)
     }
 }

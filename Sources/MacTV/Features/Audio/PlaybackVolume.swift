@@ -106,6 +106,11 @@ final class PlaybackVolume {
         add(renderer, base: 1) { ($0 as? AVSampleBufferAudioRenderer)?.volume = $1 }
     }
 
+    /// 按键音（见 Feedback）也是 Mac TV 自己的声音：音量面板上调音量时听得出大小
+    func attach(_ node: AVAudioPlayerNode) {
+        add(node, base: 1) { ($0 as? AVAudioPlayerNode)?.volume = $1 }
+    }
+
     private func add(_ object: AnyObject, base: Float, apply: @escaping @MainActor (AnyObject, Float) -> Void) {
         targets = targets.filter { $0.value.object != nil }   // 放完的影片
         targets[ObjectIdentifier(object)] = Target(object: object, base: base, apply: apply)

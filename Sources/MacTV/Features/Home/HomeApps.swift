@@ -1,37 +1,30 @@
 import AppKit
 
-// The home screen's apps: adding, removing, pinning and arranging them.
+// The home screen's apps: arranging, adding, hiding and deleting them. Home's first six apps are its top row,
+// the dock; Arrange Apps (and the phone's Edit) move apps into and out of it.
 extension TVController {
     var arrangedServices: [Service] { services.filter { $0.kind != .addApp && $0.kind != .settings } }
 
-    func isPinned(_ id: String) -> Bool { library.isPinned(id) }
+    /// The apps Home shows, by id, in order. The first six are the dock.
+    var appOrder: [String] { arrangedServices.map(\.id) }
 
+    /// Moves an app to `index` in Home's order. Into a full dock, its last app goes to the first place below;
+    /// out of the dock, the first app below comes up into it.
     @discardableResult
-    func setPinned(_ id: String, _ pinned: Bool) -> Bool {
-        guard library.setPinned(id, pinned) else { showToast("Couldn’t save favorites. Check available storage and folder permissions."); return false }
+    func moveApp(_ id: String, to index: Int) -> Bool {
+        guard appOrder.contains(id) else { return false }
+        guard library.move(id, to: index) else { showToast("Couldn't save that app's position."); return false }
         reloadServices()
         return true
     }
 
-    func canMoveApp(_ id: String, by offset: Int) -> Bool {
-        guard offset == -1 || offset == 1 else { return false }
-        let group = arrangedServices.filter { isPinned($0.id) == isPinned(id) }
-        guard let index = group.firstIndex(where: { $0.id == id }) else { return false }
-        return group.indices.contains(index + offset)
-    }
-
-    @discardableResult
-    func moveApp(_ id: String, by offset: Int) -> Bool {
-        guard library.move(id, by: offset) else { showToast("Couldn't save that app's position."); return false }
-        reloadServices()
-        return true
-    }
-
-    /// Adds a website. Its tile appears at once; the official icon follows when found.
+    /// Adds a website. Its tile appears at once; the official icon follows when found. A site someone already
+    /// added comes back instead, shown again here if this profile hid it.
     func addWebsite(name: String?, address: String) -> AddedApp? {
         var text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.contains("://") { text = "https://" + text }
         guard let url = URL(string: text), let host = url.host(), host.contains(".") else { return nil }
+        if let existing = reuseAddedApp(library.addedApp(url: url)) { return existing }
         let fallbackName = host.replacingOccurrences(of: "www.", with: "").split(separator: ".").first.map {
             $0.prefix(1).uppercased() + $0.dropFirst()
         } ?? host
@@ -52,6 +45,7 @@ extension TVController {
             showToast("\(existing.name) is already on the home screen")
             return nil
         }
+        if let existing = reuseAddedApp(library.addedApp(bundleID: bundleID)) { return existing }
         let app = library.add(name: installed.name, url: nil, bundleID: bundleID)
         useIcon(IconFinder.icon(forAppAt: installed.path), for: app.id)
         return app
@@ -63,6 +57,7 @@ extension TVController {
             showToast("\(existing.name) is already on the home screen")
             return nil
         }
+        if let existing = reuseAddedApp(library.addedApp(steamID: game.appID)) { return existing }
         let app = library.add(name: game.name, url: nil, bundleID: nil, steamID: game.appID)
         reloadServices()
         if game == SteamLibrary.bigPicture {
@@ -71,6 +66,16 @@ extension TVController {
             Task { await fetchSteamArt(appID: game.appID, id: app.id, in: library) }
         }
         return app
+    }
+
+    /// An app someone already added: shown again (last on Home) if this profile hid it.
+    private func reuseAddedApp(_ existing: AddedApp?) -> AddedApp? {
+        guard let existing else { return nil }
+        if library.isHidden(existing.id) || !appOrder.contains(existing.id) {
+            library.showAgain(existing.id)
+            reloadServices()
+        }
+        return existing
     }
 
     /// Downloads missing Steam tile / Top Shelf art for games already on the dock.
@@ -90,6 +95,8 @@ extension TVController {
         for game in SteamLibrary.shelfArtSamples {
             let id: String
             if let existing = services.first(where: { $0.kind == .steam(appID: game.appID) }) {
+                id = existing.id
+            } else if let existing = reuseAddedApp(library.addedApp(steamID: game.appID)) {
                 id = existing.id
             } else {
                 let app = library.add(name: game.name, url: nil, bundleID: nil, steamID: game.appID)
@@ -116,6 +123,7 @@ extension TVController {
         }
     }
 
+    /// The icon of an app someone added. Icons are everyone's, so Home redraws whoever is watching now.
     func useIcon(_ png: Data?, for id: String, in origin: AppLibrary? = nil) {
         let target = origin ?? library
         guard target.containsAddedApp(id) else { return }
@@ -123,21 +131,44 @@ extension TVController {
             target.setIcon(png, accent: TileArt.brandColor(from: image), for: id)
         }
         Icons.forget(id)
-        if target === library { reloadServices() }
+        if target === library || library.containsAddedApp(id) { reloadServices() }
     }
 
-    func removeApp(_ id: String) {
-        guard let service = services.first(where: { $0.id == id }), service.kind != .settings, service.kind != .addApp else { return }
-        library.remove(id)
-        Icons.forget(id)
+    /// Hide: the app leaves this profile's Home. Built-in apps come back with Restore Built-in Apps; an app
+    /// someone added comes back by adding it again.
+    func hideApp(_ id: String) {
+        guard appOrder.contains(id) else { return }
+        library.hide(id)
         reloadServices()
+    }
+
+    /// Delete for Everyone: an app someone added goes from every profile's Home; its icon and art go to the Trash.
+    /// Built-in apps can only be hidden. Returns what went wrong, if anything.
+    @discardableResult
+    func deleteAppForEveryone(_ id: String) -> String? {
+        let name = services.first { $0.id == id }?.name ?? "the app"
+        switch library.deleteForEveryone(id) {
+        case .deleted:
+            Icons.forget(id)
+            reloadServices()
+            return nil
+        case .notAdded:
+            return "Built-in apps can’t be deleted. You can hide them."
+        case .trashFailed:
+            let message = "Couldn’t move “\(name)” to the Trash. Nothing was deleted."
+            showToast(message)
+            return message
+        case .notSaved:
+            let message = "Couldn’t delete “\(name)”. Check available storage and folder permissions."
+            showToast(message)
+            return message
+        }
     }
 
     func restoreBuiltInApps() {
         library.restoreBuiltIns()
         reloadServices()
     }
-
 
     func iconPNG(for id: String) -> Data? {
         services.first { $0.id == id }.flatMap { Icons.png(for: $0) }

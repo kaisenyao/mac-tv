@@ -11,8 +11,8 @@ struct MovieFoldersTests {
     @Test
     func freshPreferencesIncludeMoviesAndDownloads() throws {
         let name = "MovieFoldersTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let defaults = TestDefaults.named(name)
+        defer { TestDefaults.remove(name) }
         let preferences = MovieFolderPreferences(defaults: defaults, movies: movies, downloads: downloads)
         #expect(preferences.folders.map(\.path) == [movies.path, downloads.path])
     }
@@ -20,8 +20,8 @@ struct MovieFoldersTests {
     @Test
     func migrationPreservesCustomFoldersAndDoesNotReenableDownloads() throws {
         let name = "MovieFoldersTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let defaults = TestDefaults.named(name)
+        defer { TestDefaults.remove(name) }
         defaults.set([custom.path], forKey: "movieFolders")
         let preferences = MovieFolderPreferences(defaults: defaults, movies: movies, downloads: downloads)
         #expect(preferences.folders.map(\.path) == [custom.path, downloads.path])
@@ -33,8 +33,8 @@ struct MovieFoldersTests {
     @Test
     func migrationDoesNotDuplicateEquivalentDownloadsPath() throws {
         let name = "MovieFoldersTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let defaults = TestDefaults.named(name)
+        defer { TestDefaults.remove(name) }
         defaults.set([movies.path, "/test-home/./Downloads/"], forKey: "movieFolders")
         let preferences = MovieFolderPreferences(defaults: defaults, movies: movies, downloads: downloads)
         #expect(preferences.folders.map(\.path) == [movies.path, downloads.path])

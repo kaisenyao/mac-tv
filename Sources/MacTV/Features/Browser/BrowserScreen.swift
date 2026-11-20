@@ -20,19 +20,32 @@ struct BrowserScreen: View {
     @Environment(\.canvasSize) private var canvas
     @FocusState private var typing: Bool
 
-    private let margin: CGFloat = 120
-    private let rowHeight: CGFloat = 400
-    private let tile: CGFloat = 220
-    private let card = CGSize(width: 500, height: 236)
-    private let gap: CGFloat = 44
-    /// 地址栏：标签栏下面空出一截再开始，一进来不挤
-    private let fieldTop: CGFloat = BrowserTopBar.height + 92
-    private let fieldHeight: CGFloat = 96
-    private var rowsTop: CGFloat { fieldTop + fieldHeight + 96 }
-    /// 焦点在那几排里时整块往上挪多少：标签栏整个藏到屏幕上面，地址栏回到原来没有标签栏时的位置
-    private let collapse: CGFloat = 86
+    // 网页默认 175%（BrowserZoomLevel.medium），开始页跟着收小到原来的 0.875，和网页放在一起不显得大。
+    // 一排正好放下整数个（7 个方块、4 张卡片，左右各留 margin），再往右露出下一个的一点，淡出去
+    private let margin: CGFloat = 96
+    private let rowHeight: CGFloat = 352
+    private let tile: CGFloat = 192
+    private let tileCorner: CGFloat = 38
+    /// 方块下面的名字比方块宽一点（露出方块两边，不占一排的位置，方块和标题左边对齐）
+    private let tileLabel: CGFloat = 216
+    private let card = CGSize(width: 402, height: 206)
+    /// 地址栏：标签栏下面空出一截再开始，一进来不挤；第一屏正好放下两排
+    private let fieldTop: CGFloat = BrowserTopBar.height + 80
+    private let fieldHeight: CGFloat = 84
+    private var rowsTop: CGFloat { fieldTop + fieldHeight + 84 }
+    /// 焦点在那几排里时整块往上挪多少：标签栏整个藏到屏幕上面
+    private let collapse: CGFloat = BrowserTopBar.height
 
     var body: some View {
+        // History（⌘Y、"⋯"里的 Show All History）开着时整页换成它
+        if store.historyState != nil {
+            BrowserHistoryView(store: store).transition(.opacity)
+        } else {
+            startPage
+        }
+    }
+
+    private var startPage: some View {
         ZStack(alignment: .topLeading) {
             background
             ZStack(alignment: .topLeading) {
@@ -43,7 +56,7 @@ struct BrowserScreen: View {
                 if store.startsPrivate {
                     // 无痕：选的网站开成无痕标签页
                     Label("Private Browsing", systemImage: "hand.raised.fill")
-                        .font(.tv(.caption1, emphasized: true))
+                        .font(.tv(.caption2, emphasized: true))
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
@@ -66,11 +79,17 @@ struct BrowserScreen: View {
                     .frame(width: canvas.width, alignment: .trailing)
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
             }
+            // 按住确认一个网站：它的菜单（个人收藏的 Rename、Edit Address… 也在这里打字）
+            if store.itemMenu != nil {
+                BrowserItemMenuView(store: store).frame(width: canvas.width, height: canvas.height)
+            }
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
         .background(Color.black)
-        .onChange(of: store.editing) { _, editing in typing = editing }
-        .onChange(of: store.focusRequest) { _, _ in if store.editing { typing = true } }
+        .animation(Motion.appear, value: store.itemMenu != nil)
+        // 地址栏（不是标签栏上改地址的那个）拿着键盘
+        .onChange(of: store.editing) { _, editing in typing = editing && !store.editingInBar && store.itemMenu == nil }
+        .onChange(of: store.focusRequest) { _, _ in if store.editing && !store.editingInBar && store.itemMenu == nil { typing = true } }
     }
 
     private var background: some View {
@@ -86,11 +105,12 @@ struct BrowserScreen: View {
 
     private var addressBar: some View {
         let focused = store.focus == .field && store.barFocus == nil   // 焦点在上面的标签栏里时它不亮
-        let lit = focused || store.editing
+        let editingHere = store.editing && !store.editingInBar && store.itemMenu == nil
+        let lit = focused || editingHere
         let text = Binding(get: { store.query }, set: { store.typed($0) })
-        return HStack(spacing: 22) {
-            Image(systemName: "magnifyingglass").font(.system(size: 32, weight: .semibold))
-            if store.editing {
+        return HStack(spacing: 19) {
+            Image(systemName: "magnifyingglass").font(.system(size: 28, weight: .semibold))
+            if editingHere {
                 TextField("Search or enter website name", text: text)
                     .textFieldStyle(.plain)
                     .focused($typing)
@@ -105,23 +125,23 @@ struct BrowserScreen: View {
                         }
                     }
             } else {
-                Text(store.query.isEmpty ? "Search or enter website name" : store.query)
+                Text(store.query.isEmpty || store.editingInBar || store.itemMenu != nil ? "Search or enter website name" : store.query)
                     .foregroundStyle(lit ? Color.black.opacity(0.55) : .white.opacity(0.55))
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
         }
-        .font(.tv(.callout))
+        .font(.system(size: 27, weight: .medium))
         .foregroundStyle(lit ? .black : .white.opacity(0.85))
-        .padding(.horizontal, 40)
-        .frame(width: 1200, height: fieldHeight)
+        .padding(.horizontal, 35)
+        .frame(width: 1050, height: fieldHeight)
         .background {
             // 影子只投在胶囊上，不投在字上（字周围不糊一圈）
             Capsule().fill(lit ? Color.white : store.startsPrivate ? Color(hex: "#5B4BA8").opacity(0.35) : .white.opacity(0.1))
-                .shadow(color: .black.opacity(focused ? 0.45 : 0), radius: 24, y: 14)
-            Capsule().strokeBorder(.white.opacity(lit ? 0 : 0.14))
+                .shadow(color: .black.opacity(focused ? 0.45 : 0), radius: 21, y: 12)
+            PillOutline().strokeBorder(.white.opacity(lit ? 0 : 0.14))   // 不用 Capsule 描：两头会多出竖线（见 PillOutline）
         }
-        .scaleEffect(focused && !store.editing ? 1.04 : 1)
+        .scaleEffect(focused && !editingHere ? 1.04 : 1)
         .environment(\.colorScheme, lit ? .light : .dark)
         .animation(Motion.focus, value: focused)
         .contentShape(Capsule())
@@ -147,24 +167,29 @@ struct BrowserScreen: View {
         .animation(Motion.navigate, value: focusedRow)
     }
 
-    /// 一排里一项占多宽：方块下面的名字比方块宽一点（tile + 30），按它算挪多少、哪头被截掉
+    /// 一排里一项占多宽，按它算挪多少、哪头被截掉
     private func width(of style: BrowserStore.Row.Style) -> CGFloat {
         switch style {
-        case .tiles: tile + 30
+        case .tiles: tile
         case .cards, .notice: card.width
         }
+    }
+
+    /// 一排里两项之间：7 个方块、4 张卡片正好占满左右 margin 之间
+    private func gap(of style: BrowserStore.Row.Style) -> CGFloat {
+        style == .tiles ? 64 : 40
     }
 
     private func rowView(_ row: BrowserStore.Row, index: Int) -> some View {
         let column = store.column(of: index)
         let active = focusedRow == index && !store.editing
-        let width = width(of: row.style)
+        let width = width(of: row.style), gap = gap(of: row.style)
         // 选中的那一个停在第二个位置，前面露出一个；再前面的被左边截掉一截
         let shift = CGFloat(max(0, column - 1)) * (width + gap)
         let end = margin + CGFloat(row.pages.count) * (width + gap) - gap - shift
-        return VStack(alignment: .leading, spacing: 28) {
+        return VStack(alignment: .leading, spacing: 24) {
             Text(row.title)
-                .font(.tv(.headline, emphasized: true))
+                .font(.system(size: 33, weight: .bold))
                 .foregroundStyle(.white.opacity(focusedRow == index ? 1 : 0.7))
                 .padding(.leading, margin)
             if row.style == .notice {
@@ -194,10 +219,13 @@ struct BrowserScreen: View {
     @ViewBuilder
     private func item<Content: View>(position: Int, column: Int, width: CGFloat, row: Int,
                                      @ViewBuilder content: () -> Content) -> some View {
-        if abs(position - column) <= 6 {
+        if abs(position - column) <= 8 {
             content()
                 .contentShape(Rectangle())
                 .onTapGesture { store.focus(row: row, column: position); store.handle(.select) }
+                // 鼠标按住、右键：和遥控器按住确认一样，那一个的菜单
+                .onLongPressGesture(minimumDuration: 0.5) { store.openItemMenu(row: row, column: position) }
+                .onRightClick { store.openItemMenu(row: row, column: position) }
         } else {
             Color.clear.frame(width: width, height: 1)
         }
@@ -205,32 +233,33 @@ struct BrowserScreen: View {
 
     /// 个人收藏、常去网站：一个方块，是网站自己的图标（没有够大的图标就是网站名的第一个字母），下面写名字
     private func tileView(_ page: WebPage, focused: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 44, style: .continuous)
-        return VStack(spacing: 22) {
-            SiteTile(page: page, size: tile, corner: 44)
+        let shape = RoundedRectangle(cornerRadius: tileCorner, style: .continuous)
+        return VStack(spacing: 19) {
+            SiteTile(page: page, size: tile, corner: tileCorner)
                 .overlay(shape.strokeBorder(.white.opacity(0.08), lineWidth: 1.5))
-                .browserLift(focused: focused, in: shape, scale: 1.1)
+                .browserLift(focused: focused, in: shape, scale: 1.1, shadow: 26)
             Text(page.name)
-                .font(.tv(.caption1, emphasized: focused))
+                .font(.tv(.caption2, emphasized: focused))
                 .foregroundStyle(.white.opacity(focused ? 1 : 0.72))
                 .lineLimit(1)
-                .frame(width: tile + 30)
-                .offset(y: focused ? 12 : 0)
+                .frame(width: tileLabel)
+                .offset(y: focused ? 10 : 0)
         }
+        .frame(width: tile)
         .animation(Motion.focus, value: focused)
     }
 
     /// 最近浏览、阅读列表：卡片，左上角网站图标和网址，中间标题，下面多久以前
     private func cardView(_ page: WebPage, focused: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 30, style: .continuous)
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 14) {
-                SiteTile(page: page, size: 46, corner: 12, minPixels: 16)
-                Text(page.host).font(.tv(.caption1, emphasized: true)).lineLimit(1)
+        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                SiteTile(page: page, size: 40, corner: 10, minPixels: 16)
+                Text(page.host).font(.tv(.caption2, emphasized: true)).lineLimit(1)
                     .foregroundStyle(focused ? .black.opacity(0.6) : .white.opacity(0.6))
             }
             Text(page.name)
-                .font(.tv(.body, emphasized: true))
+                .font(.tv(.caption1, emphasized: true))
                 .lineLimit(2)
                 .foregroundStyle(focused ? .black : .white.opacity(0.92))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -238,29 +267,29 @@ struct BrowserScreen: View {
                 Text(BrowserTime.ago(visited)).font(.tv(.caption2)).foregroundStyle(focused ? .black.opacity(0.5) : .white.opacity(0.45))
             }
         }
-        .padding(26)
+        .padding(23)
         .frame(width: card.width, height: card.height, alignment: .topLeading)
         .background(shape.fill(focused ? Color.white : .white.opacity(0.08)))
         .overlay(shape.strokeBorder(.white.opacity(focused ? 0 : 0.1), lineWidth: 1.5))
-        .browserLift(focused: focused, in: shape, scale: 1.06)
+        .browserLift(focused: focused, in: shape, scale: 1.06, shadow: 26)
         .animation(Motion.focus, value: focused)
     }
 
     /// 还读不到 Safari 时：一张说明卡，选它打开系统设置里那一页
     private func permissionCard(focused: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 30, style: .continuous)
-        return HStack(spacing: 32) {
-            Image(systemName: "lock.shield").font(.system(size: 68, weight: .medium))
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Let Mac TV read Safari's favorites and history").font(.tv(.callout, emphasized: true))
+        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+        return HStack(spacing: 28) {
+            Image(systemName: "lock.shield").font(.system(size: 60, weight: .medium))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Let Mac TV read Safari's favorites and history").font(.system(size: 27, weight: .bold))
                 Text("Turn on Mac TV in Privacy & Security › Full Disk Access.")
-                    .font(.tv(.caption1)).opacity(0.7)
+                    .font(.tv(.caption2)).opacity(0.7)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .foregroundStyle(focused ? .black : .white)
-        .padding(.horizontal, 44)
-        .frame(width: 1400, height: 210, alignment: .leading)
+        .padding(.horizontal, 38)
+        .frame(width: 1224, height: 184, alignment: .leading)
         .background(shape.fill(focused ? Color.white : .white.opacity(0.08)))
         .overlay(shape.strokeBorder(.white.opacity(focused ? 0 : 0.12), lineWidth: 1.5))
         .scaleEffect(focused ? 1.03 : 1, anchor: .leading)

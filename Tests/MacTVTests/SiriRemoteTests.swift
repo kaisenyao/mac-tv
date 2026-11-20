@@ -92,7 +92,8 @@ struct SiriRemoteTests {
         #expect(r.release(.playPause, at: 0.1) == [])
         #expect(r.press(.mute, at: 1) == [.mute])
         #expect(r.press(.power, at: 2) == [.power])
-        #expect(r.press(.siri, at: 3) == [])          // Siri 键：先不用
+        #expect(r.press(.siri, at: 3) == [])          // Siri: nothing yet, pressed or held
+        #expect(r.advance(to: 4) == [])
         #expect(r.release(.siri, at: 4) == [])
         #expect(r.nextDeadline == nil)
     }
@@ -377,11 +378,11 @@ struct PanelSwipeTests {
         try withTV { tv in
             let home = tv.focus
             tv.handle(.controlCenter)
-            #expect(tv.controlCenter?.item == .audio)
+            #expect(tv.controlCenter?.item == .remotes)
             phoneSwipe(tv, dx: 4, dy: 150)               // 手指往下：下一格，甩出去的惯性不再走
-            #expect(tv.controlCenter?.item == .phone)
+            #expect(tv.controlCenter?.item == .display)
             phoneSwipe(tv, dx: 0, dy: -150)              // 往上
-            #expect(tv.controlCenter?.item == .audio)
+            #expect(tv.controlCenter?.item == .remotes)
             phoneSwipe(tv, dx: -150, dy: 20)             // 往左
             #expect(tv.controlCenter?.item == .sleepMac)
             #expect(tv.focus == home)                    // 下面的主屏没动
@@ -393,11 +394,11 @@ struct PanelSwipeTests {
         try withTV { tv in
             let home = tv.focus
             tv.settings = SettingsPanel()
-            #expect(tv.settings?.section == .profiles)
+            #expect(tv.settings?.section == .general)
             siriSwipe(tv, from: .init(x: 0.5, y: 0.9), to: .init(x: 0.5, y: 0.1), at: 0)   // 手指往下
-            #expect(tv.settings?.section == .remotes)
-            siriSwipe(tv, from: .init(x: 0.5, y: 0.1), to: .init(x: 0.52, y: 0.9), at: 10)  // 往上
             #expect(tv.settings?.section == .profiles)
+            siriSwipe(tv, from: .init(x: 0.5, y: 0.1), to: .init(x: 0.52, y: 0.9), at: 10)  // 往上
+            #expect(tv.settings?.section == .general)
             #expect(tv.focus == home)
 
             // 控制中心也是

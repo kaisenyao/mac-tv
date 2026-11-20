@@ -79,13 +79,6 @@ final class ProfileStore {
         save()
     }
 
-    /// Gives a profile one of the six colours.
-    func setColor(_ color: String, for id: String) {
-        guard Self.colors.contains(color), let index = saved.profiles.firstIndex(where: { $0.id == id }) else { return }
-        saved.profiles[index].color = color
-        save()
-    }
-
     /// Removes a profile, its app list and its sign-ins. The first profile stays.
     func remove(_ id: String) {
         guard id != Profile.mainID, let index = saved.profiles.firstIndex(where: { $0.id == id }) else { return }
@@ -112,7 +105,10 @@ struct ProfilePicker: Equatable {
     var index = 0
     /// On the Remove button below the focused profile.
     var onRemove = false
+    /// Remove asks first: "Remove “Name”?" with Cancel, then Remove Profile. Focus starts on Cancel.
     var confirmingRemove = false
+    /// On the question, focus is on Remove Profile rather than Cancel.
+    var onConfirm = false
     /// The new profile's name while it's being typed.
     var naming: String?
 }
@@ -144,21 +140,40 @@ extension TVController {
         profilePicker = ProfilePicker(index: index)
     }
 
+    /// Someone else starts watching. The order matters: everything the last person had open closes and
+    /// saves first (their queue, positions, tabs), then the new person's space becomes current, and only
+    /// then does each app read its data again, from the new space.
     func switchProfile(to id: String) {
         profilePicker = nil
         defer { showStartupPairingIfReady() }
         guard id != profile.id else { return }
-        goHome()
+        leaveProfile()
         profiles.select(id)
         loadCurrentProfile()
         setFocus(.app(0))
     }
 
-    /// Removes a profile, its apps and its sign-ins. When it was the one watching, the first profile takes over.
+    /// Removes a profile and everything it kept: its home screen layout (apps-<id>.json), its sign-ins (its WebKit
+    /// store and Keychain items), its defaults suite, its folder (with its picture) and caches, its remembered
+    /// YouTube rows and its website player choice. The apps everyone shares, and their icons, stay. When it was the
+    /// one watching, the first profile takes over.
     func removeProfile(_ id: String) {
+        guard id != Profile.mainID, profiles.all.contains(where: { $0.id == id }) else { return }
         let wasWatching = id == profile.id
+        // The first profile takes over: what the removed one was playing stops and saves, as on any switch.
+        if wasWatching { leaveProfile() }
         profiles.remove(id)
         if wasWatching { loadCurrentProfile() } else { objectWillChange.send() }
+        spaces.remove(id, keychainServices: profileApps.keychainServices)
+        YouTubeFeed.forget(profile: id)
+        browserPreferences.forget(id)
+    }
+
+    /// The person watching is about to change: close what's open and save what they were in the middle of.
+    private func leaveProfile() {
+        goHome()
+        quitBackgroundApps(reason: "a profile switch")   // Home keeps apps in the background; they're the last person's (see AppQuit)
+        profileApps.profileWillChange()
     }
 
     func renameProfile(_ id: String, to name: String) {
@@ -166,23 +181,23 @@ extension TVController {
         profileEdited()
     }
 
-    func setProfileColor(_ color: String, for id: String) {
-        profiles.setColor(color, for: id)
-        profileEdited()
-    }
-
-    /// The store isn't observed, so a changed name or colour is published here.
+    /// The store isn't observed, so a changed name is published here.
     private func profileEdited() {
         if profiles.current != profile { profile = profiles.current } else { objectWillChange.send() }
     }
 
-    /// Takes on the store's current profile: their apps, and the apps that keep a sign-in start over.
+    /// Takes on the store's current profile: their space first, then their apps, and every app that keeps
+    /// data per profile reloads it from their space.
     private func loadCurrentProfile() {
+        let space = spaces.enter(profiles.current.id)
         profile = profiles.current
         library = AppLibrary(profileID: profile.id, folder: library.storageFolder)
         reloadServices()
-        // 哔哩哔哩、主屏顶部按这个人的账号重新来（不留上一个人的登录、关注、观看记录）
-        bilibiliStore.profileChanged()
+        preferences.use(space)
+        remoteCoordinator.shortcutsProfileChanged(space)
+        movieLibrary.use(space)
+        // 哔哩哔哩、网易云、得到、浏览器按这个人的重新来（不留上一个人的登录、设置、观看记录），主屏顶部也是
+        profileApps.profileChanged()
         appShelf.reset()
     }
 
@@ -190,7 +205,6 @@ extension TVController {
         guard var picker = profilePicker else { return }
         let all = profiles.all
         let addIndex = all.count
-        if case .select = command {} else { picker.confirmingRemove = false }
 
         if var name = picker.naming {
             if case .back = command {
@@ -202,6 +216,20 @@ extension TVController {
             picker.naming = name
             profilePicker = picker
             if done { createProfile() }
+            return
+        }
+
+        if picker.confirmingRemove {
+            switch command {
+            case .back: picker.confirmingRemove = false   // back on the Remove button
+            case .move(.up), .move(.left): picker.onConfirm = false
+            case .move(.down), .move(.right): picker.onConfirm = true
+            case .select:
+                answerProfileRemoval(picker.onConfirm)
+                return
+            default: break
+            }
+            profilePicker = picker
             return
         }
 
@@ -230,7 +258,7 @@ extension TVController {
         profilePicker = picker
     }
 
-    /// Chooses a profile, starts adding one, or (pressed twice) removes the focused one.
+    /// Chooses a profile, starts adding one, or asks before removing the focused one.
     func activateProfile(_ index: Int, remove: Bool = false) {
         guard var picker = profilePicker else { return }
         let all = profiles.all
@@ -239,15 +267,26 @@ extension TVController {
             picker.naming = ""
             picker.onRemove = false
         } else if remove {
-            if picker.confirmingRemove {
-                removeProfile(all[index].id)
-                picker = ProfilePicker(index: max(0, index - 1))
-            } else {
-                picker.confirmingRemove = true
-            }
+            picker.onRemove = true
+            picker.confirmingRemove = true
+            picker.onConfirm = false
         } else {
             switchProfile(to: all[index].id)
             return
+        }
+        profilePicker = picker
+    }
+
+    /// The answer to "Remove “Name”?": Remove Profile removes it; Cancel goes back to its Remove button.
+    func answerProfileRemoval(_ remove: Bool) {
+        guard var picker = profilePicker, picker.confirmingRemove else { return }
+        let all = profiles.all
+        if remove, all.indices.contains(picker.index) {
+            removeProfile(all[picker.index].id)
+            picker = ProfilePicker(index: max(0, picker.index - 1))
+        } else {
+            picker.confirmingRemove = false
+            picker.onConfirm = false
         }
         profilePicker = picker
     }
@@ -261,17 +300,25 @@ extension TVController {
 
 // MARK: Views
 
-/// A profile's round avatar: their initial on their colour.
+/// A profile's round avatar: their photo (Settings › Profiles and Accounts › Choose Photo…), or their initial on
+/// their colour.
 struct ProfileAvatar: View {
     let profile: Profile
     var size: CGFloat = 200
+    @ObservedObject private var photos = ProfilePhotos.shared
 
     var body: some View {
-        Circle()
-            .fill(LinearGradient(colors: [Color(hex: profile.color), Color(hex: profile.color).opacity(0.6)],
-                                 startPoint: .topLeading, endPoint: .bottomTrailing))
-            .overlay(Text(profile.initial).font(.system(size: size * 0.42, weight: .bold)).foregroundStyle(.white))
-            .frame(width: size, height: size)
+        if let photo = photos.photo(for: profile.id) {
+            Image(nsImage: photo).resizable().interpolation(.high).scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+        } else {
+            Circle()
+                .fill(LinearGradient(colors: [Color(hex: profile.color), Color(hex: profile.color).opacity(0.6)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay(Text(profile.initial).font(.system(size: size * 0.42, weight: .bold)).foregroundStyle(.white))
+                .frame(width: size, height: size)
+        }
     }
 }
 
@@ -282,11 +329,14 @@ struct ProfilesScreen: View {
     var body: some View {
         let picker = tv.profilePicker ?? ProfilePicker()
         let all = tv.profiles.all
+        let removing = picker.confirmingRemove && all.indices.contains(picker.index) ? all[picker.index] : nil
         VStack(spacing: 56) {
-            Text(picker.naming == nil ? "Who’s Watching?" : "New Profile")
+            Text(removing.map { "Remove “\($0.name)”?" } ?? (picker.naming == nil ? "Who’s Watching?" : "New Profile"))
                 .font(.tv(.title2, emphasized: true))
             if let name = picker.naming {
                 naming(name)
+            } else if let removing {
+                confirmRemoval(removing, onConfirm: picker.onConfirm)
             } else {
                 HStack(alignment: .top, spacing: 56) {
                     ForEach(Array(all.enumerated()), id: \.element.id) { index, profile in
@@ -332,19 +382,36 @@ struct ProfilesScreen: View {
     @ViewBuilder
     private func removeButton(_ picker: ProfilePicker, all: [Profile]) -> some View {
         if picker.index < all.count, all[picker.index].id != Profile.mainID {
-            let name = all[picker.index].name
-            Button { tv.activateProfile(picker.index, remove: true) } label: {
-                Text(picker.confirmingRemove ? "Press Again to Remove" : "Remove \(name)")
-                    .font(.tv(.caption2, emphasized: true))
-                    .padding(.horizontal, 30)
-                    .frame(height: 58)
-                    .foregroundStyle(picker.onRemove && !picker.confirmingRemove ? .black : .white)
-                    .background(Capsule().fill(picker.confirmingRemove ? Color(hex: "#FF453A")
-                                               : picker.onRemove ? .white : .white.opacity(0.1)))
+            pillButton("Remove \(all[picker.index].name)", focused: picker.onRemove) {
+                tv.activateProfile(picker.index, remove: true)
             }
-            .buttonStyle(.plain)
-            .scaleEffect(picker.onRemove ? 1.06 : 1)
         }
+    }
+
+    /// The question before a profile goes: its avatar, then Cancel (where focus starts) and Remove Profile, red
+    /// when focused.
+    private func confirmRemoval(_ profile: Profile, onConfirm: Bool) -> some View {
+        VStack(spacing: 40) {
+            ProfileAvatar(profile: profile)
+            VStack(spacing: 18) {
+                pillButton("Cancel", focused: !onConfirm) { tv.answerProfileRemoval(false) }
+                pillButton("Remove Profile", focused: onConfirm, destructive: true) { tv.answerProfileRemoval(true) }
+            }
+        }
+    }
+
+    private func pillButton(_ title: String, focused: Bool, destructive: Bool = false,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.tv(.caption2, emphasized: true))
+                .padding(.horizontal, 30)
+                .frame(height: 58)
+                .foregroundStyle(focused && !destructive ? .black : .white)
+                .background(Capsule().fill(focused ? (destructive ? Color(hex: "#FF453A") : .white) : .white.opacity(0.1)))
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(focused ? 1.06 : 1)
     }
 
     private func naming(_ name: String) -> some View {
@@ -356,7 +423,7 @@ struct ProfilesScreen: View {
     }
 }
 
-/// The name being typed, with a caret: "Who's Watching?" and Settings › Profiles.
+/// The name being typed, with a caret: "Who's Watching?" and Settings › Profiles and Accounts.
 struct ProfileNameField: View {
     let name: String
 

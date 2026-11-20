@@ -54,8 +54,8 @@ import Testing
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)", isDirectory: true)
         let suiteName = "MacTVTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName); try? FileManager.default.removeItem(at: folder) }
+        let defaults = TestDefaults.named(suiteName)
+        defer { TestDefaults.remove(suiteName); try? FileManager.default.removeItem(at: folder) }
         let clock = Date(timeIntervalSince1970: 1000)
         let legacy = RemoteServer.pairingCode(now: clock) == "246810" ? "246811" : "246810"
         defaults.set(legacy, forKey: "pairingCode")
@@ -88,8 +88,8 @@ import Testing
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)")
         let suite = "MacTVTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: folder) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite); try? FileManager.default.removeItem(at: folder) }
         let store = PairingStore(folder: folder)
         let token = try store.issue(name: "Guest", guest: true)
         var routed = false

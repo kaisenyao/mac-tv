@@ -211,6 +211,12 @@ final class IINAPlaybackSession {
         return true
     }
 
+    /// Home: IINA stays open behind Mac TV, paused (not toggled: a paused movie stays paused).
+    func pause() {
+        guard !closed, pendingCommands < 16 else { return }
+        enqueue(["set_property", "pause", true])
+    }
+
     /// Stops and terminates only the dedicated IINA process created by this session.
     func close(immediate: Bool = false) {
         guard !closed else { return }

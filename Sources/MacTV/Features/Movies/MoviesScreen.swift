@@ -2,10 +2,12 @@ import AppKit
 import SwiftUI
 
 /// The Movies app's screen: Continue Watching, then every movie in the chosen folders as
-/// posters, driven by the D-pad like the rest of the TV.
+/// posters, driven by the D-pad like the rest of the TV, and a Settings button at the top for the Folders sheet.
 struct MoviesBrowser: Equatable {
     var row = 0
     var column = 0
+    /// Focus is on the Settings button, above the top row.
+    var settingsFocused = false
     /// The Folders sheet, and its focused row.
     var folderRow: Int?
     /// Adding a network share or a Jellyfin server, over the Folders sheet.
@@ -29,15 +31,39 @@ struct ShareForm: Equatable {
     var connecting = false
 }
 
-enum MovieItem: Hashable {
-    case movie(String)
-    case folders
+/// A poster: the movie at this path.
+struct MovieItem: Hashable {
+    let path: String
+
+    static func movie(_ path: String) -> MovieItem { MovieItem(path: path) }
 }
 
 struct MovieRow: Hashable {
     let title: String?
     let items: [MovieItem]
     var progress = false
+}
+
+extension MoviesBrowser {
+    /// Up from the top row goes to the Settings button, and Down from it comes back. With no movies the button is
+    /// all there is, and focus stays on it. `lengths` is how many posters each row has.
+    mutating func move(_ direction: RemoteCommand.Direction, lengths: [Int]) {
+        guard !lengths.isEmpty else { return }
+        row = min(row, lengths.count - 1)
+        column = min(column, lengths[row] - 1)
+        if settingsFocused {
+            if direction == .down { settingsFocused = false }
+            return
+        }
+        switch direction {
+        case .left: column = max(0, column - 1)
+        case .right: column = min(lengths[row] - 1, column + 1)
+        case .up:
+            if row == 0 { settingsFocused = true } else { row -= 1; column = min(column, lengths[row] - 1) }
+        case .down:
+            if row < lengths.count - 1 { row += 1; column = min(column, lengths[row] - 1) }
+        }
+    }
 }
 
 extension TVController {
@@ -50,17 +76,18 @@ extension TVController {
         if !started.isEmpty {
             rows.append(MovieRow(title: "Continue Watching", items: started.map { .movie($0.path) }, progress: true))
         }
-        let all = library.movies.map { MovieItem.movie($0.path) } + [.folders]
+        let all = library.movies.map { MovieItem.movie($0.path) }
         for start in stride(from: 0, to: all.count, by: Self.movieColumns) {
             let chunk = Array(all[start..<min(start + Self.movieColumns, all.count)])
-            rows.append(MovieRow(title: start == 0 && !library.movies.isEmpty ? "Library" : nil, items: chunk))
+            rows.append(MovieRow(title: start == 0 ? "Library" : nil, items: chunk))
         }
         return rows
     }
 
-    /// The browser's focus, kept inside the rows as they change.
-    var movieFocus: (row: Int, column: Int) {
+    /// The focused poster, kept inside the rows as they change; nil when there are no movies.
+    var movieFocus: (row: Int, column: Int)? {
         let rows = movieRows
+        guard !rows.isEmpty else { return nil }
         let browser = movies ?? MoviesBrowser()
         let row = min(browser.row, rows.count - 1)
         return (row, min(browser.column, rows[row].items.count - 1))
@@ -94,54 +121,52 @@ extension TVController {
             return
         }
         let rows = movieRows
-        let focus = movieFocus
-        browser.row = focus.row
-        browser.column = focus.column
         switch command {
         case .back:
             movies = nil
-            return
-        case .move(.left): browser.column = max(0, focus.column - 1)
-        case .move(.right): browser.column = min(rows[focus.row].items.count - 1, focus.column + 1)
-        case .move(.up):
-            if focus.row > 0 {
-                browser.row -= 1
-                browser.column = min(browser.column, rows[browser.row].items.count - 1)
-            }
-        case .move(.down):
-            if focus.row < rows.count - 1 {
-                browser.row += 1
-                browser.column = min(browser.column, rows[browser.row].items.count - 1)
-            }
-        case .select, .playPause:
+        case .move(let direction):
+            browser.move(direction, lengths: rows.map(\.items.count))
             movies = browser
+        case .select where browser.settingsFocused || rows.isEmpty:
+            openMovieFolders()
+        case .select, .playPause:
+            guard let focus = movieFocus, !browser.settingsFocused else { return }
             activateMovieItem(rows[focus.row].items[focus.column])
-            return
         default: break
         }
-        movies = browser
     }
 
     func activateMovieItem(_ item: MovieItem) {
-        switch item {
-        case .folders:
-            movies?.folderRow = 0
-        case .movie(let path):
-            guard let movie = movieLibrary.movie(path) else { return }
-            if movie.inProgress {
-                movies?.resuming = path
-                movies?.resumeRow = 0
-            } else {
-                playMovie(movie, from: 0)
-            }
+        guard let movie = movieLibrary.movie(item.path) else { return }
+        if movie.inProgress {
+            movies?.resuming = item.path
+            movies?.resumeRow = 0
+        } else {
+            playMovie(movie, from: 0)
         }
     }
 
     // MARK: Folders
 
+    /// The Settings button: the Folders sheet, and focus back on the button when it closes.
+    func openMovieFolders() {
+        movies?.settingsFocused = true
+        movies?.folderRow = 0
+    }
+
+    /// The Folders sheet's last rows, in order, after the folders and the Jellyfin servers.
+    enum FolderAdder: Int, CaseIterable {
+        case folder, networkShare, jellyfin
+    }
+
+    /// Where an Add row sits on the Folders sheet.
+    func folderSheetRow(_ adder: FolderAdder) -> Int {
+        movieLibrary.suggestedFolders.count + jellyfin.servers.count + adder.rawValue
+    }
+
     private func handleFolders(_ command: RemoteCommand) {
         guard let row = movies?.folderRow else { return }
-        let count = movieLibrary.suggestedFolders.count + jellyfin.servers.count + 3
+        let count = folderSheetRow(.folder) + FolderAdder.allCases.count
         switch command {
         case .back: movies?.folderRow = nil
         case .move(.up): movies?.folderRow = max(0, row - 1)
@@ -166,12 +191,13 @@ extension TVController {
             }
         } else if row < extras {
             jellyfin.activate(servers[row - suggested.count])
-        } else if row == extras {
-            movies?.shareForm = ShareForm()
-        } else if row == extras + 1 {
-            movies?.shareForm = ShareForm(jellyfin: true)
         } else {
-            chooseMovieFolder()
+            switch FolderAdder(rawValue: row - extras) {
+            case .folder: chooseMovieFolder()
+            case .networkShare: movies?.shareForm = ShareForm()
+            case .jellyfin: movies?.shareForm = ShareForm(jellyfin: true)
+            case nil: break
+            }
         }
     }
 
@@ -302,23 +328,31 @@ struct MoviesScreen: View {
     var body: some View {
         let rows = tv.movieRows
         let focus = tv.movieFocus
-        let item = rows[focus.row].items[focus.column]
-        let movie: Movie? = if case .movie(let path) = item { library.movie(path) } else { nil }
         let browser = tv.movies ?? MoviesBrowser()
+        // With no movies the Settings button is all there is to focus.
+        let settingsFocused = browser.settingsFocused || focus == nil
+        let movie = focus.flatMap { library.movie(rows[$0.row].items[$0.column].path) }
+        let focusRow = focus?.row ?? 0
 
         ZStack(alignment: .topLeading) {
             MovieBackdrop(image: movie.flatMap { library.posters[$0.path] })
                 .id(movie?.path ?? "none")
                 .transition(.opacity)
 
-            header(item: item, movie: movie)
+            header(movie: movie)
                 .padding(.leading, PosterLayout.left)
                 .frame(height: PosterLayout.rowsTop - 40, alignment: .bottomLeading)
 
-            ClockPill()
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 96)
-                .padding(.top, 56)
+            // The time, and Settings for the Folders sheet: Up from the top row reaches it, like Apple TV's top controls.
+            HStack(spacing: 16) {
+                ClockPill(twentyFour: tv.preferences.twentyFourHourTime)
+                MoviesSettingsButton(focused: settingsFocused) {
+                    tv.openMovieFolders()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, 96)
+            .padding(.top, 56)
 
             VStack(alignment: .leading, spacing: 56) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
@@ -331,19 +365,21 @@ struct MoviesScreen: View {
                         HStack(spacing: PosterLayout.spacing) {
                             ForEach(Array(row.items.enumerated()), id: \.element) { column, item in
                                 PosterTile(item: item, progress: row.progress,
-                                           focused: focus.row == rowIndex && focus.column == column, library: library)
+                                           focused: !settingsFocused && focus?.row == rowIndex && focus?.column == column,
+                                           library: library)
                                     .onTapGesture {
                                         tv.movies?.row = rowIndex
                                         tv.movies?.column = column
+                                        tv.movies?.settingsFocused = false
                                         tv.activateMovieItem(item)
                                     }
                             }
                         }
                     }
-                    .opacity(rowIndex < focus.row ? 0 : 1)
+                    .opacity(rowIndex < focusRow ? 0 : 1)
                 }
             }
-            .offset(x: PosterLayout.left, y: PosterLayout.rowsTop - CGFloat(focus.row) * PosterLayout.rowStride)
+            .offset(x: PosterLayout.left, y: PosterLayout.rowsTop - CGFloat(focusRow) * PosterLayout.rowStride)
 
             if let row = browser.folderRow {
                 FoldersSheet(tv: tv, focusedRow: row)
@@ -364,39 +400,41 @@ struct MoviesScreen: View {
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
         .clipped()
         .foregroundStyle(.white)
-        .animation(Motion.navigate, value: focus.row)
+        .animation(Motion.navigate, value: focusRow)
+        .animation(Motion.focus, value: settingsFocused)
         .animation(Motion.appear, value: movie?.path)
         .animation(Motion.appear, value: browser.folderRow != nil)
         .animation(Motion.appear, value: browser.resuming)
     }
 
+    /// The focused movie, or with none in the library, that there are none and where Mac TV looked.
     @ViewBuilder
-    private func header(item: MovieItem, movie: Movie?) -> some View {
+    private func header(movie: Movie?) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            switch item {
-            case .folders:
-                Text(library.movies.isEmpty ? "No movies yet" : "Folders")
+            if let movie {
+                Text(movie.displayTitle)
                     .font(.tv(.title2, emphasized: true))
-                Text(library.scanning ? "Looking for movies…" : foldersLine)
+                    .lineLimit(2)
+                    .frame(maxWidth: 1300, alignment: .leading)
+                Text(details(of: movie))
                     .font(.tv(.body)).foregroundStyle(.white.opacity(0.7))
-                    .frame(maxWidth: 1100, alignment: .leading)
-            case .movie:
-                if let movie {
-                    Text(movie.displayTitle)
-                        .font(.tv(.title2, emphasized: true))
-                        .lineLimit(2)
-                        .frame(maxWidth: 1300, alignment: .leading)
-                    Text(details(of: movie))
+            } else if library.movies.isEmpty {
+                Text("No movies yet")
+                    .font(.tv(.title2, emphasized: true))
+                if let line = emptyLine {
+                    Text(line)
                         .font(.tv(.body)).foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: 1100, alignment: .leading)
                 }
             }
         }
         .shadow(color: .black.opacity(0.4), radius: 12)
     }
 
-    private var foldersLine: String {
+    private var emptyLine: String? {
+        if library.scanning { return "Looking for movies…" }
         let names = ListFormatter.localizedString(byJoining: library.folders.map { FileManager.default.displayName(atPath: $0.path) })
-        return library.movies.isEmpty && !names.isEmpty ? "No movies in \(names)." : names
+        return names.isEmpty ? nil : "No movies in \(names)."
     }
 
     private func details(of movie: Movie) -> String {
@@ -474,29 +512,19 @@ struct PosterTile: View {
     }
 
     @ViewBuilder private var artwork: some View {
-        switch item {
-        case .folders:
+        if let image = library.posters[item.path] {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+        } else {
+            // Until the poster arrives: the film icon on graphite.
             ZStack {
-                Color.white.opacity(0.08)
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(.white.opacity(0.45), style: StrokeStyle(lineWidth: 3, dash: [10, 8]))
-                Image(systemName: "folder.badge.plus").font(.system(size: 56, weight: .medium)).symbolRenderingMode(.hierarchical)
-            }
-        case .movie(let path):
-            if let image = library.posters[path] {
-                Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
-            } else {
-                // Until the poster arrives: the film icon on graphite.
-                ZStack {
-                    LinearGradient(colors: [Color(hex: "#3A3A3C"), Color(hex: "#1C1C1E")], startPoint: .top, endPoint: .bottom)
-                    Image(systemName: "film").font(.system(size: 54, weight: .light)).opacity(0.5)
-                }
+                LinearGradient(colors: [Color(hex: "#3A3A3C"), Color(hex: "#1C1C1E")], startPoint: .top, endPoint: .bottom)
+                Image(systemName: "film").font(.system(size: 54, weight: .light)).opacity(0.5)
             }
         }
     }
 
     @ViewBuilder private var progressBar: some View {
-        if progress, case .movie(let path) = item, let movie = library.movie(path),
+        if progress, let movie = library.movie(item.path),
            let position = movie.position, let duration = movie.duration, duration > 0 {
             GeometryReader { geo in
                 Capsule().fill(.white.opacity(0.3))
@@ -563,14 +591,13 @@ struct FoldersSheet: View {
                     }
                 }
             }
-            let extras = folders.count + jellyfin.servers.count
-            row(extras, systemImage: "plus", title: "Add Network Share…") {
+            row(tv.folderSheetRow(.folder), systemImage: "folder.badge.plus", title: "Add Folder…") {
                 Image(systemName: "chevron.right").font(.system(size: 22, weight: .semibold)).opacity(0.6)
             }
-            row(extras + 1, systemImage: "plus", title: "Add Jellyfin Server…") {
+            row(tv.folderSheetRow(.networkShare), systemImage: "plus", title: "Add Network Share…") {
                 Image(systemName: "chevron.right").font(.system(size: 22, weight: .semibold)).opacity(0.6)
             }
-            row(extras + 2, systemImage: "folder.badge.plus", title: "Add Folder…") {
+            row(tv.folderSheetRow(.jellyfin), systemImage: "plus", title: "Add Jellyfin Server…") {
                 Image(systemName: "chevron.right").font(.system(size: 22, weight: .semibold)).opacity(0.6)
             }
         }
@@ -867,6 +894,29 @@ struct TransportButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(PressStyle(pressed: pressed))
+    }
+}
+
+/// Settings beside the time: the pill's glass and height, white when focused, and a dip when pressed.
+/// It opens the Folders sheet.
+private struct MoviesSettingsButton: View {
+    let focused: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(focused ? .black : .white)
+                .frame(width: 50, height: 50)
+                .focusPlatter(Capsule(), focused: focused)
+                .contentShape(Circle())
+                .scaleEffect(focused ? 1.08 : 1)
+                .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 14, y: 8)
+                .animation(Motion.focus, value: focused)
+        }
+        .buttonStyle(PressStyle(pressed: false))
+        .accessibilityLabel("Settings")
     }
 }
 

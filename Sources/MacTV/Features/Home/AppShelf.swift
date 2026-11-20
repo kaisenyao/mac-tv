@@ -61,9 +61,10 @@ enum BiliShelfSource: String, CaseIterable {
         case .live: "直播"
         }
     }
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
     static var current: BiliShelfSource {
-        get { UserDefaults.standard.string(forKey: "bilibiliShelf").flatMap(BiliShelfSource.init) ?? .following }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "bilibiliShelf") }
+        get { ProfileSpace.current.defaults.string(forKey: "bilibiliShelf").flatMap(BiliShelfSource.init) ?? .following }
+        set { ProfileSpace.current.defaults.set(newValue.rawValue, forKey: "bilibiliShelf") }
     }
 }
 
@@ -94,8 +95,11 @@ enum NeteaseShelfSource: String, CaseIterable {
     }
 
     /// 以前"推荐歌单"里前两个是每日歌单；拆成两种以后，勾过推荐歌单的把每日歌单也勾上，主屏看到的和以前一样（只做一次）
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
+    private static var store: UserDefaults { ProfileSpace.current.defaults }
+
     static func migrateSplitLists() {
-        let store = UserDefaults.standard, key = "neteaseShelfSplitLists"
+        let store = store, key = "neteaseShelfSplitLists"
         guard !store.bool(forKey: key) else { return }
         store.set(true, forKey: key)
         let saved = store.stringArray(forKey: "neteaseShelfSources") ?? []
@@ -105,16 +109,16 @@ enum NeteaseShelfSource: String, CaseIterable {
     }
     static var selected: [NeteaseShelfSource] {
         get {
-            let saved = (UserDefaults.standard.stringArray(forKey: "neteaseShelfSources") ?? []).compactMap(NeteaseShelfSource.init)
+            let saved = (store.stringArray(forKey: "neteaseShelfSources") ?? []).compactMap(NeteaseShelfSource.init)
             return saved.isEmpty ? defaults : allCases.filter(saved.contains)
         }
-        set { UserDefaults.standard.set(newValue.map(\.rawValue), forKey: "neteaseShelfSources") }
+        set { store.set(newValue.map(\.rawValue), forKey: "neteaseShelfSources") }
     }
     /// 后台放歌时，顶部最前面加一页"正在播放"（默认开着）
     static let nowPlayingKey = "nowPlaying"
     static var showsNowPlaying: Bool {
-        get { UserDefaults.standard.object(forKey: "neteaseShelfNowPlaying") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "neteaseShelfNowPlaying") }
+        get { store.object(forKey: "neteaseShelfNowPlaying") as? Bool ?? true }
+        set { store.set(newValue, forKey: "neteaseShelfNowPlaying") }
     }
     /// 设置那一行右边写的："每日推荐"、"正在播放、每日推荐"、"正在播放等 4 项"
     static var summary: String {
@@ -130,7 +134,8 @@ enum DedaoShelfSource {
     /// 新书推荐放几本（加上正在听的书一页，不超过 AppShelf.limit）
     static let newBookCount = 6
 
-    private static var store: UserDefaults { .standard }
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
+    private static var store: UserDefaults { ProfileSpace.current.defaults }
 
     /// 以前的两个开关（正在播放、继续学习）有一个开着，就算开着
     static var showsListening: Bool {
@@ -361,6 +366,15 @@ final class AppShelf: ObservableObject {
             withAnimation(Self.pageAnimation) { self.index[id] = min(next, pages.count - 1) }
             if self.target[id] == next { self.target[id] = nil }
         }
+    }
+
+    /// 测试用：这个应用顶部直接是这几页（不去网上取）
+    func show(_ id: String, pages: [AppShelfItem], label: String = "") {
+        fetched[id] = pages
+        items[id] = composed(id)
+        labels[id] = label
+        index[id] = 0
+        target[id] = nil
     }
 
     /// 换了一个人（个人资料）、退出了登录：这个应用（nil 是全部）顶部的东西清掉，按现在的账号重新取
@@ -833,7 +847,7 @@ struct AppShelfBanner: View {
                         Text(badge)
                             .font(.system(size: 19, weight: .semibold))
                             .padding(.horizontal, 12).frame(height: 32)
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
+                            .overlay(PillOutline().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
                             .foregroundStyle(.white.opacity(0.85))
                     }
                 }

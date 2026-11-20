@@ -7,8 +7,8 @@ struct BrowserPreferencesTests {
     @Test
     func choicesArePersistedPerProfileAndDefaultToBuiltIn() throws {
         let suite = "MacTV.BrowserPreferencesTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
         let preferences = BrowserPreferences(defaults: defaults)
         #expect(preferences.choice(for: "main") == .embedded)
         preferences.setChoice(.brave, for: "main")

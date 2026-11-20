@@ -210,5 +210,3 @@ struct Artwork: View {
         }
     }
 }
-
-// MARK: Settings › Remote

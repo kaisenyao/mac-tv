@@ -4,13 +4,15 @@ import SwiftUI
 /// 屏保"翻页时钟"（Fliqlo 那样）：黑底上两块深灰的翻页牌，左边小时、右边分钟；数字一变，那块牌的上半片翻下来。
 /// 照投影仪上那个启动器的翻页时钟（cleanyourtv 的 FlipClockView）做的：牌的大小和间距、颜色、圆角、
 /// 中缝，字是 Helvetica 粗体压窄到 0.77 再描一圈边（翻页钟那种又高又窄又粗的数字）。
-/// 12 / 24 小时制跟这台 Mac 的设置走；12 小时制时小时那块牌左下角写 AM / PM。
+/// 12 / 24 小时制跟设置 › General › 24-Hour Time 走（屏保页选了翻页时钟时也有这一行，是同一个设置）（默认是这台 Mac 的设置）；12 小时制时小时那块牌上写 AM（左上角）/ PM（左下角），和 Fliqlo 一样。
 /// 只在分钟变的那一下动半秒，平时一帧都不画
 struct FlipClock: View {
+    @ObservedObject private var preferences = Preferences.shared
+
     var body: some View {
         GeometryReader { geo in
             TimelineView(.everyMinute) { context in
-                FlipClockFace(date: context.date, size: geo.size)
+                FlipClockFace(date: context.date, twentyFour: preferences.twentyFourHourTime, size: geo.size)
             }
         }
         .background(Color.black)
@@ -19,25 +21,28 @@ struct FlipClock: View {
     }
 }
 
-private struct FlipClockFace: View {
+/// One moment of the clock at a size (the screensaver, and the Settings card's thumbnail through FlipClock).
+struct FlipClockFace: View {
     let date: Date
+    let twentyFour: Bool
     let size: CGSize
 
     static let digitColor = Color(white: 0xAA / 255)
 
     var body: some View {
-        let parts = FlipClockTime(date)
+        let parts = FlipClockTime(date, twentyFour: twentyFour)
         // 量自真翻页钟的比例：一块牌是宽的 0.4525，两块之间隔一块牌的 0.084
         let side = min(size.height * 0.80, size.width * 0.4525)
         HStack(spacing: side * 0.084) {
             FlipPlate(text: parts.hour, side: side)
-                .overlay(alignment: .bottomLeading) {
+                // 和 Fliqlo 一样：AM 在小时那块牌的左上角，PM 在左下角，离边一样远
+                .overlay(alignment: parts.meridiemAtTop ? .topLeading : .bottomLeading) {
                     if let meridiem = parts.meridiem {
                         Text(meridiem)
                             .font(.custom(FlipNumerals.fontName, size: side * 0.08))
                             .foregroundStyle(Self.digitColor)
                             .padding(.leading, side * 0.065)
-                            .padding(.bottom, side * 0.1)
+                            .padding(parts.meridiemAtTop ? .top : .bottom, side * 0.1)
                     }
                 }
             FlipPlate(text: parts.minute, side: side)
@@ -70,6 +75,9 @@ struct FlipClockTime: Equatable {
         }
         minute = String(format: "%02d", parts.minute ?? 0)
     }
+
+    /// AM / PM 写在哪：AM 左上角，PM 左下角（Fliqlo 的位置）
+    var meridiemAtTop: Bool { meridiem == "AM" }
 
     /// 这台 Mac 现在用不用 24 小时制（系统设置 › 通用 › 日期与时间）
     static var systemTwentyFour: Bool {

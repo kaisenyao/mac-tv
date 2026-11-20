@@ -56,9 +56,10 @@ final class DedaoStore: ObservableObject {
     /// 得到给的全部分类（每一项下面的几排都按它建好，勾回来马上就有）
     private(set) var allSections: [Section] = [.home]
     /// 设置里勾掉、不在左边栏显示的分类（记的是没勾的，所以得到新加的分类默认是显示的）
+    /// 每个人（个人资料）各选各的（见 ProfileSpace）
     static var hiddenSections: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: "dedaoHiddenSections") ?? []) }
-        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: "dedaoHiddenSections") }
+        get { Set(ProfileSpace.current.defaults.stringArray(forKey: "dedaoHiddenSections") ?? []) }
+        set { ProfileSpace.current.defaults.set(Array(newValue).sorted(), forKey: "dedaoHiddenSections") }
     }
     /// 右边现在是哪一项
     @Published private(set) var section = Section.home.id
@@ -194,6 +195,7 @@ final class DedaoStore: ObservableObject {
     private var timeChanges: AnyCancellable?
 
     init() {
+        DedaoAPI.useProfile(.current)   // 登录信息是现在在看的这个人的（见 ProfileSpace）
         // 换了一讲、放 / 停、列表变了，页面跟着重画（右上角的正在播放、列表里在放的那一讲）。
         // 时间一秒变两次，不转过来：要显示时间的地方自己看着播放器
         playerChanges = Publishers.CombineLatest3(player.$queue, player.$index, player.$paused)
@@ -1941,5 +1943,63 @@ extension DedaoStore {
         if player.scrubbing { endHold() }
         player.step(delta)
         return true
+    }
+}
+
+// MARK: 每个人（个人资料）各一份（见 ProfileApp）
+
+extension DedaoStore: ProfileApp {
+    /// 新的人从这些设置开始（和第一次打开得到一样）
+    static var registeredDefaults: [String: Any] { ["dedaoSpeed": Float(1), "dedaoAutoNext": true] }
+
+    /// 要换人了：在听的是这个人的书，停下；听到哪了用他自己的登录信息报给得到（见 DedaoPlayer.report）
+    func profileWillChange() {
+        closed()
+        player.stop()
+    }
+
+    /// 换了人：登录、设置、内容全换成这个人的。像退出登录一样从头来，但什么都不删（上一个人的都还在他自己那里）
+    func profileChanged() {
+        DedaoAPI.useProfile(.current)
+        signInRun += 1
+        loadRun += 1
+        polling?.cancel()
+        polling = nil
+        loadedAt = .distantPast
+        opening?.cancel()
+        opening = nil
+        accountLoading = false
+        pendingShelf = nil
+        listened = false
+        user = nil
+        loginCode = nil
+        loginExpired = false
+        failureChoice = 0
+        content = [:]
+        focusedRows = [:]
+        columns = [:]
+        sections = [.home]
+        allSections = [.home]
+        section = Section.home.id
+        sidebarSection = section
+        focus = .rows
+        menu = nil
+        menuParents = []
+        settingsOpen = false
+        pages = []
+        tracks = [:]
+        folders = [:]
+        courses = [:]
+        listFocus = [:]
+        loadingPages = []
+        failedPages = []
+        morePages = []
+        lectureLoads = [:]
+        playerOpen = false
+        lecturesVisible = false
+        playingFrom = nil
+        player.profileReset()
+        reader.reset()
+        phase = .loading
     }
 }

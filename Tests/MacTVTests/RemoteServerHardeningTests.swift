@@ -52,6 +52,40 @@ import Testing
         server.stop()
         #expect(server.activeConnectionCount == 0)
     }
+    /// The phone asks for /state every few seconds: while nothing changed it gets an empty 304, not the whole state.
+    @Test func unchangedStateAnswersNotModified() throws {
+        var template = Array("/tmp/mactv-etag.XXXXXXXX".utf8CString)
+        let name = try #require(mkdtemp(&template))
+        let folder = URL(fileURLWithPath: String(cString: name))
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = PairingStore(folder: folder)
+        let owner = try store.issue(name: "Owner", guest: false)
+        let guest = try store.issue(name: "Guest", guest: true)
+        var focus = "dock(0)"
+        let server = RemoteServer(token: "", onCommand: { _ in },
+                                  state: { ["focus": focus, "apps": [["id": "a", "name": "A", "icon": true]], "volume": 3, "mode": "launcher"] },
+                                  icon: { _ in nil }, routes: { _ in nil }, pairing: store)
+        defer { server.stop() }
+        func state(_ token: String, tag: String? = nil) -> HTTPResponse {
+            var headers = ["x-couch-key": token]
+            headers["if-none-match"] = tag
+            return server.respond(to: HTTPRequest(method: "GET", path: "/state", query: [:], headers: headers, body: Data()))
+        }
+        func tag(_ response: HTTPResponse) -> String? { response.headers.first { $0.0 == "ETag" }?.1 }
+        let first = state(owner)
+        let etag = try #require(tag(first))
+        #expect(first.status == "200 OK" && !first.body.isEmpty)
+        // Built again from scratch (a new dictionary each time), the same state gives the same tag.
+        let same = state(owner, tag: etag)
+        #expect(same.status == "304 Not Modified" && same.body.isEmpty && tag(same) == etag)
+        #expect(String(decoding: same.serialized(keepAlive: true), as: UTF8.self).contains("Content-Length: 0\r\n"))
+        // A guest's state differs (it says guest), so the owner's tag isn't theirs.
+        #expect(state(guest, tag: etag).status == "200 OK")
+        focus = "dock(1)"
+        let changed = state(owner, tag: etag)
+        #expect(changed.status == "200 OK" && tag(changed) != etag)
+        #expect((try JSONSerialization.jsonObject(with: changed.body) as? [String: Any])?["focus"] as? String == "dock(1)")
+    }
     @Test func pairingCodeDeterminesRoleRegardlessOfClientFlag() throws {
         var template = Array("/tmp/mactv-codes.XXXXXXXX".utf8CString)
         let name = try #require(mkdtemp(&template))

@@ -80,7 +80,8 @@ struct BiliDanmakuStyle: Equatable, Sendable {
 
     static func load() -> BiliDanmakuStyle {
         var style = BiliDanmakuStyle()
-        guard let saved = UserDefaults.standard.dictionary(forKey: key) else { return style }
+        // 每个人（个人资料）各一份（见 ProfileSpace）
+        guard let saved = ProfileSpace.current.defaults.dictionary(forKey: key) else { return style }
         style.area = (saved["area"] as? Int).flatMap(Area.init) ?? style.area
         style.size = (saved["size"] as? Int).flatMap(Size.init) ?? style.size
         style.speed = (saved["speed"] as? Int).flatMap(Speed.init) ?? style.speed
@@ -91,7 +92,7 @@ struct BiliDanmakuStyle: Equatable, Sendable {
     }
 
     func save() {
-        UserDefaults.standard.set(["area": area.rawValue, "size": size.rawValue, "speed": speed.rawValue,
+        ProfileSpace.current.defaults.set(["area": area.rawValue, "size": size.rawValue, "speed": speed.rawValue,
                                    "opacity": opacity.rawValue, "fixed": fixed, "colored": colored], forKey: Self.key)
     }
 

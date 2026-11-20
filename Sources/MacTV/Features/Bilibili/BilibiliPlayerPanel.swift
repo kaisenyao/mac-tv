@@ -116,7 +116,7 @@ struct BilibiliPlayerPanel: View {
         HStack(spacing: 12) {
             Text(title).font(.system(size: 26, weight: .semibold)).lineLimit(1)
             Spacer(minLength: 8)
-            if let value { Text(value).font(.system(size: 23, weight: .medium).monospacedDigit()).opacity(0.6).lineLimit(1).contentTransition(.numericText()) }
+            if let value { Text(value).font(.system(size: 23, weight: .medium).monospacedDigit()).opacity(0.6).lineLimit(1).contentTransition(value.first?.isNumber == true ? .numericText() : .opacity) }
             Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(more ? 0.5 : 0)
         }
     }

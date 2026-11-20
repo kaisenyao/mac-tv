@@ -11,6 +11,11 @@ struct SiteIcon: @unchecked Sendable {
     let opaque: Bool
     /// 透明底的图标本身是浅色的（白色的标志）：垫深色的底，不然看不见
     let light: Bool
+    /// 标志真正画在哪一块（像素，左上角为原点）。有它的时候，所有网站的标志都按同样的视觉大小放在方块正中
+    /// （透明底的：不透明的那一块；纯色底上一个标志的：和底色不一样的那一块）。满版的图是 nil，照原样铺满
+    var content: CGRect? = nil
+    /// 纯色底上一个标志的图标：那个底色（用它垫满方块）
+    var plate: CGColor? = nil
 }
 
 /// 网站图标（开始页的方块、卡片上的小图标、工具栏和标签页上的小图标）。
@@ -34,6 +39,8 @@ final class SiteIcons {
     }
 
     private let memory = NSCache<NSString, Box>()
+    /// 确实没有图标的网站。不放进 NSCache：它在内存紧张时会随时扔东西，扔了就又成了"还不知道"
+    private var missing = Set<String>()
     private var loading: [String: Task<SiteIcon?, Never>] = [:]
     private let folder: URL
 
@@ -46,6 +53,7 @@ final class SiteIcons {
 
     /// 内存里已经有答案了（有图标 / 确实没有）；还不知道是 .unknown
     func state(for host: String) -> State {
+        if missing.contains(host) { return .none }
         guard let box = memory.object(forKey: host as NSString) else { return .unknown }
         return box.icon.map(State.icon) ?? .none
     }
@@ -65,7 +73,11 @@ final class SiteIcons {
         loading[host] = task
         let icon = await task.value
         loading[host] = nil
-        memory.setObject(Box(icon), forKey: host as NSString, cost: icon.map { $0.image.width * $0.image.height * 4 } ?? 1)
+        if let icon {
+            memory.setObject(Box(icon), forKey: host as NSString, cost: icon.image.width * icon.image.height * 4)
+        } else {
+            missing.insert(host)
+        }
         return icon
     }
 }
@@ -258,7 +270,91 @@ enum IconFetch {
         }
         guard let image, min(image.width, image.height) >= 16 else { return nil }
         let look = analyse(image)
-        return SiteIcon(image: image, pixels: min(image.width, image.height), opaque: look.opaque, light: look.light)
+        // 空白的、几乎看不见的（全透明、一整块纯色、标志淡得几乎没有）：当没有图标，画字母
+        guard !blank(image, opaque: look.opaque) else { return nil }
+        let mark = layout(image, opaque: look.opaque)
+        return SiteIcon(image: image, pixels: min(image.width, image.height), opaque: look.opaque, light: look.light,
+                        content: mark?.content, plate: mark?.plate)
+    }
+
+    /// 图标上几乎什么都没画：全透明、一整块纯色，或者看得出来的地方不到 1.5%（缩到 64×64 数）。
+    /// 自带底色的满版图（四边不是一种颜色）不算空白
+    static func blank(_ image: CGImage, opaque: Bool) -> Bool {
+        let side = 64
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8,
+                                          bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return false }
+        func color(_ i: Int) -> (r: Double, g: Double, b: Double, a: Double) {
+            let a = Double(pixels[i + 3]) / 255
+            guard a > 0 else { return (0, 0, 0, 0) }
+            return (Double(pixels[i]) / 255 / a, Double(pixels[i + 1]) / 255 / a, Double(pixels[i + 2]) / 255 / a, a)
+        }
+        var ink = 0
+        if opaque {
+            // 和左上角那个颜色明显不一样的像素：一个都没有（或者极少）就是一整块纯色
+            let corner = color(0)
+            for i in stride(from: 0, to: pixels.count, by: 4) {
+                let c = color(i)
+                if max(abs(c.r - corner.r), abs(c.g - corner.g), abs(c.b - corner.b)) > 0.16 { ink += 1 }
+            }
+        } else {
+            for i in stride(from: 0, to: pixels.count, by: 4) where Double(pixels[i + 3]) / 255 > 0.16 { ink += 1 }
+        }
+        return Double(ink) < Double(side * side) * 0.015
+    }
+
+    /// 缩到 64×64 看标志画在哪：透明底的是不透明像素的范围；自带底色的，四边一圈是同一种颜色（纯色底上一个标志）时，
+    /// 是和底色不一样的像素的范围，plate 是那一圈的颜色。满版的图（四边不是一种颜色，或者标志几乎占满）是 nil
+    static func layout(_ image: CGImage, opaque: Bool) -> (content: CGRect, plate: CGColor?)? {
+        let side = 64
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8,
+                                          bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return nil }
+        // 第一行是图的最上面一行
+        func color(_ x: Int, _ y: Int) -> (r: Double, g: Double, b: Double, a: Double) {
+            let i = (y * side + x) * 4, a = Double(pixels[i + 3]) / 255
+            guard a > 0 else { return (0, 0, 0, 0) }
+            return (Double(pixels[i]) / 255 / a, Double(pixels[i + 1]) / 255 / a, Double(pixels[i + 2]) / 255 / a, a)
+        }
+        var plate: (r: Double, g: Double, b: Double)?
+        if opaque {
+            var ring: [(r: Double, g: Double, b: Double, a: Double)] = []
+            for i in 0..<side { for d in [0, 1, side - 2, side - 1] { ring.append(color(i, d)); ring.append(color(d, i)) } }
+            let n = Double(ring.count)
+            let mean = (r: ring.reduce(0) { $0 + $1.r } / n, g: ring.reduce(0) { $0 + $1.g } / n, b: ring.reduce(0) { $0 + $1.b } / n)
+            let spread = ring.map { max(abs($0.r - mean.r), abs($0.g - mean.g), abs($0.b - mean.b)) }.max() ?? 1
+            guard spread < 0.09 else { return nil }   // 满版的图
+            plate = mean
+        }
+        var minX = side, minY = side, maxX = -1, maxY = -1
+        for y in 0..<side {
+            for x in 0..<side {
+                let c = color(x, y)
+                let ink = plate.map { max(abs(c.r - $0.r), abs(c.g - $0.g), abs(c.b - $0.b)) > 0.16 } ?? (c.a > 0.16)
+                guard ink else { continue }
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        let w = maxX - minX + 1, h = maxY - minY + 1
+        if plate != nil, Double(w) > Double(side) * 0.84 || Double(h) > Double(side) * 0.84 { return nil }   // 标志几乎占满：照原样铺满
+        let sx = Double(image.width) / Double(side), sy = Double(image.height) / Double(side)
+        let rect = CGRect(x: Double(minX) * sx, y: Double(minY) * sy, width: Double(w) * sx, height: Double(h) * sy)
+        return (rect, plate.map { CGColor(srgbRed: $0.r, green: $0.g, blue: $0.b, alpha: 1) })
     }
 
     private static func render(_ image: NSImage, side: Int) -> CGImage? {
@@ -327,7 +423,11 @@ struct SiteTile: View {
             case .unknown:
                 Color.white.opacity(0.08)
             case .icon(let icon) where icon.pixels >= minPixels:
-                if icon.opaque {
+                if let content = icon.content {
+                    // 每个网站的标志一样的视觉大小、放在正中，垫它自己的底色（透明底的垫白色或深色）
+                    icon.plate.map { Color(cgColor: $0) } ?? (icon.light ? Color(hex: "#2C2C2E") : Color.white)
+                    SiteLogo(icon: icon, content: content, tile: size)
+                } else if icon.opaque {
                     Image(decorative: icon.image, scale: 1).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
                 } else {
                     (icon.light ? Color(hex: "#2C2C2E") : Color.white)
@@ -341,10 +441,42 @@ struct SiteTile: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .task(id: host) {
-            guard !host.isEmpty, case .unknown = SiteIcons.shared.state(for: host) else { return }
+            guard !host.isEmpty else { return }
+            // 已经知道了：自己也记一份（内存紧张时缓存会扔掉它，扔了这块也不会变成空的）
+            switch SiteIcons.shared.state(for: host) {
+            case .icon(let icon): found = (host, icon); return
+            case .none: found = (host, nil); return
+            case .unknown: break
+            }
+            let started = Date()
             let icon = await SiteIcons.shared.load(host, remember: remember)
-            if !Task.isCancelled { withAnimation(Motion.appear) { found = (host, icon) } }
+            guard !Task.isCancelled else { return }
+            // 一下就到了（从磁盘读的）：直接放上，不淡入（不然刚出来的页面上一块块图标又闪一下）；从网上等来的才淡入
+            if Date().timeIntervalSince(started) < 0.15 { found = (host, icon) } else { withAnimation(Motion.appear) { found = (host, icon) } }
         }
+    }
+}
+
+/// 方块正中的网站标志：按标志真正画着的那一块缩放、对中。大小按面积算（同样面积看起来一样大），
+/// 宽的标志最宽到方块的 0.74。大方块上是方块的 0.54，小图标（标签、卡片上的）放大一些，不然看不清
+private struct SiteLogo: View {
+    let icon: SiteIcon
+    let content: CGRect
+    let tile: CGFloat
+
+    nonisolated static func scale(content: CGSize, tile: CGFloat) -> CGFloat {
+        let optical = tile * (tile >= 96 ? 0.54 : 0.74)
+        let area = max(1, sqrt(content.width * content.height))
+        return min(optical / area, tile * (tile >= 96 ? 0.74 : 0.86) / max(1, max(content.width, content.height)))
+    }
+
+    var body: some View {
+        let k = Self.scale(content: content.size, tile: tile)
+        let width = CGFloat(icon.image.width) * k, height = CGFloat(icon.image.height) * k
+        Image(decorative: icon.image, scale: 1).resizable().interpolation(.high)
+            .frame(width: width, height: height)
+            .offset(x: (CGFloat(icon.image.width) / 2 - content.midX) * k, y: (CGFloat(icon.image.height) / 2 - content.midY) * k)
+            .frame(width: tile, height: tile)
     }
 }
 
@@ -369,7 +501,7 @@ struct Monogram: View {
         ZStack {
             Color(hex: Self.color(for: page))
             Text(Self.letter(for: page))
-                .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
+                .font(.system(size: size * 0.56, weight: .bold, design: .rounded))   // 和别的网站的标志差不多大
                 .foregroundStyle(.white)
         }
     }

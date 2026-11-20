@@ -8,7 +8,9 @@ import Testing
         let folder = root.appendingPathComponent("work/tests/startup-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        try body(TVController(library: AppLibrary(folder: folder)))
+        let tv = TVController(library: AppLibrary(folder: folder))
+        tv.remoteCoordinator.pairingStore = PairingStore(folder: folder)   // no phone ever paired
+        try body(tv)
     }
 
     @Test func guestsCannotNavigateOwnerSettingsOrTypeIntoTheMac() throws {
@@ -89,28 +91,34 @@ import Testing
         }
     }
 
-    @Test func pairingSheetOffersBluetoothSettings() throws {
+    @Test func pairingSheetOffersTheRemotesAndBluetoothSettings() throws {
+        let supported = SiriRemoteSupport.available
+        defer { SiriRemoteSupport.available = supported }
+        SiriRemoteSupport.available = true   // on a macOS too old for the Siri Remote its page is just Status
         try withController { tv in
-            #expect(tv.pairingRows.contains(.bluetooth))
-            #expect(tv.pairingRows.last == .done)
+            tv.pairing = true
+            #expect(tv.settingsRows(tv.connectRemote) == [.siriRemote, .iPhone, .otherControllers])
+            tv.handlePairing(.select)
+            #expect(tv.settingsRows(tv.connectRemote).contains(.bluetooth))
+            tv.handlePairing(.back)
+            tv.handlePairing(.back)   // no Done button: Back closes it
+            #expect(!tv.pairing)
         }
     }
 
-    @Test func optOutSkipsStartupPairing() throws {
-        let suite = "MacTV.StartupPairing.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = Preferences(defaults: defaults)
-        preferences.showPairingAtLaunch = false
-        var services = AppServices()
-        services.preferences = preferences
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let folder = root.appendingPathComponent("work/tests/startup-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let tv = TVController(library: AppLibrary(folder: folder), services: services)
-        tv.offerStartupPairing()
-        #expect(!tv.pairing)
+    @Test func aPairedPhoneCountsAsARemoteAtLaunch() throws {
+        try withController { tv in
+            // Paired before, its page just isn't open yet: still a remote, so no sheet.
+            _ = try tv.remoteCoordinator.pairingStore.issue(name: "iPhone", guest: false)
+            tv.offerStartupPairing()
+            #expect(!tv.pairing)
+        }
+        try withController { tv in
+            tv.offerStartupPairing()   // no remote at all: the sheet, as Apple TV's pairing screen
+            #expect(tv.pairing)
+            tv.handlePairing(.back)
+            #expect(!tv.pairing)
+        }
     }
 
     @Test func openingSettingsDoesNotForcePairing() throws {

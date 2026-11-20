@@ -1,5 +1,7 @@
+import AppKit
 import CoreGraphics
 import Foundation
+import ImageIO
 import Testing
 @testable import MacTV
 
@@ -25,16 +27,14 @@ struct BrowserTests {
 
     @Test
     func browsingHistoryKeepsOneEntryPerPageNewestFirst() throws {
-        let defaults = UserDefaults.standard
-        let saved = defaults.data(forKey: "browserHistory")
-        defer { defaults.set(saved, forKey: "browserHistory") }
-        defaults.removeObject(forKey: "browserHistory")
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
         let a = try #require(URL(string: "https://a.example/")), b = try #require(URL(string: "https://b.example/"))
-        BrowserHistory.add(a, title: "A")
-        BrowserHistory.add(b, title: "B")
-        BrowserHistory.add(a, title: "A again")
-        #expect(BrowserHistory.all.map(\.url) == [a, b])
-        #expect(BrowserHistory.all.first?.title == "A again")
+        storage.addHistory(a, title: "A")
+        storage.addHistory(b, title: "B")
+        storage.addHistory(a, title: "A again")
+        #expect(storage.history.map(\.url) == [a, b])
+        #expect(storage.history.first?.title == "A again")
     }
 
     // MARK: 网站图标
@@ -84,6 +84,72 @@ struct BrowserTests {
         #expect(IconFetch.analyse(blackMark) == (opaque: false, light: false))
     }
 
+    @Test
+    func blankIconsGetTheLetterTileInstead() throws {
+        // 全透明、一整块纯色、只有一个小点、淡得几乎看不见：都当没有图标（画字母），decode 不要它
+        let clear = try #require(Self.image(background: .clear, mark: nil))
+        let solid = try #require(Self.image(background: CGColor(red: 0.2, green: 0.4, blue: 0.9, alpha: 1), mark: nil))
+        let speck = try #require(Self.image(background: .clear, square: CGRect(x: 30, y: 30, width: 4, height: 4)))
+        let faint = try #require(Self.image(background: .clear, mark: CGColor(red: 0, green: 0, blue: 0, alpha: 0.1)))
+        for (image, opaque) in [(clear, false), (solid, true), (speck, false), (faint, false)] {
+            #expect(IconFetch.blank(image, opaque: opaque))
+            #expect(IconFetch.decode(try #require(Self.png(image))) == nil)
+        }
+        // 有东西的照常：透明底上一个标志、白底上一块黑、满版的
+        let mark = try #require(Self.image(background: .clear, mark: .black))
+        let plain = try #require(Self.image(background: CGColor(red: 1, green: 1, blue: 1, alpha: 1), square: CGRect(x: 8, y: 40, width: 16, height: 16)))
+        let split = try #require(Self.image(background: CGColor(red: 1, green: 0, blue: 0, alpha: 1), square: CGRect(x: 32, y: 0, width: 32, height: 64)))
+        #expect(!IconFetch.blank(mark, opaque: false) && !IconFetch.blank(plain, opaque: true) && !IconFetch.blank(split, opaque: true))
+        #expect(IconFetch.decode(try #require(Self.png(mark))) != nil)
+    }
+
+    @Test @MainActor
+    func aSiteWithoutAnIconStaysKnownAsNone() async throws {
+        // 确实没有图标的网站记在 NSCache 外面（缓存扔东西时不会变回"还不知道"，方块不会变成空的）。不联网：先放好"没有"的记号
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacTVTests.icons.\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: folder.appendingPathComponent("no-icon.test.none").path, contents: nil)
+        let icons = SiteIcons(folder: folder)
+        #expect(await icons.load("no-icon.test") == nil)
+        if case .none = icons.state(for: "no-icon.test") {} else { Issue.record("expected .none") }
+    }
+
+    private static func png(_ image: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
+    }
+
+    @Test
+    func logosAreFoundInsideTheirIconsSoTheyCanBeCentred() throws {
+        // 白底、左上方一块黑：标志的位置（左上角为原点）和底色
+        let plain = try #require(Self.image(background: CGColor(red: 1, green: 1, blue: 1, alpha: 1), square: CGRect(x: 8, y: 40, width: 16, height: 16)))
+        let found = try #require(IconFetch.layout(plain, opaque: true))
+        #expect(abs(found.content.minX - 8) <= 1 && abs(found.content.minY - 8) <= 1)
+        #expect(abs(found.content.width - 16) <= 2 && abs(found.content.height - 16) <= 2)
+        #expect(found.plate != nil)
+        // 透明底：不透明的那一块，不垫自带的底色
+        let mark = try #require(Self.image(background: .clear, mark: .black))
+        let free = try #require(IconFetch.layout(mark, opaque: false))
+        #expect(abs(free.content.midX - 32) <= 1 && abs(free.content.width - 32) <= 2 && free.plate == nil)
+        // 满版的（四边不是一种颜色）：照原样铺满
+        let split = try #require(Self.image(background: CGColor(red: 1, green: 0, blue: 0, alpha: 1), square: CGRect(x: 32, y: 0, width: 32, height: 64)))
+        #expect(IconFetch.layout(split, opaque: true) == nil)
+    }
+
+    private static func image(background: CGColor, square: CGRect) -> CGImage? {
+        guard let context = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setFillColor(background)
+        context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        context.fill(square)   // CG 的原点在左下角
+        return context.makeImage()
+    }
+
     private static func image(background: CGColor, mark: CGColor?) -> CGImage? {
         guard let context = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
@@ -108,28 +174,43 @@ struct BrowserTests {
 
     // MARK: 缩放
 
-    @Test
-    func defaultZoomFitsTheTV() {
-        #expect(BrowserZoom.standard(forWidth: 1920) == 1.5)   // 1080p 的电视：150%
-        #expect(BrowserZoom.standard(forWidth: 1600) == 1.25)
-        #expect(BrowserZoom.standard(forWidth: 1024) == 1)     // 小窗口不缩小
-        #expect(BrowserZoom.standard(forWidth: 3840) == 3)
-        #expect(BrowserZoom.step(from: 1.5, larger: true) == 1.75)
-        #expect(BrowserZoom.step(from: 1.5, larger: false) == 1.25)
-        #expect(BrowserZoom.step(from: 1.3, larger: false) == 1.25)
-        #expect(BrowserZoom.step(from: 3, larger: true) == 3)
-        #expect(BrowserZoom.step(from: 0.75, larger: false) == 0.75)
-        #expect(BrowserZoom.percent(1.25) == "125%")
+    @Test @MainActor
+    func zoomHasThreeLevelsAndMediumIsTheDefault() throws {
+        #expect(BrowserZoomLevel.allCases.map(\.zoom) == [1.5, 1.75, 2])
+        #expect(BrowserZoomLevel.allCases.map(\.name) == ["Small", "Medium", "Large"])
+        // 以前记下的百分比：换成最近的一档，正好在中间的算"中"
+        #expect(BrowserZoomLevel.nearest(1.25) == .small)
+        #expect(BrowserZoomLevel.nearest(1.6) == .small)
+        #expect(BrowserZoomLevel.nearest(1.625) == .medium)
+        #expect(BrowserZoomLevel.nearest(1.9) == .large)
+        #expect(BrowserZoomLevel.nearest(3) == .large)
+        // 没记过、记的是以前的默认值（这台电视上是 200%）：中
+        #expect(BrowserZoomLevel.level(stored: nil, oldDefault: 2) == .medium)
+        #expect(BrowserZoomLevel.level(stored: 2, oldDefault: 2) == .medium)
+        #expect(BrowserZoomLevel.level(stored: 2, oldDefault: 1.5) == .large)
+        #expect(BrowserZoomLevel.level(stored: 1.25, oldDefault: 2) == .small)
         #expect(BrowserZoom.key("WWW.Apple.com") == "apple.com")
+        // 每个网站：默认中；记下的照样按网站读（存在哪不变）
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let store = BrowserStore(storage: storage)
+        #expect(store.zoom(for: "a.example", isPrivate: false) == 1.75)
+        storage.setZoom(2, for: "b.example")
+        storage.setZoom(1.25, for: "c.example")
+        #expect(store.zoom(for: "www.b.example", isPrivate: false) == 2)
+        #expect(store.zoom(for: "c.example", isPrivate: false) == 1.5)
+        #expect(store.page.zoom == 1.75)
     }
 
     // MARK: 标签页
 
+    /// 测试自己的一份：设置是临时文件夹里的一个 plist（不在 ~/Library/Preferences 里留文件），测完连文件夹一起删
     private static func storage() -> (BrowserTabStorage, cleanup: () -> Void) {
-        let suite = "MacTVTests.browser.\(UUID().uuidString)"
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacTVTests.browser.\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let suite = folder.appendingPathComponent("Preferences.plist").path
         return (BrowserTabStorage(suite: suite, folder: folder), {
-            UserDefaults().removePersistentDomain(forName: suite)
+            TestDefaults.remove(suite)
             try? FileManager.default.removeItem(at: folder)
         })
     }
@@ -216,21 +297,29 @@ struct BrowserTests {
     }
 
     @Test
-    func moreMenuMovesByRowsAndAcrossTheZoomButtons() {
+    func moreMenuMovesByRowsAndZoomIsAStepper() {
         typealias Item = BrowserStore.MenuItem
         #expect(BrowserStore.menuStep(from: .newPrivateTab, .up) == nil)        // 第一行再往上：收起菜单
         #expect(BrowserStore.menuStep(from: .newPrivateTab, .down) == .reload)
-        #expect(BrowserStore.menuStep(from: .reload, .down) == .zoomReset)      // 进缩放那一行停在中间
-        #expect(BrowserStore.menuStep(from: .zoomReset, .left) == .zoomOut)
-        #expect(BrowserStore.menuStep(from: .zoomOut, .left) == nil)
-        #expect(BrowserStore.menuStep(from: .zoomIn, .right) == nil)
-        #expect(BrowserStore.menuStep(from: .zoomIn, .down) == .closeTab)
+        #expect(BrowserStore.menuStep(from: .reload, .down) == .zoom)           // Zoom 是一行（步进）
+        #expect(BrowserStore.menuStep(from: .zoom, .down) == .addFavorite)    // Add to Favorites
+        #expect(BrowserStore.menuStep(from: .addFavorite, .down) == .history) // Show All History
+        #expect(BrowserStore.menuStep(from: .history, .down) == .closeTab)
+        #expect(BrowserStore.menuStep(from: .closeTab, .up) == .history)
+        #expect(BrowserStore.menuStep(from: .zoom, .left) == nil)               // 左右不换行：换一档
+        // 一档一档地走，到头停住，不绕回去
+        #expect(BrowserStore.zoomStep(from: .medium, by: -1) == .small)
+        #expect(BrowserStore.zoomStep(from: .medium, by: 1) == .large)
+        #expect(BrowserStore.zoomStep(from: .small, by: -1) == nil)
+        #expect(BrowserStore.zoomStep(from: .large, by: 1) == nil)
+        #expect(BrowserZoomLevel.allCases.map(\.name) == ["Small", "Medium", "Large"])
         #expect(BrowserStore.menuStep(from: .startPage, .down) == nil)
         #expect(BrowserStore.menuStep(from: .reload, .right) == nil)
         #expect(Item.allCases.allSatisfy { !$0.name.isEmpty })
-        // 开始页上的菜单只有两行
+        // 开始页上的菜单：New Private Tab、Show All History、Close Tab
         let start = Item.startPageRows
-        #expect(BrowserStore.menuStep(from: .newPrivateTab, .down, rows: start) == .closeTab)
+        #expect(BrowserStore.menuStep(from: .newPrivateTab, .down, rows: start) == .history)
+        #expect(BrowserStore.menuStep(from: .history, .down, rows: start) == .closeTab)
         #expect(BrowserStore.menuStep(from: .closeTab, .down, rows: start) == nil)
     }
 
@@ -242,11 +331,62 @@ struct BrowserTests {
         #expect(BrowserStore.currentAfterClosing("b", in: ["a", "b", "c"], current: "b") == "c")
         #expect(BrowserStore.currentAfterClosing("c", in: ["a", "b", "c"], current: "c") == "b")
         #expect(BrowserStore.currentAfterClosing("a", in: ["a"], current: "a") == nil)
-        // 开始页自己是最后一个标签：关掉它回到左边那个；关掉别的，开始页还是正在看的
-        let start = BrowserStore.startTabID
-        #expect(BrowserStore.currentAfterClosing(start, in: ["a", "b", start], current: start) == "b")
-        #expect(BrowserStore.currentAfterClosing("a", in: ["a", "b", start], current: start) == start)
-        #expect(BrowserStore.currentAfterClosing(start, in: [start], current: start) == nil)
+    }
+
+    @Test @MainActor
+    func closingTabsFollowsSafariAndEmptyTabsAreTabsToo() throws {
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let store = BrowserStore(storage: storage)
+        store.newBlankTab()
+        let b1 = try #require(store.blankID)
+        // "+" 在空白标签页上也再开一个；焦点留在"+"上
+        store.focusBar(on: .newTab)
+        store.handle(.select)
+        store.handle(.select)
+        #expect(store.tabs.count == 3 && store.tabs.allSatisfy(\.isBlank))
+        #expect(store.barFocus == .newTab)
+        let ids = store.tabs.map(\.id)
+        #expect(ids[0] == b1 && store.barCurrentID == ids[2])
+        #expect(store.barTabs.map(\.id) == ids)                       // 标签栏上就是这些标签，没有另外的"开始页"
+        // 换到中间那个，再关掉它（正在看的）：换到右边那个；按下的那个 × 沉一下
+        store.focusBar(on: .tab(ids[1]))
+        store.handle(.select)
+        #expect(store.barCurrentID == ids[1] && store.barFocus == .tab(ids[1]))
+        store.handle(.move(.left))
+        #expect(store.barFocus == .close(ids[1]))
+        store.handle(.select)
+        #expect(store.pressed == .close(ids[1]))
+        #expect(store.tabs.map(\.id) == [ids[0], ids[2]])
+        #expect(store.barCurrentID == ids[2] && store.barFocus == .tab(ids[2]))
+        // 再关正在看的（最右边）：换到左边那个
+        store.closeTab(ids[2])
+        #expect(store.tabs.map(\.id) == [ids[0]] && store.barCurrentID == ids[0])
+        // 关掉一个不是正在看的：正在看的不变，焦点回到它上面
+        store.focusBar(on: .newTab)
+        store.handle(.select)
+        let b4 = try #require(store.blankID)
+        store.focusBar(on: .close(ids[0]))
+        store.handle(.select)
+        // 只剩一个了：焦点离开标签栏（回开始页的搜索框），剩下的那个不留成白的
+        #expect(store.tabs.map(\.id) == [b4] && store.barCurrentID == b4 && store.barFocus == nil && store.focus == .field)
+    }
+
+    @Test @MainActor
+    func backOnAFreshEmptyTabUndoesThePlus() throws {
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let store = BrowserStore(storage: storage)
+        store.newBlankTab()
+        let first = try #require(store.blankID)
+        store.focusBar(on: .newTab)
+        store.handle(.select)
+        let fresh = try #require(store.blankID)
+        #expect(fresh != first)
+        store.handle(.move(.down))            // 回到地址栏
+        #expect(store.barFocus == nil && store.focus == .field)
+        store.handle(.back)                   // 当没开过：关掉它，回到开它时看着的那个
+        #expect(store.tabs.map(\.id) == [first] && store.blankID == first)
     }
 
     @Test
@@ -266,40 +406,78 @@ struct BrowserTests {
     }
 
     @Test
-    func tabsShareTheBarAndOnlyScrollWhenTheyCannotFit() {
-        let available: CGFloat = 1584, gap: CGFloat = 12
+    func theCapsuleHugsTheTabsAndTheCurrentOneIsWider() {
+        let available: CGFloat = 1584, gap: CGFloat = 6
         func total(_ widths: [CGFloat]) -> CGFloat { widths.reduce(0, +) + gap * CGFloat(max(0, widths.count - 1)) }
-        for count in [1, 3, 4, 8] {
-            let widths = BrowserTopBar.tabWidths(count: count, current: count - 1, available: available, gap: gap)
-            #expect(widths.count == count)
-            #expect(abs(total(widths) - available) < 0.5)                     // 放得下：占满这一条，不滚
-            #expect(widths[count - 1] == widths.max())                        // 正在看的最宽
-            #expect(Set(widths.dropLast()).count <= 1)                        // 别的一样宽
-            #expect(widths.allSatisfy { $0 >= 150 })
-        }
-        #expect(BrowserTopBar.tabWidths(count: 1, current: 0, available: available, gap: gap) == [available])   // 一个：一整条地址栏
-        // 十二个放不下：别的窄到 150 为止，横着滚
-        let many = BrowserTopBar.tabWidths(count: 12, current: 5, available: available, gap: gap)
-        #expect(total(many) > available)
-        #expect(many.min() == 150)
-        #expect(many[5] == 420)
+        // 一个标签：胶囊就是它，720
+        #expect(BrowserTopBar.tabWidths(count: 1, current: 0, available: available, gap: gap) == [BrowserTopBar.editWidth])
+        // 两三个：正在看的 560，别的 360，胶囊裹着它们（没撑满）
+        #expect(BrowserTopBar.tabWidths(count: 2, current: 1, available: available, gap: gap) == [360, 560])
+        let three = BrowserTopBar.tabWidths(count: 3, current: 0, available: available, gap: gap)
+        #expect(three == [560, 360, 360] && total(three) < available)
+        // 四个撑满：别的变窄，正在看的还是 560
+        let four = BrowserTopBar.tabWidths(count: 4, current: 2, available: available, gap: gap)
+        #expect(four[2] == 560 && four[0] == four[1] && four[1] == four[3] && abs(total(four) - available) < 0.5)
+        // 十二个：正在看的让到 440，别的只剩图标那么宽，正好撑满，不滚
+        let twelve = BrowserTopBar.tabWidths(count: 12, current: 6, available: available, gap: gap)
+        #expect(twelve[6] == 440 && twelve[0] < 160 && abs(total(twelve) - available) < 0.5)
+        // 太多了：窄到 72 为止，横着滚
+        let many = BrowserTopBar.tabWidths(count: 24, current: 3, available: available, gap: gap)
+        #expect(many.enumerated().allSatisfy { $0.offset == 3 || $0.element == 72 } && total(many) > available)
+        // 改地址的那个要 720（不让），别的让一让
+        let editing = BrowserTopBar.tabWidths(count: 3, current: 1, editing: true, available: available, gap: gap)
+        #expect(editing == [360, BrowserTopBar.editWidth, 360])
+        #expect(BrowserTopBar.tabWidths(count: 12, current: 11, editing: true, available: available, gap: gap).dropLast().allSatisfy { $0 >= 72 })
+        // 从网页回到开始页（没有正在看的）：一样宽
+        #expect(Set(BrowserTopBar.tabWidths(count: 3, current: nil, available: available, gap: gap)) == [360])
+    }
+
+    @Test @MainActor
+    func theCurrentTabEditsItsAddressInPlace() throws {
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let page = BrowserTab(url: try #require(URL(string: "https://a.example/page")), title: "A")
+        storage.save([page], active: page.id)
+        let store = BrowserStore(storage: storage)                    // 正在看一个网页
+        #expect(store.barCurrentID == page.id)
+        store.activate(.tab(page.id))                                 // 选正在看的那个：就在标签栏上改，不去开始页
+        #expect(store.editing && store.editingInBar && !store.onStartPage && store.barFocus == .tab(page.id))
+        #expect(store.query == "https://a.example/page" && store.replaceQuery)   // 整个网址选中
+        _ = store.handleBar(.text("n"))                               // 手机上打的字：换掉选中的网址
+        #expect(store.query == "n")
+        _ = store.handleBar(.text("ews.example"))
+        _ = store.handleBar(.deleteBackward)
+        #expect(store.query == "news.exampl")
+        _ = store.handleBar(.back)                                    // 返回：不改了，标签还是原来的样子，焦点回网页（标签不会一下变白）
+        #expect(!store.editing && !store.editingInBar && store.barFocus == nil && store.tabs == [page] && store.query.isEmpty)
+        // 打的字去哪：像网址的就是它，别的去搜
+        #expect(BrowserStore.destination("apple.com")?.absoluteString == "https://apple.com")
+        #expect(BrowserStore.destination("how to cook rice")?.host == "www.google.com")
+
+        // 空白标签页：选它也是就地改，一开始是空的
+        store.newBlankTab()
+        let blank = try #require(store.blankID)
+        store.focusBar()
+        #expect(store.barFocus == .tab(blank))
+        store.handle(.select)
+        #expect(store.editing && store.editingInBar && store.query.isEmpty && !store.replaceQuery)
+        store.handle(.text("example.com"))
+        #expect(store.query == "example.com")
+        store.handle(.back)
+        #expect(!store.editing && store.barFocus == nil && store.focus == .field)   // 开始页上：回地址栏
     }
 
     @Test @MainActor
     func startPageShowsTheTabBarAndTucksItAwayInTheRows() throws {
-        let defaults = UserDefaults.standard
-        let saved = defaults.data(forKey: "browserHistory")
-        defer { defaults.set(saved, forKey: "browserHistory") }
-        defaults.removeObject(forKey: "browserHistory")
-        BrowserHistory.add(try #require(URL(string: "https://a.example/")), title: "A")   // 一排"最近浏览"
         let (storage, cleanup) = Self.storage()
         defer { cleanup() }
+        storage.addHistory(try #require(URL(string: "https://a.example/")), title: "A")   // 一排"最近浏览"
         let store = BrowserStore(storage: storage)
-        store.opened()
-        let start = BrowserStore.startTabID
-        // 一进来：标签栏露着，焦点在地址栏；开始页自己是标签栏上正在看的那个
+        store.resumeLastTab()                                           // 一个标签页都没有：开一个空白的
+        let start = try #require(store.blankID)
+        // 一进来：标签栏露着，焦点在地址栏；空白标签页是标签栏上正在看的那个
         #expect(store.onStartPage && store.startBarShown && store.focus == .field && store.barFocus == nil)
-        #expect(store.barTabs.map(\.id) == [start])
+        #expect(store.barTabs.map(\.id) == [start] && store.tabs.first?.isBlank == true)
         #expect(store.barCurrentID == start)
         #expect(store.barItems == [.tab(start), .newTab, .more])          // 没有网页：没有后退、前进
         // 下到那几排里：标签栏收上去；回到地址栏还收着
@@ -314,10 +492,8 @@ struct BrowserTests {
         store.handle(.move(.up))
         #expect(store.barFocus == .tab(start))
         #expect(store.startWheelRunsHorizontally)
-        // 往左是它的 ×，往右回来；按下回到地址栏
+        // 只有这一个标签：没有 ×，往左走不到它
         store.handle(.move(.left))
-        #expect(store.barFocus == .close(start))
-        store.handle(.move(.right))
         #expect(store.barFocus == .tab(start))
         store.handle(.move(.down))
         #expect(store.barFocus == nil && store.focus == .field && store.startBarShown)
@@ -325,31 +501,134 @@ struct BrowserTests {
         store.handle(.move(.down))
         store.handle(.back)
         #expect(store.focus == .field && store.startBarShown)
-        // 在标签栏里选开始页自己那个标签：它就是地址栏，直接打字
+        // 在标签栏里选正在看的那个：它就地变成地址栏
         store.handle(.move(.up))
         store.handle(.select)
-        #expect(store.editing && store.barFocus == nil)
+        #expect(store.editing && store.editingInBar && store.barFocus == .tab(start))
     }
 
     @Test @MainActor
-    func closingATabOnTheStartPageKeepsFocusOnTheCurrentTab() throws {
+    func theLastTabTurnsIntoAStartPageAndAStartPageAloneHasNoClose() throws {
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let page = BrowserTab(url: try #require(URL(string: "https://a.example/")), title: "A")
+        storage.save([page], active: page.id)
+        let store = BrowserStore(storage: storage)
+        // 只剩一个、开着网站：有 ×，菜单里有 Close Tab，往左到它的 ×
+        #expect(store.tabsClosable && store.menuRows.flatMap { $0 }.contains(.closeTab))
+        let one = BrowserStore.barItems(tabs: [page.id], canGoBack: true, canGoForward: false)
+        #expect(BrowserStore.barStep(in: one, from: .tab(page.id), .left, closable: true) == .close(page.id))
+        // 关掉它：不离开浏览器，同一个标签（同一块胶囊）变成空白的开始页，焦点在搜索框
+        store.focusBar(on: .close(page.id))
+        store.activate(.close(page.id))
+        #expect(store.tabs.count == 1 && store.tabs[0].id == page.id && store.tabs[0].isBlank)
+        #expect(store.onStartPage && store.blankID == page.id && store.focus == .field && store.barFocus == nil && !store.editing)
+        // 只剩一个空白标签页：没有可关的（没有 ×，菜单里没有 Close Tab，往左不到 ×，关也关不掉）
+        #expect(!store.tabsClosable && !store.menuRows.flatMap { $0 }.contains(.closeTab))
+        #expect(BrowserStore.barStep(in: one, from: .tab(page.id), .left, closable: store.tabsClosable) == .back)
+        #expect(BrowserStore.barStep(in: BrowserStore.barItems(tabs: [page.id], canGoBack: false, canGoForward: false),
+                                     from: .tab(page.id), .left, closable: false) == nil)
+        store.closeTab(page.id)
+        #expect(store.tabs.count == 1 && store.tabs[0].isBlank)
+        // 两个标签：都能关，× 在往左一格；关掉一个只剩一个时，焦点离开标签栏（剩下的那个不是白的）
+        store.newBlankTab()
+        #expect(store.tabsClosable && store.menuRows.flatMap { $0 }.contains(.closeTab))
+        let two = BrowserStore.barItems(tabs: store.tabs.map(\.id), canGoBack: false, canGoForward: false)
+        #expect(BrowserStore.barStep(in: two, from: .tab(page.id), .left, closable: true) == .close(page.id))
+        let added = try #require(store.blankID)
+        store.focusBar(on: .close(added))
+        store.activate(.close(added))
+        #expect(store.tabs.count == 1 && store.barFocus == nil && store.focus == .field)
+    }
+
+    @Test @MainActor
+    func aClickOutsideTheAddressFieldEndsEditingLikeBack() throws {
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let page = BrowserTab(url: try #require(URL(string: "https://a.example/")), title: "A")
+        let other = BrowserTab(url: try #require(URL(string: "https://b.example/")), title: "B")
+        storage.save([page, other], active: page.id)
+        let store = BrowserStore(storage: storage)
+        // 网页上，在标签栏里改地址：点了外面就不改了，标签回到原来的样子，焦点离开标签栏，没去别的网址
+        store.activate(.tab(page.id))
+        _ = store.handleBar(.text("news"))
+        #expect(store.editing && store.editingInBar)
+        store.endEditingByClick()
+        #expect(!store.editing && !store.editingInBar && store.barFocus == nil && store.query.isEmpty && store.tabs == [page, other])
+        // 开始页上（一个、几个标签都一样）：标签栏里的地址栏、开始页自己的搜索框
+        store.newBlankTab()
+        let blank = try #require(store.blankID)
+        store.focusBar(on: .tab(blank))
+        store.handle(.select)
+        #expect(store.editing && store.editingInBar)
+        store.endEditingByClick()
+        #expect(!store.editing && store.barFocus == nil && store.focus == .field)
+        store.startEditing()
+        #expect(store.editing && !store.editingInBar)
+        store.endEditingByClick()
+        #expect(!store.editing)
+    }
+
+    @Test @MainActor
+    func holdingBackLeavesTheBrowserFromEveryStateOfTheBar() throws {
+        _ = NSApplication.shared
+        AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }
+        // 浏览器把标签页存在 UserDefaults.standard 里（测试里是临时文件夹里的一份，见 TestSandbox.m）：用完原样放回去
+        let keys = ["browserTabs", "browserActiveTab", "browserZoom", "browserHistory"]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, saved) { UserDefaults.standard.set(value, forKey: key) } }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacTVTests.library.\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let tv = TVController(library: AppLibrary(folder: folder))
+        let store = tv.browserStore
+        store.tv = tv
+
+        /// 开着浏览器的开始页（一个空白标签页，没有网页、不联网），再摆成某个样子
+        func open(_ arrange: () -> Void) {
+            store.newBlankTab()
+            tv.browserOpen = true
+            arrange()
+            #expect(tv.browserOpen && store.onStartPage)
+        }
+        let states: [(String, () -> Void)] = [
+            ("search field", {}),
+            ("tab focused", { store.focusBar() }),
+            ("editing the address in the bar", { store.focusBar(); store.handle(.select) }),
+            ("the ⋯ menu", { _ = store.openMenu() }),
+        ]
+        for (name, arrange) in states {
+            // 手机、Siri Remote：按住返回是回主屏，浏览器留在后台（按住 Esc 也是，见 AppQuit）
+            open(arrange)
+            tv.handle(.press(.back, .hold), from: .remote)
+            tv.handle(.press(.back, .release), from: .remote)
+            #expect(!tv.browserOpen && tv.backgroundApps.first?.id == BrowserStore.appID, "hold Back from \(name)")
+            // 主屏键：一样（两次之间隔开，免得算成连按两下）
+            open(arrange)
+            tv.lastHomePress = nil
+            tv.handle(.home)
+            #expect(!tv.browserOpen, "Home from \(name)")
+            tv.lastHomePress = nil
+        }
+        // 按一下返回还是原来那样：改地址时是不改了（回地址栏），不离开浏览器
+        open { store.focusBar(); store.handle(.select) }
+        #expect(store.editing)
+        tv.handle(.press(.back, .tap), from: .remote)
+        #expect(tv.browserOpen && !store.editing && store.barFocus == nil)
+        tv.handle(.home)
+    }
+
+    @Test @MainActor
+    func startPageMenuOpensAPrivateEmptyTab() throws {
         let (storage, cleanup) = Self.storage()
         defer { cleanup() }
         let store = BrowserStore(storage: storage)
-        store.opened()
-        store.newTab(try #require(URL(string: "https://a.example/")))
-        store.newTab(try #require(URL(string: "https://b.example/")))
-        let start = BrowserStore.startTabID
-        let ids = store.tabs.map(\.id)
-        #expect(store.barTabs.map(\.id) == ids + [start])                  // 开始页自己在最后
-        store.focusBar(on: .close(ids[0]))
-        store.handle(.select)
-        #expect(store.tabs.map(\.id) == [ids[1]])
-        #expect(store.barFocus == .tab(start))                             // 关的不是正在看的：焦点回正在看的那个
-        // "⋯"菜单：开始页上只有 New Private Tab、Close Tab
+        store.newBlankTab()
+        // "⋯"菜单：开始页上是 New Private Tab、Show All History、Close Tab；只有一个空白标签页时没有 Close Tab
         #expect(store.openMenu())
         #expect(store.menu == .newPrivateTab)
-        store.handle(.select)                                              // New Private Tab：开始页换成无痕的
+        #expect(store.menuRows == [[.newPrivateTab], [.history]])
+        store.handle(.select)                                              // New Private Tab：再开一个无痕的空白标签页
+        #expect(store.tabs.count == 2 && store.tabs.last?.isPrivate == true)
         #expect(store.startsPrivate && store.barIsPrivate && store.barFocus == nil && store.menu == nil)
     }
 

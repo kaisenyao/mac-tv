@@ -35,13 +35,49 @@ struct AddedApp: Codable, Hashable {
     var accent: String?
 }
 
-/// The home screen's apps: the built-in catalog minus any the user removed, plus the apps they
-/// added, then Settings. Kept in ~/Library/Application Support/Mac TV/apps.json, or
-/// apps-<profile>.json for profiles after the first.
+/// Mac TV's files that people made or chose (an added app's icon and art, a profile's folder and photo) go to the
+/// Mac's Trash, never straight out of existence: there's no server or store to get them back from.
+enum MacTrash {
+    /// Moves an item to the Trash and says where it went.
+    typealias Mover = @Sendable (URL) throws -> URL?
+
+    static let system: Mover = { url in
+        var result: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &result)
+        return result as URL?
+    }
+
+    /// For a test or a separate data folder: a Trash folder inside it, so the Mac's own Trash is never touched.
+    static func folder(_ folder: URL) -> Mover {
+        { url in
+            let bin = folder.appendingPathComponent("Trash", isDirectory: true)
+            try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+            let target = bin.appendingPathComponent("\(UUID().uuidString)-\(url.lastPathComponent)")
+            try FileManager.default.moveItem(at: url, to: target)
+            return target
+        }
+    }
+
+    /// The Mac's Trash for Mac TV's real folder in Application Support, a Trash folder inside any other.
+    static func `for`(_ folder: URL) -> Mover {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Mac TV", isDirectory: true).standardizedFileURL.path
+        return folder.standardizedFileURL.path == support ? system : Self.folder(folder)
+    }
+}
+
+/// The home screen's apps for one profile. The apps people add are everyone's: apps.json keeps them, with the
+/// main profile's layout beside them as before. Every other profile keeps only its own layout, the apps it
+/// hides and Home's order, in apps-<profile>.json. Home's first six apps are its top row, the dock.
 @MainActor
 final class AppLibrary {
+    /// How many apps Home's top row, the dock, holds. Every row below holds as many.
+    nonisolated static let dockSize = 6
+
+    /// apps.json or apps-<profile>.json. Only apps.json has `added`. `pinned` is from earlier versions: it's read
+    /// once so Home keeps its order (see `keepHomeOrder`), and written only while a file still has it.
     private struct Saved: Codable {
-        var added: [AddedApp] = []
+        var added: [AddedApp]?
         var hidden: Set<String> = []
         var order: [String] = []
         var pinned: Set<String> = []
@@ -52,94 +88,262 @@ final class AppLibrary {
 
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
-            added = try values.decodeIfPresent([AddedApp].self, forKey: .added) ?? []
+            added = try values.decodeIfPresent([AddedApp].self, forKey: .added)
             hidden = try values.decodeIfPresent(Set<String>.self, forKey: .hidden) ?? []
             order = try values.decodeIfPresent([String].self, forKey: .order) ?? []
             pinned = try values.decodeIfPresent(Set<String>.self, forKey: .pinned) ?? []
         }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encodeIfPresent(added, forKey: .added)
+            try values.encode(hidden, forKey: .hidden)
+            try values.encode(order, forKey: .order)
+            if !pinned.isEmpty { try values.encode(pinned, forKey: .pinned) }
+        }
     }
 
-    private var saved = Saved()
-    private let file: URL
-    /// Added apps' ids start with this, so two profiles adding the same site keep separate icons.
-    private let idPrefix: String
+    /// The apps people added, everyone's (apps.json).
+    private var added: [AddedApp] = []
+    /// This profile's layout: the apps it hides, and Home's order (hidden and unavailable apps keep their places).
+    private var hidden: Set<String> = []
+    private var order: [String] = []
+    private let isMain: Bool
+    private let sharedFile: URL
+    private let layoutFile: URL
     let iconsFolder: URL
-
     let storageFolder: URL
+    /// Where Delete for Everyone moves an app's files: the Mac's Trash for Mac TV's own folder (see MacTrash.for).
+    let trash: MacTrash.Mover
 
-    init(profileID: String = Profile.mainID, folder: URL = AppFolder.url) {
+    init(profileID: String = Profile.mainID, folder: URL = AppFolder.url, trash: MacTrash.Mover? = nil) {
         storageFolder = folder
+        self.trash = trash ?? MacTrash.for(folder)
         let icons = folder.appendingPathComponent("Icons", isDirectory: true)
         iconsFolder = icons
         Log.app.attempt("Creating the icons folder") {
             try FileManager.default.createDirectory(at: icons, withIntermediateDirectories: true)
         }
-        let main = profileID == Profile.mainID
-        file = folder.appendingPathComponent(main ? "apps.json" : "apps-\(profileID).json")
-        idPrefix = main ? "user-" : "user-\(profileID)-"
-        if let data = try? Data(contentsOf: file), let decoded = try? JSONDecoder().decode(Saved.self, from: data) {
-            saved = decoded
-        }
+        isMain = profileID == Profile.mainID
+        sharedFile = folder.appendingPathComponent("apps.json")
+        layoutFile = isMain ? sharedFile : folder.appendingPathComponent("apps-\(profileID).json")
+        Self.gatherAddedApps(in: folder, into: sharedFile)
+        added = (try? Self.read(sharedFile))?.added ?? []
+        let layout = try? Self.read(layoutFile)
+        hidden = layout?.hidden ?? []
+        order = layout?.order ?? []
+        if let pinned = layout?.pinned, !pinned.isEmpty { keepHomeOrder(pinned) }
     }
 
-    var hasHiddenBuiltIns: Bool { !saved.hidden.isEmpty }
-    /// The user has added or removed an app at some point.
-    var hasSavedApps: Bool { FileManager.default.fileExists(atPath: file.path) }
+    // MARK: Home's order
 
-    func isHidden(_ id: String) -> Bool { saved.hidden.contains(id) }
-
-    /// Shows or hides a built-in app, for first-run setup.
-    func setHidden(_ id: String, _ hidden: Bool) {
-        if hidden { saved.hidden.insert(id) } else { saved.hidden.remove(id) }
-        save()
-    }
-
+    /// Home's apps in order: the ones this profile shows, then Add App and Settings. The first six are the dock.
     func services() -> [Service] {
-        let visible = orderedApps.filter { !saved.hidden.contains($0.id) && $0.isAvailable }
-        let tail = Catalog.services.filter { !Self.canArrange($0) }
-        return visible.filter { isPinned($0.id) } + visible.filter { !isPinned($0.id) } + tail
+        visibleApps + Catalog.services.filter { !Self.canArrange($0) }
+    }
+
+    /// The apps Home shows, in order, by id. Add App and Settings, which always come last, aren't among them.
+    func arrangement() -> [String] { visibleApps.map(\.id) }
+
+    /// Puts the apps on show in this order. It must hold exactly those apps, each once. Hidden and unavailable
+    /// apps keep their places.
+    @discardableResult
+    func arrange(_ ids: [String]) -> Bool {
+        let shown = Set(arrangement())
+        guard ids.count == shown.count, Set(ids) == shown else { return false }
+        var newOrder = orderedApps.map(\.id)
+        for (slot, id) in zip(newOrder.indices.filter { shown.contains(newOrder[$0]) }, ids) { newOrder[slot] = id }
+        let previous = order
+        order = newOrder
+        guard saveLayout() else { order = previous; return false }
+        return true
+    }
+
+    /// Moves an app to `index` in Home's order (0 is the dock's first place). The apps from there on move along
+    /// one place: into a full dock, its last app goes to the first place below; out of the dock, the first app
+    /// below comes up into it.
+    @discardableResult
+    func move(_ id: String, to index: Int) -> Bool {
+        var ids = arrangement()
+        guard let from = ids.firstIndex(of: id) else { return false }
+        ids.remove(at: from)
+        ids.insert(id, at: min(max(index, 0), ids.count))
+        return arrange(ids)
     }
 
     private static func canArrange(_ service: Service) -> Bool {
         service.kind != .addApp && service.kind != .settings
     }
 
-    /// Includes hidden and temporarily unavailable apps, so their positions survive restoration.
+    private static func isBuiltIn(_ id: String) -> Bool {
+        Catalog.services.contains { $0.id == id && canArrange($0) }
+    }
+
+    /// Every app this profile could show, in Home's order, hidden and unavailable ones too so their places
+    /// survive. Apps added since the order was saved, by anyone, come last.
     private var orderedApps: [Service] {
-        let apps = Catalog.services.filter(Self.canArrange) + saved.added.compactMap(service(for:))
+        let apps = Catalog.services.filter(Self.canArrange) + added.compactMap(service(for:))
         var remaining = Dictionary(apps.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let ordered = saved.order.compactMap { remaining.removeValue(forKey: $0) }
+        let ordered = order.compactMap { remaining.removeValue(forKey: $0) }
         return ordered + apps.filter { remaining.removeValue(forKey: $0.id) != nil }
     }
 
-    func isPinned(_ id: String) -> Bool { saved.pinned.contains(id) }
+    private var visibleApps: [Service] {
+        orderedApps.filter { !hidden.contains($0.id) && $0.isAvailable }
+    }
 
+    /// Earlier versions put favorites first on Home (at most six of them). That order becomes Home's order,
+    /// once, so Home looks the same, and the favorites go.
+    private func keepHomeOrder(_ pinned: Set<String>) {
+        let dock = Array(visibleApps.map(\.id).filter(pinned.contains).prefix(Self.dockSize))
+        order = dock + orderedApps.map(\.id).filter { !dock.contains($0) }
+        saveLayout()
+    }
+
+    // MARK: Hiding
+
+    func isHidden(_ id: String) -> Bool { hidden.contains(id) }
+
+    /// This profile hides a built-in app (Restore Built-in Apps brings them back).
+    var hasHiddenBuiltIns: Bool { hidden.contains(where: Self.isBuiltIn) }
+
+    /// This profile has arranged or hidden apps at some point.
+    var hasSavedApps: Bool { FileManager.default.fileExists(atPath: layoutFile.path) }
+
+    /// Shows or hides an app for this profile only, a built-in app or one someone added.
     @discardableResult
-    func setPinned(_ id: String, _ pinned: Bool) -> Bool {
-        guard services().contains(where: { $0.id == id && Self.canArrange($0) }) else { return false }
-        let previous = saved.pinned
-        if pinned { saved.pinned.insert(id) } else { saved.pinned.remove(id) }
-        guard save() else { saved.pinned = previous; return false }
+    func setHidden(_ id: String, _ hide: Bool) -> Bool {
+        let previous = hidden
+        if hide { hidden.insert(id) } else { hidden.remove(id) }
+        guard saveLayout() else { hidden = previous; return false }
         return true
     }
 
-    private func neighbour(of id: String, by offset: Int) -> String? {
-        guard offset == -1 || offset == 1 else { return nil }
-        let group = services().filter { Self.canArrange($0) && isPinned($0.id) == isPinned(id) }
-        guard let index = group.firstIndex(where: { $0.id == id }), group.indices.contains(index + offset) else { return nil }
-        return group[index + offset].id
+    /// Hide: the app leaves this profile's Home only.
+    @discardableResult
+    func hide(_ id: String) -> Bool {
+        guard orderedApps.contains(where: { $0.id == id }) else { return false }
+        return setHidden(id, true)
     }
 
+    /// Brings back the built-in apps this profile hid.
+    func restoreBuiltIns() {
+        let previous = hidden
+        hidden = hidden.filter { !Self.isBuiltIn($0) }
+        if !saveLayout() { hidden = previous }
+    }
+
+    // MARK: Apps people added
+
+    func containsAddedApp(_ id: String) -> Bool { added.contains { $0.id == id } }
+
+    /// The app someone already added for this website, Mac app or Steam game.
+    func addedApp(url: URL? = nil, bundleID: String? = nil, steamID: String? = nil) -> AddedApp? {
+        reloadAdded()
+        return added.first { app in
+            if let bundleID { return app.bundleID == bundleID }
+            if let steamID { return app.steamID == steamID }
+            if let url, let other = app.url { return Self.site(url) == Self.site(other) }
+            return false
+        }
+    }
+
+    /// A website by host and path: www., letter case and a trailing slash don't make it another site.
+    private static func site(_ url: URL) -> String {
+        var host = (url.host() ?? "").lowercased()
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return host + "/" + url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+    }
+
+    /// Adds an app for everyone; it comes last on every profile's Home. Its id is new among everyone's apps.
     @discardableResult
-    func move(_ id: String, by offset: Int) -> Bool {
-        guard let neighbour = neighbour(of: id, by: offset) else { return false }
-        var order = orderedApps.map(\.id)
-        guard let from = order.firstIndex(of: id), let to = order.firstIndex(of: neighbour) else { return false }
-        order.swapAt(from, to)
-        let previous = saved.order
-        saved.order = order
-        guard save() else { saved.order = previous; return false }
+    func add(name: String, url: URL?, bundleID: String?, steamID: String? = nil) -> AddedApp {
+        let base = name.lowercased().filter { $0.isLetter || $0.isNumber }
+        let stem = "user-" + (base.isEmpty ? "app" : base)
+        var app = AddedApp(id: stem, name: name, url: url, bundleID: bundleID, steamID: steamID)
+        let pick = { (list: [AddedApp]) -> AddedApp in
+            let taken = Set(Catalog.services.map(\.id) + list.map(\.id))
+            var id = stem
+            while taken.contains(id) { id = "\(stem)-\(Int.random(in: 1000...9999))" }
+            return AddedApp(id: id, name: name, url: url, bundleID: bundleID, steamID: steamID)
+        }
+        if !updateAdded({ list in app = pick(list); list.append(app) }) {
+            app = pick(added)
+            added.append(app)
+        }
+        // A new app doesn't inherit an old entry of this profile's layout.
+        if order.contains(app.id) || hidden.contains(app.id) {
+            order.removeAll { $0 == app.id }
+            hidden.remove(app.id)
+            saveLayout()
+        }
+        return app
+    }
+
+    /// Shows an app this profile hid again, last on Home, as if just added.
+    @discardableResult
+    func showAgain(_ id: String) -> Bool {
+        let previous = (hidden, order)
+        hidden.remove(id)
+        order.removeAll { $0 == id }
+        guard saveLayout() else { (hidden, order) = previous; return false }
         return true
+    }
+
+    enum DeleteOutcome: Equatable {
+        case deleted
+        /// Only an app someone added can be deleted; built-in apps can only be hidden.
+        case notAdded
+        /// Its files couldn't go to the Trash: everything is kept as it was.
+        case trashFailed
+        case notSaved
+    }
+
+    /// Delete for Everyone: an app someone added (a website, a Mac app or a Steam game) goes from every profile.
+    /// The files Mac TV keeps for it, its icon and art in Mac TV's Icons folder, go to the Trash, never straight
+    /// away; nothing outside that folder is touched (the Mac app itself, Steam's files, the website). If they
+    /// can't go to the Trash, nothing changes.
+    @discardableResult
+    func deleteForEveryone(_ id: String) -> DeleteOutcome {
+        reloadAdded()
+        guard !Self.isBuiltIn(id), Catalog.services.allSatisfy({ $0.id != id }), containsAddedApp(id) else { return .notAdded }
+        var trashed: [(from: URL, to: URL)] = []
+        for file in ownFiles(of: id) {
+            do {
+                if let to = try trash(file) { trashed.append((file, to)) }
+            } catch {
+                putBack(trashed)
+                return .trashFailed
+            }
+        }
+        guard updateAdded({ $0.removeAll { $0.id == id } }) else {
+            putBack(trashed)
+            return .notSaved
+        }
+        SteamShelfArt.forget(heroFile(for: id))
+        order.removeAll { $0 == id }
+        hidden.remove(id)
+        // Every profile's layout forgets it, so an app added later under the same id starts afresh.
+        for file in [sharedFile] + Self.profileFiles(in: storageFolder) {
+            _ = Self.update(file) { $0.order.removeAll { $0 == id }; $0.hidden.remove(id); $0.pinned.remove(id) }
+        }
+        return .deleted
+    }
+
+    /// The files Mac TV keeps for an added app that exist: only ever inside its own Icons folder.
+    private func ownFiles(of id: String) -> [URL] {
+        let icons = iconsFolder.standardizedFileURL.path
+        return [iconFile(for: id), heroFile(for: id)].filter { file in
+            file.standardizedFileURL.deletingLastPathComponent().path == icons
+                && FileManager.default.fileExists(atPath: file.path)
+        }
+    }
+
+    /// Brings files back from the Trash when the rest of a delete couldn't happen.
+    private func putBack(_ trashed: [(from: URL, to: URL)]) {
+        for item in trashed {
+            Log.app.attempt("Putting back an app's file") { try FileManager.default.moveItem(at: item.to, to: item.from) }
+        }
     }
 
     func iconFile(for id: String) -> URL { iconsFolder.appendingPathComponent("\(id).png") }
@@ -159,29 +363,11 @@ final class AppLibrary {
                        accent: accent, deep: Self.darkened(accent))
     }
 
-    @discardableResult
-    func add(name: String, url: URL?, bundleID: String?, steamID: String? = nil) -> AddedApp {
-        let base = name.lowercased().filter { $0.isLetter || $0.isNumber }
-        var id = idPrefix + (base.isEmpty ? "app" : base)
-        let taken = Set(Catalog.services.map(\.id) + saved.added.map(\.id))
-        if taken.contains(id) { id += "-\(Int.random(in: 1000...9999))" }
-        let app = AddedApp(id: id, name: name, url: url, bundleID: bundleID, steamID: steamID)
-        // A new app must not inherit an obsolete entry from an older library file.
-        saved.order.removeAll { $0 == id }
-        saved.pinned.remove(id)
-        saved.added.append(app)
-        save()
-        return app
-    }
-
-    func containsAddedApp(_ id: String) -> Bool { saved.added.contains { $0.id == id } }
-
     func setIcon(_ png: Data, accent: String?, for id: String) {
         guard containsAddedApp(id) else { return }
         Log.app.attempt("Saving an app icon") { try png.write(to: iconFile(for: id), options: .atomic) }
-        if let index = saved.added.firstIndex(where: { $0.id == id }) {
-            saved.added[index].accent = accent
-            save()
+        updateAdded { list in
+            if let index = list.firstIndex(where: { $0.id == id }) { list[index].accent = accent }
         }
     }
 
@@ -191,33 +377,76 @@ final class AppLibrary {
         SteamShelfArt.forget(heroFile(for: id))
     }
 
-    /// Removes an added app, or hides a built-in one.
-    func remove(_ id: String) {
-        if let index = saved.added.firstIndex(where: { $0.id == id }) {
-            saved.added.remove(at: index)
-            saved.order.removeAll { $0 == id }
-            saved.pinned.remove(id)
-            try? FileManager.default.removeItem(at: iconFile(for: id))
-            try? FileManager.default.removeItem(at: heroFile(for: id))
-            SteamShelfArt.forget(heroFile(for: id))
-        } else if Catalog.services.contains(where: { $0.id == id && $0.kind != .settings && $0.kind != .addApp }) {
-            saved.hidden.insert(id)
-        }
-        save()
-    }
+    // MARK: Files
 
-    /// Brings back any built-in apps the user removed.
-    func restoreBuiltIns() {
-        saved.hidden = []
-        save()
-    }
-
+    /// This profile's layout: in apps.json for the main profile, beside the shared apps, as it always was; in
+    /// its own file for the others. The parts of the file it doesn't own stay as they are on disk.
     @discardableResult
-    private func save() -> Bool {
+    private func saveLayout() -> Bool {
+        let hidden = hidden, order = order
+        return Self.update(layoutFile) { file in
+            file.hidden = hidden
+            file.order = order
+            file.pinned = []
+        }
+    }
+
+    /// Changes the shared list as it is on disk now, so apps another profile added meanwhile stay.
+    @discardableResult
+    private func updateAdded(_ change: (inout [AddedApp]) -> Void) -> Bool {
+        var list: [AddedApp] = []
+        let saved = Self.update(sharedFile) { file in
+            list = file.added ?? []
+            change(&list)
+            file.added = list
+        }
+        if saved { added = list }
+        return saved
+    }
+
+    private func reloadAdded() {
+        if let file = try? Self.read(sharedFile), let list = file.added { added = list }
+    }
+
+    private static func profileFiles(in folder: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasPrefix("apps-") && $0.hasSuffix(".json") }
+            .map { folder.appendingPathComponent($0) }
+    }
+
+    /// A missing file reads as nil. One that can't be read throws, so it's never written over.
+    private static func read(_ url: URL) throws -> Saved? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(Saved.self, from: Data(contentsOf: url))
+    }
+
+    /// Changes a file as it is on disk now, keeping what the change doesn't touch.
+    private static func update(_ url: URL, _ change: (inout Saved) -> Void) -> Bool {
+        var file: Saved
+        do { file = try read(url) ?? Saved() } catch { return false }
+        change(&file)
         do {
-            try JSONEncoder().encode(saved).write(to: file, options: .atomic)
+            try JSONEncoder().encode(file).write(to: url, options: .atomic)
             return true
         } catch { return false }
+    }
+
+    /// Earlier versions kept the apps each profile added in its own file. They're everyone's now: gathered into
+    /// apps.json with their ids, and so their icon files, unchanged, and taken out of a profile's file only once
+    /// apps.json is saved.
+    private static func gatherAddedApps(in folder: URL, into shared: URL) {
+        let strays = profileFiles(in: folder).compactMap { url -> (URL, [AddedApp])? in
+            guard let file = try? read(url), let apps = file.added, !apps.isEmpty else { return nil }
+            return (url, apps)
+        }
+        guard !strays.isEmpty else { return }
+        let gathered = update(shared) { file in
+            var list = file.added ?? []
+            for app in strays.flatMap({ $0.1 }) where !list.contains(where: { $0.id == app.id }) { list.append(app) }
+            file.added = list
+        }
+        guard gathered else { return }
+        for (url, _) in strays { _ = update(url) { $0.added = nil } }
     }
 
     private static func darkened(_ hex: String) -> String {

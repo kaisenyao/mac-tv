@@ -256,11 +256,14 @@ struct DisplayVolumeTests {
         await controller.finishWriting()
         #expect(await display.volumeWrites() == [0])   // 读回来没静音：写 0
         #expect(levels.last == VolumeLevel(level: 50, muted: true))
+        // 也许其实静了、只是读回来不对：马上发一次"不静音"，以后不再发 0x8D，显示器不会一直静着
+        #expect(await display.muteWrites() == [VCP.muteOn, VCP.muteOff])
 
         controller.perform(.toggleMute)
         await controller.finishWriting()
         #expect(await display.volumeWrites() == [0, 50])
         #expect(levels.last == VolumeLevel(level: 50, muted: false))
+        #expect(await display.muteWrites() == [VCP.muteOn, VCP.muteOff])
     }
 
     @Test func aDisplayWithoutMuteGetsZeroAndItsLevelBack() async {
@@ -300,7 +303,7 @@ struct FixedOutputVolumeTests {
     let display = AudioOutputDevice(id: 9, name: "XG27UCS", transport: 0x64707274, isDefault: true, uid: "EDID-1")
     let tv = AudioOutputDevice(id: 10, name: "LG TV", transport: kAudioDeviceTransportTypeHDMI, isDefault: true, uid: "EDID-2")
 
-    init() { defaults = UserDefaults(suiteName: suite)! }
+    init() { defaults = TestDefaults.named(suite) }
 
     private func make(_ ddc: (any DisplayDDC)?, playback: PlaybackVolume? = nil) -> (FixedOutputVolume, PlaybackVolume, Box) {
         let playback = playback ?? PlaybackVolume(defaults: defaults)
@@ -314,7 +317,7 @@ struct FixedOutputVolumeTests {
     final class Box { var changes: [(VolumeLevel, Bool)] = [] }
 
     @Test func aDisplayThatAnswersGetsItsOwnVolume() async {
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestDefaults.remove(suite) }
         let ddc = FakeDisplay(volume: 75)
         let (volume, playback, box) = make(ddc)
         volume.update(display, systemControls: false)
@@ -331,7 +334,7 @@ struct FixedOutputVolumeTests {
     }
 
     @Test func aDisplayThatDoesntAnswerFallsBackToMacTVsOwnLevel() async {
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestDefaults.remove(suite) }
         let (volume, playback, box) = make(nil)
         volume.update(tv, systemControls: false)
         #expect(playback.gain == 1)   // 还没按过：原样放
@@ -360,7 +363,7 @@ struct FixedOutputVolumeTests {
     }
 
     @Test func aFixedVolumeOutputThatIsntADisplayUsesMacTVsLevelRightAway() {
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestDefaults.remove(suite) }
         let (volume, playback, box) = make(FakeDisplay())
         let dac = AudioOutputDevice(id: 5, name: "USB DAC", transport: kAudioDeviceTransportTypeUSB, isDefault: true, uid: "DAC")
         volume.update(dac, systemControls: false)
@@ -370,7 +373,7 @@ struct FixedOutputVolumeTests {
     }
 
     @Test func whenAnotherAppIsPlayingTheHUDSaysItCantBeSet() async {
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestDefaults.remove(suite) }
         let (volume, playback, box) = make(nil)
         volume.reachesPlayback = { false }
         volume.update(tv, systemControls: false)
@@ -381,7 +384,7 @@ struct FixedOutputVolumeTests {
     }
 
     @Test func aDisplayThatStopsAnsweringIsLookedUpAgain() async {
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestDefaults.remove(suite) }
         let first = FakeDisplay(volume: 40)
         let second = FakeDisplay(volume: 60)
         let (volume, _, box) = make(nil)
@@ -401,14 +404,68 @@ struct FixedOutputVolumeTests {
         #expect(box.changes.last?.0.level == 66)
         #expect(lookups == 2)
     }
+
+    @Test func eachOutputIsDecidedOnceAndStaysDecided() async {
+        defer { TestDefaults.remove(suite) }
+        let ddc = FakeDisplay(volume: 75)
+        let (volume, playback, box) = make(nil)
+        var lookups: [String] = []
+        volume.findDisplay = { output in lookups.append(output.uid); return output.uid == "EDID-1" ? ddc : nil }
+
+        // 换到显示器：还不知道（不是"不可用"），马上去问，不等第一次按键
+        volume.update(display, systemControls: false)
+        #expect(volume.deciding)
+        volume.perform(.refresh, showHUD: false)
+        #expect(await eventually { box.changes.count == 1 })
+        #expect(!volume.deciding)
+        #expect(box.changes.last?.0 == VolumeLevel(level: 75, muted: false))
+        #expect(box.changes.last?.1 == false)   // 问的时候不出音量条
+
+        // 换到不回话的电视：定下来是 Mac TV 自己的音量
+        volume.update(tv, systemControls: false)
+        #expect(volume.deciding)
+        volume.perform(.refresh, showHUD: false)
+        #expect(await eventually { box.changes.count == 2 })
+        #expect(!volume.deciding)
+        #expect(box.changes.last?.0 == VolumeLevel(level: 100, muted: false))
+        #expect(playback.output == "EDID-2")
+
+        // 来回换：一换过来就是定下来的样子，不再问
+        volume.update(display, systemControls: false)
+        #expect(!volume.deciding)
+        #expect(volume.volume == VolumeLevel(level: 75, muted: false))
+        #expect(playback.output == nil)
+        volume.update(tv, systemControls: false)
+        #expect(!volume.deciding)
+        #expect(volume.volume == VolumeLevel(level: 100, muted: false))
+        #expect(lookups == ["EDID-1", "EDID-2"])
+
+        // 电视拔了再插上：重新问
+        volume.keep(["EDID-1"])
+        #expect(volume.deciding)
+        volume.perform(.refresh, showHUD: false)
+        #expect(await eventually { lookups.count == 3 && !volume.deciding })
+    }
+
+    @Test func pressesWhileDecidingWaitForTheAnswer() async {
+        defer { TestDefaults.remove(suite) }
+        let (volume, _, box) = make(FakeDisplay(volume: 40, delay: .milliseconds(20)))
+        volume.update(display, systemControls: false)
+        volume.perform(.refresh, showHUD: false)
+        volume.perform(.step(6), showHUD: false)
+        volume.perform(.step(6), showHUD: false)
+        #expect(volume.deciding)
+        #expect(await eventually { box.changes.last?.0 == VolumeLevel(level: 52, muted: false) })
+        #expect(!volume.deciding)
+    }
 }
 
 @Suite @MainActor
 struct PlaybackVolumeTests {
     @Test func playersFollowTheAppLevelOnlyOnFixedOutputs() {
         let suite = "MacTVTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
         let volume = PlaybackVolume(defaults: defaults)
         let movie = AVPlayer()
         let music = AVPlayer()
@@ -442,6 +499,24 @@ struct PlaybackVolumeTests {
 
         #expect(PlaybackVolume.gain(for: 100) == 1)
         #expect(PlaybackVolume.gain(for: 0) == 0)
+    }
+
+    /// 按键音也是 Mac TV 自己的声音：只有 Mac TV 自己的音量管得着的输出上，音量面板调音量听得出大小
+    @Test func interfaceSoundsFollowTheAppLevelToo() {
+        let suite = "MacTVTests.\(UUID().uuidString)"
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
+        let volume = PlaybackVolume(defaults: defaults)
+        let tick = AVAudioPlayerNode()
+        volume.attach(tick)
+        #expect(tick.volume == 1)
+        volume.use("TV")
+        volume.perform(.set(50))
+        #expect(abs(tick.volume - 0.125) < 0.0001)
+        volume.perform(.toggleMute)
+        #expect(tick.volume == 0)
+        volume.use(nil)
+        #expect(tick.volume == 1)
     }
 
     /// 脚本的行为在 Tests/WebPlayback/volume.test.cjs 里跑（node）
@@ -481,8 +556,8 @@ struct WebVolumeLiveTests {
     @Test func webMediaPlaysAtMacTVsLevelInEveryFrame() async throws {
         _ = NSApplication.shared
         let suite = "MacTVTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
         let volume = PlaybackVolume(defaults: defaults)
         volume.use("TV")
         volume.perform(.set(50))   // 0.125

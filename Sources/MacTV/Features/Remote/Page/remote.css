@@ -214,7 +214,7 @@
   .row { display:flex; align-items:center; gap:12px; width:100%; min-height:50px; margin:0; padding:0 16px; border:0; background:transparent; color:var(--label);
          font-size:16px; font-weight:400; text-align:left; }
   /* 一行里没有 class 的那段字是名字：占满中间；图标、加减号、值和把手照自己的宽 */
-  .row > span:not([class]), .row > .grow, .pick-body > span:not([class]) { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .row > span:not([class]), .pick-body > span:not([class]) { flex:1; min-width:0; overflow-wrap:anywhere; }
   .row .value { flex:none; max-width:55%; color:var(--secondary); font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row.nav::after { content:"›"; flex:none; margin:-2px 0 0 -4px; color:var(--chevron); font-size:22px; line-height:1; }
   .row.pressed { transform:none; background:#e9e9ee; }
@@ -266,18 +266,42 @@
   .playing { position:absolute; right:-4px; bottom:-4px; height:22px; padding:0 7px; border:2px solid var(--sheet); border-radius:11px; background:var(--label); display:flex; align-items:center; gap:2px; }
   .playing i { width:2px; height:7px; border-radius:1px; background:#fff; }
   .playing i:nth-child(2) { height:11px; } .playing i:nth-child(3) { height:5px; }
-  .favourite { position:absolute; top:-6px; right:-6px; width:24px; height:24px; border-radius:50%; background:#ffd60a; color:#241d00; display:grid; place-items:center; font-size:15px; line-height:1; box-shadow:0 2px 6px rgba(0, 0, 0, .25); }
-  .apps.editing { grid-template-columns:1fr; gap:12px; }
-  .app-editor { padding:12px; border-radius:14px; background:#fff; }
-  .app-editor-head { display:flex; align-items:center; gap:12px; margin-bottom:12px; min-width:0; }
-  .app-editor-head .app { width:48px; flex:none; }
-  .app-editor-head .art { border-radius:11px; font-size:20px; }
-  .app-editor-name { font-size:16px; font-weight:600; overflow-wrap:anywhere; }
-  .app-actions { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
-  .app-actions button { min-height:44px; padding:10px 8px; border:0; border-radius:10px; background:#f2f2f7; color:var(--label); font-size:15px; font-weight:600; }
-  .app-actions .pin[aria-pressed="true"] { color:#7a5a00; background:rgba(255, 214, 10, .22); }
-  .app-actions .remove { color:var(--danger); background:rgba(215, 0, 21, .08); }
-  .app-actions button:disabled, #edit-apps:disabled, #restore:disabled { opacity:.4; cursor:default; }
+  /* 编辑：像 iPhone 主屏那样轻轻抖（只在编辑时、只用 transform）；最上面一个框是电视的程序坞（主屏第一排的六个），
+     像 iPhone 的程序坞那样一排、不写名字；别的应用在下面。按住拖着的那个浮起来跟着手指走，别的让开；
+     左上角的"−"是 iPhone 主屏那个灰色的移除标记，点它出一个小菜单（隐藏，别人加的还有为所有人删除） */
+  .apps.editing { display:block; }
+  .app-grid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:18px 10px; }
+  .dock { margin-bottom:22px; padding:14px 10px; border-radius:26px; background:rgba(255, 255, 255, .72); box-shadow:inset 0 0 0 1px rgba(0, 0, 0, .04); }
+  .dock .app-grid { grid-template-columns:repeat(6, minmax(0, 1fr)); gap:0 8px; min-height:44px; }
+  .dock .app .name { display:none; }
+  .dock .app .art, .dock .app .tile::after { border-radius:12px; }
+  .dock .app .art { font-size:22px; }
+  /* 程序坞里的图标小：减号能点的范围也小一点，按住图标拖时不会按到它 */
+  .dock .hide-badge { top:-15px; left:-15px; width:32px; height:32px; }
+  .app-menu { position:absolute; top:22px; left:-8px; z-index:5; min-width:208px; padding:6px 0; border-radius:14px; background:rgba(250, 250, 252, .98);
+              box-shadow:0 10px 30px rgba(0, 0, 0, .22), 0 0 0 .5px rgba(0, 0, 0, .12); display:flex; flex-direction:column; text-align:left; }
+  .app-menu.flip { left:auto; right:-8px; }
+  .app-menu button { min-height:44px; padding:0 16px; border:0; background:none; color:var(--label); font-size:16px; text-align:left; white-space:nowrap; }
+  .app-menu button + button { box-shadow:inset 0 .5px 0 var(--separator); }
+  .app-menu button.danger { color:var(--red); }
+  .app-menu button.pressed { transform:none; background:rgba(0, 0, 0, .06); }
+  .apps.editing .app { position:relative; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; cursor:grab; }
+  .apps.editing .app img { -webkit-user-drag:none; pointer-events:none; }
+  .apps.editing .tile { animation:jiggle .26s ease-in-out infinite alternate; transform-origin:50% 55%; }
+  .apps.editing .app-grid > .app:nth-child(2n) .tile { animation-duration:.28s; animation-delay:-.13s; }
+  .apps.editing .app-grid > .app:nth-child(3n) .tile { animation-delay:-.07s; }
+  @keyframes jiggle { from { transform:rotate(-1.4deg); } to { transform:rotate(1.4deg); } }
+  .apps.editing .app.lifted { z-index:3; cursor:grabbing; }
+  .apps.editing .app.lifted .tile { animation:none; transform:scale(1.12); transition:transform .18s ease-out; }
+  .apps.editing .app.lifted .art { box-shadow:0 10px 24px rgba(0, 0, 0, .28); }
+  .apps.editing .app.lifted .name, .apps.editing .app.lifted .hide-badge { opacity:0; }
+  .hide-badge { position:absolute; top:-20px; left:-20px; z-index:1; width:44px; height:44px; padding:0; border:0; background:none; display:grid; place-items:center; }
+  .hide-badge .sign.minus { background:rgba(209, 209, 214, .97); box-shadow:0 1px 3px rgba(0, 0, 0, .22); }
+  .hide-badge .sign::before { background:#1c1c1e; }
+  .hide-badge.pressed .sign.minus { background:#b5b5bb; }
+  .apps.dragging .hide-badge { pointer-events:none; }
+  @media (prefers-reduced-motion:reduce) { .apps.editing .tile { animation:none; } }
+  .hide-badge:disabled, #edit-apps:disabled, #restore:disabled { opacity:.4; cursor:default; }
   #restore-group { margin-top:22px; }
   #restore { color:var(--blue-text); }
 

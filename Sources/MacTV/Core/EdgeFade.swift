@@ -33,6 +33,8 @@ private struct EdgeFade: ViewModifier {
 struct EdgeFadeMask: View {
     var leading: CGFloat = 0
     var trailing: CGFloat = 0
+    /// Top and bottom instead: `leading` is the top, `trailing` the bottom (a list that scrolls up and down).
+    var vertical = false
 
     /// Smoothstep, so the fade starts gently at the inner edge and reaches clear at the screen's edge.
     private static let ramp: [Gradient.Stop] = [.init(color: .black, location: 0), .init(color: .black.opacity(0.84), location: 0.25),
@@ -48,10 +50,18 @@ struct EdgeFadeMask: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            LinearGradient(stops: Self.ramp, startPoint: .trailing, endPoint: .leading).frame(width: leading)
-            Color.black
-            LinearGradient(stops: Self.ramp, startPoint: .leading, endPoint: .trailing).frame(width: trailing)
+        if vertical {
+            VStack(spacing: 0) {
+                LinearGradient(stops: Self.ramp, startPoint: .bottom, endPoint: .top).frame(height: leading)
+                Color.black
+                LinearGradient(stops: Self.ramp, startPoint: .top, endPoint: .bottom).frame(height: trailing)
+            }
+        } else {
+            HStack(spacing: 0) {
+                LinearGradient(stops: Self.ramp, startPoint: .trailing, endPoint: .leading).frame(width: leading)
+                Color.black
+                LinearGradient(stops: Self.ramp, startPoint: .leading, endPoint: .trailing).frame(width: trailing)
+            }
         }
     }
 }

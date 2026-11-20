@@ -72,9 +72,14 @@ final class Feedback: ObservableObject {
 
     private var lastAuditionTime: TimeInterval = 0
 
-    private let engine = AVAudioEngine()
-    private var players: [AVAudioPlayerNode] = []
+    /// The engine and its voices for the output in use; replaced whole when the output changes (see outputChanged).
+    private(set) var engine = AVAudioEngine()
+    private(set) var players: [AVAudioPlayerNode] = []
     private var nextPlayer = 0
+    /// When the engine was last started (system uptime); nil while it's stopped or paused.
+    private var startedAt: TimeInterval?
+    private var configurationObserver: NSObjectProtocol?
+    private let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
     private var buffers: [Cue: AVAudioPCMBuffer] = [:]
     private var idleTask: Task<Void, Never>?
     private var controllerEngine: CHHapticEngine?
@@ -84,16 +89,60 @@ final class Feedback: ObservableObject {
 
     init(preferences: Preferences = .shared) {
         self.preferences = preferences
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
         for cue in Cue.allCases { buffers[cue] = Self.synthesize(cue, format: format) }
+        build(engine)
+    }
+
+    /// Wires a not-yet-started engine: a few voices (so quick repeats overlap instead of cutting each other off)
+    /// at the navigation-sound volume. The next sound starts it.
+    private func build(_ engine: AVAudioEngine) {
         engine.mainMixerNode.outputVolume = volume
-        // A few voices, so quick repeats overlap instead of cutting each other off.
-        for _ in 0..<3 {
+        players = (0..<3).map { _ in
             let player = AVAudioPlayerNode()
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: format)
-            players.append(player)
+            // On an output only Mac TV's own volume can set (see PlaybackVolume), that volume applies here too.
+            PlaybackVolume.shared.attach(player)
+            return player
         }
+        nextPlayer = 0
+        startedAt = nil
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        // The output's sample rate or channels changed under the engine (it stops itself): start over on the new one.
+        configurationObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
+                                                                       object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.outputChanged() }
+        }
+    }
+
+    /// The sound output changed (Audio Output, or macOS). The old engine was made for the old device: switching
+    /// 44.1 kHz speakers to a 48 kHz display stops it, and a restarted one can sit silent while it holds the taps
+    /// pressed meanwhile, then play them all at once. So it's dropped with anything still queued, and a fresh
+    /// engine starts on the new output at the next sound.
+    func outputChanged() {
+        idleTask?.cancel()
+        players.forEach { $0.stop() }
+        engine.stop()
+        engine = AVAudioEngine()
+        build(engine)
+    }
+
+    /// Where the output is: stopped (start it), just started, playing what it's given, or started a while ago
+    /// and still silent (stuck after an output change).
+    enum OutputState: Equatable { case idle, starting, rendering, stalled }
+    static let stallAfter: TimeInterval = 0.3
+
+    /// `runningFor`: seconds since the engine started; `renderAge`: seconds since the output last drew samples.
+    static func outputState(running: Bool, runningFor: TimeInterval?, renderAge: TimeInterval?) -> OutputState {
+        guard running else { return .idle }
+        if let renderAge, renderAge < stallAfter { return .rendering }
+        return (runningFor ?? .infinity) < stallAfter ? .starting : .stalled
+    }
+
+    private var renderAge: TimeInterval? {
+        guard let time = engine.outputNode.lastRenderTime, time.isHostTimeValid else { return nil }
+        let now = mach_absolute_time()
+        return now > time.hostTime ? AVAudioTime.seconds(forHostTime: now - time.hostTime) : 0
     }
 
     /// 下一格最早什么时候响（系统开机以来的秒数）
@@ -129,9 +178,18 @@ final class Feedback: ObservableObject {
 
     private func sound(_ cue: Cue, after delay: TimeInterval = 0) {
         guard let buffer = buffers[cue] else { return }
-        if !engine.isRunning {
-            do { try engine.start() } catch { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        var state = Self.outputState(running: engine.isRunning, runningFor: startedAt.map { now - $0 }, renderAge: renderAge)
+        if state == .stalled {
+            outputChanged()
+            state = .idle
         }
+        if state == .idle {
+            do { try engine.start() } catch { return }
+            startedAt = now
+        }
+        // Until the output is drawing samples, only the latest tap waits for it: never a pile played at once.
+        if state != .rendering { players.forEach { $0.stop() } }
         let player = players[nextPlayer]
         nextPlayer = (nextPlayer + 1) % players.count
         player.play()
@@ -141,8 +199,9 @@ final class Feedback: ObservableObject {
         idleTask?.cancel()
         idleTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            self?.engine.pause()
+            guard !Task.isCancelled, let self else { return }
+            engine.pause()
+            startedAt = nil
         }
     }
 

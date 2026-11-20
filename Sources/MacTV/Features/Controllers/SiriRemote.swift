@@ -72,7 +72,7 @@ enum SiriRemoteAction: Equatable {
 ///   (directions 0.35 s, the rest 0.5 s), then "still held" every 0.3 s until release.
 ///   What a tap and a hold do is PhonePresses' job: the same as the keyboard.
 /// - Volume acts on press and repeats while held (after 0.45 s, every 0.16 s), like the phone's volume keys.
-/// - Play/Pause, Mute and Power act on press.
+/// - Play/Pause, Mute and Power act on press. Siri does nothing yet.
 struct SiriRemoteButtons {
     static let directionHold: TimeInterval = 0.35
     static let buttonHold: TimeInterval = 0.5
@@ -104,7 +104,7 @@ struct SiriRemoteButtons {
         case .playPause: held[button] = Held(); return [.playPause]
         case .mute: held[button] = Held(); return [.mute]
         case .power: held[button] = Held(); return [.power]
-        default: held[button] = Held(); return []      // Siri：先不用（以后给语音助手）
+        default: held[button] = Held(); return []      // Siri: nothing yet
         }
     }
 
@@ -148,7 +148,7 @@ struct SiriRemoteButtons {
         case .right: .right
         case .select: .select
         case .back: .back
-        case .tv: .home        // TV 键 = 手机上的主屏键（按一下回主屏，按住控制中心）
+        case .tv: .home        // the TV button, as the phone's: Home; twice, the App Switcher; held, Control Center
         default: nil
         }
     }
@@ -701,10 +701,12 @@ extension TVController {
     var otherRemoteConnected: Bool { SiriRemoteStatus.shared.connected || controller != nil }
 
     /// A Siri Remote or game controller connected or was used: the pairing sheet shown at launch
-    /// goes away (as it does when the phone connects), and Setup's remote step moves on.
+    /// goes away (as it does when the phone connects), and Setup's remote step shows it connected.
+    /// A Siri Remote connecting is when Mac TV asks to read its buttons (Input Monitoring).
     func noteOtherRemote() {
         remoteCoordinator.noteOtherRemote()
         notePhoneDuringSetup()
+        if SiriRemoteStatus.shared.connected { askForInputMonitoring() }
     }
 
     /// Everything goes the way the phone remote's does, so both remotes feel the same.

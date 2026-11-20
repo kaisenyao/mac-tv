@@ -238,9 +238,11 @@ final class NetworkShares: ObservableObject {
     }
 }
 
-/// Network share passwords in the login Keychain, labelled so Mac TV only ever reads its own.
+/// Network share passwords in the login Keychain, labelled so Mac TV only ever reads its own. In memory under the
+/// tests (SystemKeychain).
 enum ShareKeychain {
     private static let label = "Mac TV network share"
+    private static let memory = SystemKeychain.memoryStore()
 
     private static func query(host: String, user: String) -> [String: Any] {
         [kSecClass as String: kSecClassInternetPassword,
@@ -251,23 +253,26 @@ enum ShareKeychain {
     }
 
     static func save(_ password: String, host: String, user: String) {
-        SecItemDelete(query(host: host, user: user) as CFDictionary)
+        if let memory { memory.withLock { $0[host + "\n" + user] = Data(password.utf8) }; return }
+        SystemKeychain.delete(query(host: host, user: user))
         var item = query(host: host, user: user)
         item[kSecValueData as String] = Data(password.utf8)
-        SecItemAdd(item as CFDictionary, nil)
+        _ = SystemKeychain.add(item)
     }
 
     static func read(host: String, user: String) -> String? {
+        if let memory { return memory.withLock { $0[host + "\n" + user] }.flatMap { String(data: $0, encoding: .utf8) } }
         var item = query(host: host, user: user)
         item[kSecReturnData as String] = true
         item[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(item as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        guard SystemKeychain.copyMatching(item, &result) == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     static func delete(host: String, user: String) {
-        SecItemDelete(query(host: host, user: user) as CFDictionary)
+        if let memory { memory.withLock { _ = $0.removeValue(forKey: host + "\n" + user) }; return }
+        SystemKeychain.delete(query(host: host, user: user))
     }
 }
 

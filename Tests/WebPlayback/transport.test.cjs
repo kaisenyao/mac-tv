@@ -91,6 +91,26 @@ const drain = async () => { for (let i = 0; i < 50 && run('activeCommand !== nul
   assert.equal(body(commands().at(-1)).a, 'home', 'nothing queued before Home is sent after it');
   assert.deepEqual(errors, [], 'intentional cancellation is not an offline error');
 
+  // An unchanged /state: the page sends the last ETag, the Mac answers 304 with no body, and the page uses its
+  // last state again (a fresh copy: edits to an earlier answer don't leak into it).
+  const stateAsks = () => requests.filter(r => r.path === '/state');
+  const fresh = run("api('/state')");
+  finishFetch({ status: 200, ok: true, headers: { get: name => name === 'ETag' ? '"t1"' : null }, json: async () => ({ apps: [1, 2] }) });
+  const firstState = await fresh;
+  assert.equal(stateAsks().at(-1).options.headers['If-None-Match'], undefined, 'the first poll has no tag to send');
+  firstState.apps.push(3);
+  const same = run("api('/state')");
+  assert.equal(stateAsks().at(-1).options.headers['If-None-Match'], '"t1"');
+  finishFetch({ status: 304, ok: false, json: async () => { throw new Error('304 has no body'); } });
+  assert.deepEqual(await same, { apps: [1, 2] }, '304 reuses the last state');
+  const changed = run("api('/state')");
+  finishFetch({ status: 200, ok: true, headers: { get: () => '"t2"' }, json: async () => ({ apps: [4] }) });
+  assert.deepEqual(await changed, { apps: [4] }, 'a changed state replaces it');
+  const again = run("api('/state')");
+  assert.equal(stateAsks().at(-1).options.headers['If-None-Match'], '"t2"');
+  finishFetch({ status: 304, ok: false });
+  assert.deepEqual(await again, { apps: [4] });
+
   const expired = run("api('/state')");
   finishFetch({ status: 401, ok: false });
   await assert.rejects(expired, /unpaired/);

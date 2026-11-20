@@ -2,6 +2,11 @@ import Foundation
 
 /// The viewer's settings, saved in UserDefaults under the keys Mac TV has always used.
 ///
+/// Some are the person's own (watching, sounds, the screen saver, the clock): each profile has its own,
+/// and a new profile starts with the defaults. The rest belong to this Mac and are the same for everyone
+/// (power, updates, the TV display). The first profile's own settings stay in `defaults` with the Mac's,
+/// where they've always been; another profile's are in its own defaults (see ProfileSpace).
+///
 /// They're published, so a screen showing a setting redraws when it changes, wherever it was
 /// changed: the TV, the phone remote or Control Center. Features keep their own rules on top, like
 /// which screen saver delays are allowed; this only stores the values.
@@ -9,25 +14,57 @@ import Foundation
 final class Preferences: ObservableObject {
     static let shared = Preferences()
 
+    /// This Mac's settings, and the first profile's own.
     private let defaults: UserDefaults
+    /// The settings of the person watching: `defaults` for the first profile.
+    private var personal: UserDefaults
+    /// Reading someone's settings in: nothing to save.
+    private var loading = false
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        autoSkip = defaults.object(forKey: Key.autoSkip) as? Bool ?? true
-        autoNext = defaults.object(forKey: Key.autoNext) as? Bool ?? true
+        personal = defaults
+        autoSkip = true
+        autoNext = true
+        navigationSounds = true
+        navigationSoundVolume = 0.7
+        saverWallpaper = nil
+        saverDelay = nil
+        saverClock = true
+        saverAerialCategory = nil
+        saverPhotos = nil
+        twentyFourHourTime = FlipClockTime.systemTwentyFour
         keepMacAwake = defaults.object(forKey: Key.keepMacAwake) as? Bool ?? true
         lidOverride = defaults.bool(forKey: Key.lidOverride)
-        navigationSounds = defaults.object(forKey: Key.navigationSounds) as? Bool ?? true
-        navigationSoundVolume = defaults.object(forKey: Key.navigationSoundVolume) as? Float ?? 0.7
         automaticUpdates = defaults.object(forKey: Key.automaticUpdates) as? Bool ?? false // 默认不自动装，等你在设置里按
-        saverWallpaper = defaults.string(forKey: Key.saverWallpaper)
-        saverDelay = defaults.object(forKey: Key.saverDelay) as? Int
-        saverClock = defaults.object(forKey: Key.saverClock) as? Bool ?? true
-        saverAerialCategory = defaults.string(forKey: Key.saverAerialCategory)
-        saverPhotos = defaults.string(forKey: Key.saverPhotos)
         dedicatedTVMode = defaults.bool(forKey: Key.dedicatedTVMode)
         preferredTVDisplay = defaults.string(forKey: Key.preferredTVDisplay)
-        showPairingAtLaunch = defaults.object(forKey: Key.showPairingAtLaunch) as? Bool ?? true
+        loadPersonal()
+    }
+
+    /// Someone else is watching: their own settings from now on, the defaults if they've never changed one.
+    /// The Mac's settings stay as they are.
+    func use(_ space: ProfileSpace) {
+        let next = space.isMain ? defaults : space.defaults
+        guard next !== personal else { return }
+        personal = next
+        loadPersonal()
+    }
+
+    private func loadPersonal() {
+        loading = true
+        defer { loading = false }
+        let personal = personal
+        autoSkip = personal.object(forKey: Key.autoSkip) as? Bool ?? true
+        autoNext = personal.object(forKey: Key.autoNext) as? Bool ?? true
+        navigationSounds = personal.object(forKey: Key.navigationSounds) as? Bool ?? true
+        navigationSoundVolume = personal.object(forKey: Key.navigationSoundVolume) as? Float ?? 0.7
+        saverWallpaper = personal.string(forKey: Key.saverWallpaper)
+        saverDelay = personal.object(forKey: Key.saverDelay) as? Int
+        saverClock = personal.object(forKey: Key.saverClock) as? Bool ?? true
+        saverAerialCategory = personal.string(forKey: Key.saverAerialCategory)
+        saverPhotos = personal.string(forKey: Key.saverPhotos)
+        twentyFourHourTime = personal.object(forKey: Key.twentyFourHourTime) as? Bool ?? FlipClockTime.systemTwentyFour
     }
 
     // MARK: Watching
@@ -72,16 +109,22 @@ final class Preferences: ObservableObject {
     /// The display Mac TV moves to; nil picks one automatically.
     @Published var preferredTVDisplay: String? { didSet { save(preferredTVDisplay, Key.preferredTVDisplay) } }
 
-    // MARK: Remote
+    // MARK: Clock
 
-    /// Show the phone-remote pairing sheet when Mac TV launches.
-    @Published var showPairingAtLaunch: Bool { didSet { save(showPairingAtLaunch, Key.showPairingAtLaunch) } }
+    /// Every clock on the TV in 24-hour time; until it's changed, as this Mac shows the time.
+    @Published var twentyFourHourTime: Bool { didSet { save(twentyFourHourTime, Key.twentyFourHourTime) } }
 
     private func save(_ value: Any?, _ key: String) {
-        if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        guard !loading else { return }
+        let store = Key.personal.contains(key) ? personal : defaults
+        if let value { store.set(value, forKey: key) } else { store.removeObject(forKey: key) }
     }
 
     private enum Key {
+        /// Each profile's own; the rest are this Mac's.
+        static let personal: Set<String> = [autoSkip, autoNext, navigationSounds, navigationSoundVolume, saverWallpaper,
+                                            saverDelay, saverClock, saverAerialCategory, saverPhotos, twentyFourHourTime]
+
         static let autoSkip = "autoSkip"
         static let autoNext = "autoNext"
         static let keepMacAwake = "keepMacAwake"
@@ -96,6 +139,6 @@ final class Preferences: ObservableObject {
         static let saverPhotos = "saverPhotos"
         static let dedicatedTVMode = "dedicatedTVMode"
         static let preferredTVDisplay = "preferredTVDisplay"
-        static let showPairingAtLaunch = "showPairingAtLaunch"
+        static let twentyFourHourTime = "twentyFourHourTime"
     }
 }

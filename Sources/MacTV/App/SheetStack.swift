@@ -8,7 +8,7 @@ import Foundation
 struct SheetStack {
     /// Bottom to top.
     enum Layer: Int, CaseIterable, Comparable {
-        case controlCenter, settings, organizer, pairing, addApp, topShelfPreferences, playbackCheck, audioPicker
+        case controlCenter, settings, organizer, pairing, addApp, topShelfPreferences, audioPicker, appSwitcher
         case profilePicker, setup
 
         static func < (lhs: Layer, rhs: Layer) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -26,8 +26,8 @@ struct SheetStack {
             case .pairing: "pairing"
             case .addApp: "add-app"
             case .topShelfPreferences: "top-shelf"
-            case .playbackCheck: "playback-check"
             case .audioPicker: "audio-picker"
+            case .appSwitcher: "app-switcher"
             case .profilePicker: "profiles"
             case .setup: "setup"
             }
@@ -38,11 +38,16 @@ struct SheetStack {
     var settings: SettingsPanel?
     /// Arrange apps with the keyboard, game controller or phone's D-pad.
     var organizer: AppOrganizer?
-    var pairing = false
+    var pairing = false {
+        didSet { if !pairing { connectRemote = .connect } }   // it opens on its first page next time
+    }
+    /// Connect a Remote's pages, under the pairing layer: Settings › Remotes and Devices on a sheet of their own.
+    var connectRemote = SettingsPanel.connect
     var adder: AppAdder?
     var topShelfPreferences: TopShelfPreferencesPanel?
-    var playbackCheck: PlaybackDiagnostics?
     var audioPicker: AudioPickerPanel?
+    /// Home pressed twice: the apps in the background (see AppQuit).
+    var appSwitcher: AppSwitcher?
     /// "Who's watching?"
     var profilePicker: ProfilePicker?
     /// First-run setup.
@@ -56,8 +61,8 @@ struct SheetStack {
         case .pairing: pairing
         case .addApp: adder != nil
         case .topShelfPreferences: topShelfPreferences != nil
-        case .playbackCheck: playbackCheck != nil
         case .audioPicker: audioPicker != nil
+        case .appSwitcher: appSwitcher != nil
         case .profilePicker: profilePicker != nil
         case .setup: setup != nil
         }
@@ -77,8 +82,8 @@ struct SheetStack {
         case .pairing: pairing = false
         case .addApp: adder = nil
         case .topShelfPreferences: topShelfPreferences = nil
-        case .playbackCheck: playbackCheck = nil
         case .audioPicker: audioPicker = nil
+        case .appSwitcher: appSwitcher = nil
         case .profilePicker: profilePicker = nil
         case .setup: setup = nil
         }
@@ -108,6 +113,10 @@ extension TVController {
         get { sheets.pairing }
         set { sheets.pairing = newValue }
     }
+    var connectRemote: SettingsPanel {
+        get { sheets.connectRemote }
+        set { sheets.connectRemote = newValue }
+    }
     var adder: AppAdder? {
         get { sheets.adder }
         set { sheets.adder = newValue }
@@ -116,13 +125,13 @@ extension TVController {
         get { sheets.topShelfPreferences }
         set { sheets.topShelfPreferences = newValue }
     }
-    var playbackCheck: PlaybackDiagnostics? {
-        get { sheets.playbackCheck }
-        set { sheets.playbackCheck = newValue }
-    }
     var audioPicker: AudioPickerPanel? {
         get { sheets.audioPicker }
         set { sheets.audioPicker = newValue }
+    }
+    var appSwitcher: AppSwitcher? {
+        get { sheets.appSwitcher }
+        set { sheets.appSwitcher = newValue }
     }
     var profilePicker: ProfilePicker? {
         get { sheets.profilePicker }

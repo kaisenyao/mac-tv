@@ -32,9 +32,20 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
     }
 }
 
-/// The TV's audio output picker sheet state.
+/// The TV's audio output picker sheet state: the outputs, then the Volume and Navigation Clicks sliders.
 struct AudioPickerPanel: Equatable {
     var row = 0
+
+    /// The focused row once the outputs change: the same output, or the same slider, wherever it is now.
+    /// An output that went away leaves focus on the one now in its place.
+    static func row(_ row: Int, from old: [AudioOutputDevice], to new: [AudioOutputDevice]) -> Int {
+        guard old.indices.contains(row) else { return new.count + max(0, min(1, row - old.count)) }
+        let focused = old[row]
+        if let index = new.firstIndex(where: { $0.id == focused.id || (!focused.uid.isEmpty && $0.uid == focused.uid) }) {
+            return index
+        }
+        return max(0, min(row, new.count - 1))
+    }
 }
 
 /// Manages system audio output endpoints and monitors device route changes via CoreAudio.
@@ -63,8 +74,10 @@ final class AudioCoordinator: ObservableObject {
     init(tv: TVController? = nil) {
         self.tv = tv
         fixedOutput.onChange = { [weak self] level, showHUD in
-            self?.currentVolume = level
-            if showHUD { self?.tv?.showVolume(level) }
+            guard let self else { return }
+            currentVolume = level
+            volumePending = fixedOutput.deciding
+            if showHUD { tv?.showVolume(level) }
         }
         fixedOutput.reachesPlayback = { [weak self] in
             NSApplication.shared.isActive && self?.tv?.playbackCoordinator.externalBrowser == nil
@@ -100,19 +113,32 @@ final class AudioCoordinator: ObservableObject {
             newDevices.append(device)
         }
 
-        // The sliders sit under the devices: keep focus on the same slider as the list changes.
+        // Focus stays on the same output or slider as the list changes, so the highlight never lands on another row.
         if let row = tv?.audioPicker?.row {
-            let moved = row >= devices.count ? row + newDevices.count - devices.count : row
-            tv?.audioPicker?.row = max(0, min(moved, newDevices.count + 1))
+            tv?.audioPicker?.row = AudioPickerPanel.row(row, from: devices, to: newDevices)
         }
         self.devices = newDevices
+        let previous = currentDevice
         self.currentDevice = newDevices.first(where: { $0.id == defaultID })
+        fixedOutput.keep(Set(newDevices.map(\.uid)))
         refreshVolume()
+        // The interface sounds start over on the new output, so the next press is heard (see Feedback.outputChanged).
+        if previous != nil, currentDevice?.id != previous?.id { tv?.feedback.outputChanged() }
+    }
+
+    /// Core Audio changed the outputs or the default one: list them again, and ask a display that just
+    /// became the output for its volume now, rather than at the first press.
+    private func outputsChanged() {
+        refreshDevices()
+        readFixedOutputVolume()
     }
 
     // MARK: - Volume Controls
 
     @Published private(set) var currentVolume = VolumeLevel(level: nil, muted: false)
+    /// Still asking the output's display whether it answers (just switched to it, or the picker just opened):
+    /// the Volume slider waits empty rather than saying Not Available.
+    @Published private(set) var volumePending = false
 
     /// Reads the Mac's volume. Tests swap it out, so they don't depend on the Mac's sound hardware.
     static var readVolume: () -> VolumeLevel = SystemControl.volume
@@ -124,6 +150,7 @@ final class AudioCoordinator: ObservableObject {
         let system = Self.readVolume()
         fixedOutput.update(currentDevice, systemControls: system.level != nil)
         currentVolume = system.level != nil ? system : fixedOutput.volume
+        volumePending = system.level == nil && fixedOutput.deciding
     }
 
     /// 系统能调现在这个输出的音量（内建扬声器、AirPods…）：照旧用 CoreAudio
@@ -168,10 +195,11 @@ final class AudioCoordinator: ObservableObject {
         currentVolume = SystemControl.toggleMute()
     }
 
-    /// 打开音量面板时：系统调不了的输出读一次显示器（或拿 Mac TV 自己的音量）
+    /// 打开音量面板、换了输出时：系统调不了的输出读一次显示器（还不知道归谁调就是去问它），或拿 Mac TV 自己的音量
     func readFixedOutputVolume() {
-        guard !systemControlsVolume else { return }
+        guard !systemControlsVolume else { volumePending = false; return }
         fixedOutput.perform(.refresh, showHUD: false)
+        volumePending = fixedOutput.deciding
     }
 
     func selectDevice(_ device: AudioOutputDevice) {
@@ -196,15 +224,14 @@ final class AudioCoordinator: ObservableObject {
             return
         }
         Log.audio.notice("Audio output switched to a \(DiagnosticReport.transportName(device.transport), privacy: .public) device")
-        refreshDevices()
-        refreshVolume()
+        outputsChanged()
     }
 
     // MARK: - Real-Time CoreAudio Listeners
 
     private func startListening() {
         let defaultBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            DispatchQueue.main.async { self?.refreshDevices() }
+            DispatchQueue.main.async { self?.outputsChanged() }
         }
         self.defaultListenerBlock = defaultBlock
         AudioObjectAddPropertyListenerBlock(
@@ -215,7 +242,7 @@ final class AudioCoordinator: ObservableObject {
         )
 
         let devicesBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            DispatchQueue.main.async { self?.refreshDevices() }
+            DispatchQueue.main.async { self?.outputsChanged() }
         }
         self.devicesListenerBlock = devicesBlock
         AudioObjectAddPropertyListenerBlock(
@@ -359,7 +386,7 @@ extension TVController {
             panel.row = min(maxRow, panel.row + 1)
         case .move(.left):
             if panel.row == masterSliderRow {
-                audioCoordinator.stepVolume(by: -5)
+                stepPickerVolume(by: -5)
                 return
             } else if panel.row == soundSliderRow {
                 feedback.stepVolume(by: -0.05)
@@ -367,7 +394,7 @@ extension TVController {
             }
         case .move(.right):
             if panel.row == masterSliderRow {
-                audioCoordinator.stepVolume(by: 5)
+                stepPickerVolume(by: 5)
                 return
             } else if panel.row == soundSliderRow {
                 feedback.stepVolume(by: 0.05)
@@ -395,6 +422,15 @@ extension TVController {
         }
         audioPicker = panel
     }
+
+    /// Left and Right on the Volume slider: a step, and a tick at the new level so you hear it, like the Navigation
+    /// Clicks slider. The tick goes through whatever sets the volume: the Mac's, the display's, or Mac TV's own.
+    /// Nothing when there's nothing to set.
+    private func stepPickerVolume(by delta: Int) {
+        guard audioCoordinator.currentVolume.level != nil || audioCoordinator.volumePending else { return }
+        audioCoordinator.stepVolume(by: delta)
+        feedback.play(.move, from: .keyboard)
+    }
 }
 
 // MARK: - Audio Picker Sheet
@@ -409,16 +445,8 @@ struct AudioPickerSheet: View {
         let soundSliderRow = tv.audioDevices.count + 1
 
         VStack(alignment: .leading, spacing: 22) {
-            HStack {
-                Text("Audio Output").font(.tv(.title3, emphasized: true))
-                Spacer()
-                Button("Done") { tv.audioPicker = nil }
-                    .buttonStyle(.plain)
-                    .font(.tv(.caption1, emphasized: true))
-                    .padding(.horizontal, 24)
-                    .frame(height: 48)
-                    .background(.white.opacity(0.12), in: Capsule())
-            }
+            // No Done button: Back closes it, as on Apple TV.
+            Text("Audio Output").font(.tv(.title3, emphasized: true))
 
             VStack(spacing: 12) {
                 if tv.audioDevices.isEmpty {
@@ -455,6 +483,8 @@ struct AudioPickerSheet: View {
                         .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .scaleEffect(focused ? 1.02 : 1)
                         .onTapGesture {
+                            // A click focuses the row it chose, like the sliders, so focus and the checkmark agree.
+                            tv.audioPicker?.row = index
                             tv.audioCoordinator.selectDevice(device)
                         }
                     }
@@ -472,7 +502,7 @@ struct AudioPickerSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Navigation Sounds")
+                Text("Navigation Clicks")   // Apple's tvOS name, as in Settings › Video and Audio
                     .font(.tv(.caption1, emphasized: true))
                     .foregroundStyle(.white.opacity(0.75))
 
@@ -499,11 +529,17 @@ struct AudioVolumeSlider: View {
         tv.audioCoordinator.currentVolume
     }
 
+    /// Still asking the display: the slider waits empty, and fills once the level is known.
+    private var pending: Bool {
+        tv.audioCoordinator.volumePending
+    }
+
     static func level(at x: CGFloat, width: CGFloat) -> Int {
         Int((max(0, min(1, x / width)) * 100).rounded())
     }
 
     private var symbol: String {
+        if pending { return "speaker.fill" }
         guard let level = volume.level else { return "tv" }
         if volume.muted || level == 0 { return "speaker.slash.fill" }
         if level < 33 { return "speaker.wave.1.fill" }
@@ -519,11 +555,13 @@ struct AudioVolumeSlider: View {
                 Image(systemName: symbol)
                     .font(.system(size: 24, weight: .medium))
                     .frame(width: 36)
+                    .opacity(pending ? 0.5 : 1)
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
 
-            if let level = volume.level {
+            if pending || volume.level != nil {
+                let level = pending || volume.muted ? 0 : volume.level ?? 0
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule()
@@ -531,7 +569,7 @@ struct AudioVolumeSlider: View {
 
                         Capsule()
                             .fill(focused ? Color.white : Color.white.opacity(0.85))
-                            .frame(width: geo.size.width * CGFloat(volume.muted ? 0 : level) / 100)
+                            .frame(width: geo.size.width * CGFloat(level) / 100)
                     }
                     .frame(height: 12)
                     .frame(maxHeight: .infinity, alignment: .center)
@@ -549,7 +587,7 @@ struct AudioVolumeSlider: View {
                 }
                 .frame(height: 36)
 
-                Text(volume.muted ? "Muted" : "\(level)%")
+                Text(pending ? "" : volume.muted ? "Muted" : "\(volume.level ?? 0)%")
                     .font(.tv(.caption1, emphasized: true))
                     .monospacedDigit()
                     .lineLimit(1)
@@ -563,6 +601,7 @@ struct AudioVolumeSlider: View {
                 Spacer()
             }
         }
+        .animation(Motion.appear, value: pending)
         .padding(.horizontal, 22)
         .frame(height: 64)
         .background(

@@ -5,8 +5,9 @@ import Foundation
 /// - 哔哩哔哩自己（取流时给的 last_play_cid / last_play_time，网页版的"记忆播放"）只记一个视频最后看的那一 P
 ///   和时间；分 P 视频别的 P 看到哪、合集最后看的是哪一集，它不记。这里每一 P、每一集各记一个位置。
 /// - 合集：记下每一集属于哪个合集、合集按顺序有哪些集，和最后看的是哪一集（从合集里别的入口点进来时，接着看那一集）。
-/// 只存在这台 Mac 的偏好设置里，最多记几百条，旧的自己丢掉
+/// 只存在这台 Mac 的偏好设置里，最多记几百条，旧的自己丢掉。每个人（个人资料）各记各的（见 ProfileSpace）
 enum BiliResume {
+    private static var store: UserDefaults { ProfileSpace.current.defaults }
     private static let positionsKey = "bilibiliResumePositions"
     private static let seasonsKey = "bilibiliResumeSeasons"
     /// 合集按最近看过的排（最近的在前），留多少个按它来
@@ -36,11 +37,11 @@ enum BiliResume {
             let keep = all.sorted { $0.value[1] > $1.value[1] }.prefix(500)
             all = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
         }
-        UserDefaults.standard.set(all, forKey: positionsKey)
+        store.set(all, forKey: positionsKey)
     }
 
     private static var positions: [String: [Double]] {
-        UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: [Double]] ?? [:]
+        store.dictionary(forKey: positionsKey) as? [String: [Double]] ?? [:]
     }
 
     // MARK: 合集
@@ -72,33 +73,33 @@ enum BiliResume {
     static func noteSeason(_ episodes: [BiliVideo], watching: BiliVideo) {
         guard episodes.count > 1, let first = episodes.first?.bvid,
               Set(episodes.map(\.bvid)).count == episodes.count else { return }   // 分 P 是同一个视频，不算合集
-        var seasons = UserDefaults.standard.dictionary(forKey: seasonsKey) as? [String: [String]] ?? [:]
+        var seasons = store.dictionary(forKey: seasonsKey) as? [String: [String]] ?? [:]
         seasons[first] = episodes.map(\.bvid)
         let order = Array(([first] + seasonOrder.filter { $0 != first && seasons[$0] != nil }).prefix(seasonLimit))
         let kept = Set(order)
         seasons = seasons.filter { kept.contains($0.key) }
-        UserDefaults.standard.set(seasons, forKey: seasonsKey)
-        UserDefaults.standard.set(order, forKey: seasonOrderKey)
+        store.set(seasons, forKey: seasonsKey)
+        store.set(order, forKey: seasonOrderKey)
         var last = lastEpisodes.filter { kept.contains($0.key) }
         if let episode = episodes.first(where: { $0.bvid == watching.bvid }) {
             last[first] = Episode(watching.cid > 0 ? watching : episode)
         }
-        if let data = try? JSONEncoder().encode(last) { UserDefaults.standard.set(data, forKey: lastKey) }
+        if let data = try? JSONEncoder().encode(last) { store.set(data, forKey: lastKey) }
         // 合集里每一集的样子也记下来（接着看下一集时用）：从最近的合集往前，记满为止
         var known = episodeCache
         for video in episodes { known[video.bvid] = Episode(video) }
         var needed: Set<String> = []
         for season in order where needed.count < episodeLimit { needed.formUnion(seasons[season] ?? []) }
         known = known.filter { needed.contains($0.key) }
-        if let data = try? JSONEncoder().encode(known) { UserDefaults.standard.set(data, forKey: cacheKey) }
+        if let data = try? JSONEncoder().encode(known) { store.set(data, forKey: cacheKey) }
     }
 
-    private static var seasonOrder: [String] { UserDefaults.standard.stringArray(forKey: seasonOrderKey) ?? [] }
+    private static var seasonOrder: [String] { store.stringArray(forKey: seasonOrderKey) ?? [] }
 
     /// 从合集里别的入口点进来（点的这一集自己没看过）：该接着看哪一集。
     /// 上次那一集没看完就是它；看完了就是它的下一集；没记录、或者就是点的这一集，是 nil
     static func continueEpisode(for bvid: String) -> Episode? {
-        let seasons = UserDefaults.standard.dictionary(forKey: seasonsKey) as? [String: [String]] ?? [:]
+        let seasons = store.dictionary(forKey: seasonsKey) as? [String: [String]] ?? [:]
         guard let (season, order) = seasons.first(where: { $0.value.contains(bvid) }),
               let last = lastEpisodes[season], last.bvid != bvid else { return nil }
         guard position(bvid: last.bvid, cid: last.cid) == -1 else { return last }
@@ -109,10 +110,10 @@ enum BiliResume {
     }
 
     private static var lastEpisodes: [String: Episode] {
-        UserDefaults.standard.data(forKey: lastKey).flatMap { try? JSONDecoder().decode([String: Episode].self, from: $0) } ?? [:]
+        store.data(forKey: lastKey).flatMap { try? JSONDecoder().decode([String: Episode].self, from: $0) } ?? [:]
     }
 
     private static var episodeCache: [String: Episode] {
-        UserDefaults.standard.data(forKey: cacheKey).flatMap { try? JSONDecoder().decode([String: Episode].self, from: $0) } ?? [:]
+        store.data(forKey: cacheKey).flatMap { try? JSONDecoder().decode([String: Episode].self, from: $0) } ?? [:]
     }
 }

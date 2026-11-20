@@ -11,8 +11,8 @@ struct AppServicesTests {
         let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         let suite = "MacTV.AppServicesTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
 
         let preferences = Preferences(defaults: defaults)
         var services = AppServices()

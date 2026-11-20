@@ -35,10 +35,13 @@ final class DisplayCoordinator: ObservableObject {
         set { preferences.keepMacAwake = newValue; applyPower() }
     }
 
+    /// This Mac has a lid. Without one, the lid override is never offered or applied.
+    var hasLid = LidSleep.available
+
     /// Keep running with the lid closed even on battery or without a TV connected.
     var lidOverride: Bool {
-        get { preferences.lidOverride }
-        set { preferences.lidOverride = newValue; applyPower() }
+        get { hasLid && preferences.lidOverride }
+        set { preferences.lidOverride = hasLid && newValue; applyPower() }
     }
 
     /// One line for the remote about what closing the lid will do.

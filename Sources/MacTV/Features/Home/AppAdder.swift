@@ -121,9 +121,10 @@ extension TVController {
         finishAdding(app)
     }
 
-    /// Closes the sheet with the new tile focused.
+    /// Closes the sheet with the new tile focused: on Home, so Settings (Apps › Add App), and Control Center under
+    /// it, close too.
     private func finishAdding(_ app: AddedApp) {
-        adder = nil
+        sheets.closeDismissible()
         if let index = services.firstIndex(where: { $0.id == app.id }) {
             setFocus(.app(index))
         }

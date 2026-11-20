@@ -19,7 +19,6 @@ final class TVMode {
     private var fullscreenTargetID: String?
     private var fullscreenMoveRetries = 0
     private var movingWindow = false
-    private var pairingFocus = 0
     private var screenChangeGeneration = 0
     private var observers: [NSObjectProtocol] = []
     private let preferences: Preferences
@@ -35,6 +34,10 @@ final class TVMode {
         })
         observers.append(center.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.didExitFullScreen() }
+        })
+        // Back from System Settings, where Open at Login may have just been approved.
+        observers.append(center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cachedLoginStatus = nil }
         })
     }
 
@@ -74,14 +77,27 @@ final class TVMode {
 
     var enabled: Bool { preferences.dedicatedTVMode }
     var preferredID: String? { preferences.preferredTVDisplay }
-    var loginStatus: SMAppService.Status { SMAppService.mainApp.status }
+    /// Asking the system is a synchronous round trip, too slow for every redraw of Settings › General: asked
+    /// once, then again only after changing it or coming back to Mac TV.
+    private var cachedLoginStatus: SMAppService.Status?
+    var loginStatus: SMAppService.Status {
+        if let cachedLoginStatus { return cachedLoginStatus }
+        let status = SMAppService.mainApp.status
+        cachedLoginStatus = status
+        return status
+    }
     var loginEnabled: Bool { loginStatus == .enabled || loginStatus == .requiresApproval }
 
+    /// Each display's lasting id, looked up once per display: Settings › Video and Audio names the preferred one on
+    /// every redraw. Cleared when displays change.
+    private var screenIDs: [CGDirectDisplayID: String] = [:]
+
     private func id(_ screen: NSScreen) -> String {
-        guard let uuid = CGDisplayCreateUUIDFromDisplayID(screen.displayID)?.takeRetainedValue() else {
-            return "display-\(screen.displayID)"
-        }
-        return CFUUIDCreateString(nil, uuid) as String
+        if let known = screenIDs[screen.displayID] { return known }
+        let found = CGDisplayCreateUUIDFromDisplayID(screen.displayID).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
+            ?? "display-\(screen.displayID)"
+        screenIDs[screen.displayID] = found
+        return found
     }
 
     struct DisplayOption: Equatable {
@@ -99,61 +115,8 @@ final class TVMode {
         }
     }
 
-    /// The pairing sheet's rows: phone access, the display (only when there's more than one),
-    /// Bluetooth Settings (for a Siri Remote or game controller), show-at-launch, and Done.
-    enum PairingRow { case access, display, bluetooth, showAtLaunch, done }
-
-    var pairingRows: [PairingRow] {
-        var rows: [PairingRow] = [.access]
-        if displayOptions.count > 1 { rows.append(.display) }
-        rows.append(contentsOf: [.bluetooth, .showAtLaunch, .done])
-        return rows
-    }
-    var pairingFocusedRow: PairingRow { pairingRows[min(pairingFocus, pairingRows.count - 1)] }
-
-    func resetPairingFocus() { pairingFocus = 0 }
-
-    /// The display after (or before) `current`, wrapping around.
-    static func steppedDisplay(_ ids: [String], from current: String?, step: Int) -> String? {
-        guard !ids.isEmpty else { return nil }
-        let at = current.flatMap { ids.firstIndex(of: $0) } ?? 0
-        return ids[((at + step) % ids.count + ids.count) % ids.count]
-    }
-
-    /// Moves Mac TV to the next connected display.
-    func stepDisplay(_ step: Int) {
-        let options = displayOptions
-        let current = options.first(where: \.current)?.id ?? preferredID
-        if let next = Self.steppedDisplay(options.map(\.id), from: current, step: step) { _ = chooseDisplay(id: next) }
-    }
-
-    func handlePairing(_ command: RemoteCommand) {
-        let rows = pairingRows
-        pairingFocus = min(pairingFocus, rows.count - 1)
-        let row = rows[pairingFocus]
-        switch command {
-        case .move(.up): pairingFocus = max(0, pairingFocus - 1)
-        case .move(.down): pairingFocus = min(rows.count - 1, pairingFocus + 1)
-        // Left and right change the focused row's value, like a Settings row.
-        case .move(let direction) where row == .access && (direction == .left || direction == .right):
-            tv?.pairingGuest.toggle()
-        case .move(let direction) where row == .showAtLaunch && (direction == .left || direction == .right):
-            tv?.preferences.showPairingAtLaunch.toggle()
-        case .move(.left) where row == .display: stepDisplay(-1)
-        case .move(.right) where row == .display: stepDisplay(1)
-        case .select:
-            switch row {
-            case .access: tv?.pairingGuest.toggle()
-            case .display: stepDisplay(1)
-            case .showAtLaunch: tv?.preferences.showPairingAtLaunch.toggle()
-            case .bluetooth: PairSheet.openBluetoothSettings()
-            case .done: tv?.pairing = false
-            }
-        case .back: tv?.pairing = false
-        default: return
-        }
-        tv?.objectWillChange.send()
-    }
+    /// Connect a Remote opens on its first page.
+    func resetPairingFocus() { tv?.connectRemote = .connect }
 
     @discardableResult
     func chooseDisplay(id displayID: String) -> Bool {
@@ -263,6 +226,13 @@ final class TVMode {
         if enabled { reconcileScreen() }
     }
 
+    /// Control Center's Display list: no display preferred; full screen goes where it picks.
+    func preferAutomaticDisplay() {
+        preferences.preferredTVDisplay = nil
+        if enabled { reconcileScreen() }
+        tv?.objectWillChange.send()
+    }
+
     func setEnabled(_ value: Bool) {
         guard value != enabled else { return }
         preferences.dedicatedTVMode = value
@@ -289,16 +259,19 @@ final class TVMode {
         do {
             if value { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }
-            if SMAppService.mainApp.status == .requiresApproval {
+            cachedLoginStatus = nil
+            if loginStatus == .requiresApproval {
                 tv?.showToast("Allow Mac TV in System Settings › General › Login Items")
             }
         } catch {
+            cachedLoginStatus = nil
             tv?.showToast("Could not change login item: \(error.localizedDescription)")
         }
         tv?.objectWillChange.send()
     }
 
     func screensChanged() {
+        screenIDs = [:]
         screenChangeGeneration += 1
         let generation = screenChangeGeneration
         // Display arrangements can produce several notifications while HDMI settles.
@@ -432,11 +405,11 @@ extension TVController {
     var displaySetup: [[String: Any]] {
         availableTVDisplays.map { ["id": $0.id, "name": $0.name, "current": $0.current, "preferred": $0.preferred] }
     }
-    var pairingRows: [TVMode.PairingRow] { tvMode?.pairingRows ?? [.access, .bluetooth, .showAtLaunch, .done] }
-    var pairingFocusedRow: TVMode.PairingRow { tvMode?.pairingFocusedRow ?? .access }
-    func stepPairingDisplay() { tvMode?.stepDisplay(1) }
-    func handlePairing(_ command: RemoteCommand) { tvMode?.handlePairing(command) }
     @discardableResult func selectTVDisplay(id: String) -> Bool { tvMode?.chooseDisplay(id: id) ?? false }
+    /// A display to prefer and move to, or nil for Automatic.
+    func chooseTVDisplay(_ id: String?) {
+        if let id { selectTVDisplay(id: id) } else { tvMode?.preferAutomaticDisplay() }
+    }
     var dedicatedTVMode: Bool { tvMode?.enabled ?? false }
     var preferredTVDisplayName: String { tvMode?.preferredName ?? "Automatic" }
     var launchAtLogin: Bool { tvMode?.loginEnabled ?? false }
