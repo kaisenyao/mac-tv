@@ -74,7 +74,7 @@ final class AppLibrary {
     /// How many apps Home's top row, the dock, holds. Every row below holds as many.
     nonisolated static let dockSize = 6
 
-    /// Mac TV's system apps, as Apple's are on Apple TV: Movies, Web, Settings and Add App. They can be moved,
+    /// Mac TV's system apps, as Apple's are on Apple TV: Movies, Web, Settings and Store. They can be moved,
     /// but never hidden or deleted, from any path. The one place this rule lives.
     nonisolated static let systemApps: Set<String> = ["movies", "browser", "settings", "add-app"]
 
@@ -144,12 +144,12 @@ final class AppLibrary {
 
     // MARK: Home's order
 
-    /// Home's apps in order: the ones this profile shows, then Add App and Settings. The first six are the dock.
+    /// Home's apps in order: the ones this profile shows, then Store and Settings. The first six are the dock.
     func services() -> [Service] {
         visibleApps + Catalog.services.filter { !Self.canArrange($0) }
     }
 
-    /// The apps Home shows, in order, by id. Add App and Settings, which always come last, aren't among them.
+    /// The apps Home shows, in order, by id. Store and Settings, which always come last, aren't among them.
     func arrangement() -> [String] { visibleApps.map(\.id) }
 
     /// Puts the apps on show in this order. It must hold exactly those apps, each once. Hidden and unavailable
@@ -300,7 +300,7 @@ final class AppLibrary {
 
     enum DeleteOutcome: Equatable {
         case deleted
-        /// Movies, Web, Settings and Add App: never deleted, nor hidden.
+        /// Movies, Web, Settings and Store: never deleted, nor hidden.
         case systemApp
         /// Only an app someone added can be deleted; built-in apps can only be hidden.
         case notAdded

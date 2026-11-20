@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Arrange Apps shows Home as it is: the dock (Home's top row) in its glass, the rest of the apps below in
-/// Home's six columns, then Add App and Settings, which stay last. Select picks the focused app up and the
+/// Home's six columns, then Store and Settings, which stay last. Select picks the focused app up and the
 /// D-pad moves it, the others making room; Select again puts it down and Back puts it back where it was.
 /// Moving an app into a full dock moves the dock's last app to the first place below; moving one out brings
 /// the first app below up into the dock. Press and hold Select on an app for Hide (and, for an app someone
@@ -320,7 +320,7 @@ struct ArrangeGrid {
     /// Home's second row sits 60 points below the dock.
     static let belowTop = dockTop + dockHeight + 60
 
-    /// Every tile, Add App and Settings included.
+    /// Every tile, Store and Settings included.
     let count: Int
 
     var rows: Int { max((count + AppOrganizer.columns - 1) / AppOrganizer.columns, 1) }
@@ -358,7 +358,7 @@ struct AppOrganizerSheet: View {
         let panel = tv.organizer ?? AppOrganizer()
         let order = tv.organizerOrder
         let apps = Dictionary(tv.arrangedServices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        // Add App and Settings stay last, as on Home; they don't move.
+        // Store and Settings stay last, as on Home; they don't move.
         let fixed = tv.services.filter { $0.kind == .addApp || $0.kind == .settings }
         let grid = ArrangeGrid(count: order.count + fixed.count)
         let focused = (panel.lift?.id ?? panel.selectedID).flatMap { order.firstIndex(of: $0) }

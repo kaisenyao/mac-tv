@@ -287,7 +287,7 @@ struct AppLibraryTests {
 
     // MARK: System apps
 
-    /// Movies, Web, Settings and Add App are system apps, as Apple's are: no path hides or deletes them.
+    /// Movies, Web, Settings and Store are system apps, as Apple's are: no path hides or deletes them.
     @Test
     func systemAppsAreNeverHiddenOrDeletedFromAnyPath() throws {
         try withFolder { folder in

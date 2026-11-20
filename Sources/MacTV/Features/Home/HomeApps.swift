@@ -134,7 +134,7 @@ extension TVController {
         if target === library || library.containsAddedApp(id) { reloadServices() }
     }
 
-    /// Why a system app (Movies, Web, Settings, Add App) can't be hidden or deleted, as Apple words it.
+    /// Why a system app (Movies, Web, Settings, Store) can't be hidden or deleted, as Apple words it.
     func systemAppRefusal(_ id: String, deleting: Bool) -> String {
         let name = Catalog.services.first { $0.id == id }?.name ?? "This app"
         return "“\(name)” is a system app and can’t be \(deleting ? "deleted" : "hidden")."

@@ -615,7 +615,7 @@ function renderApps(focused = appFocus()) {
     files.onclick = openFiles;
     const add = document.createElement('button');
     add.className = 'app add';
-    add.innerHTML = '<span class="tile"><span class="art">+</span></span><span class="name">Add App</span>';
+    add.innerHTML = '<span class="tile"><span class="art"><svg viewBox="0 0 150 132" aria-hidden="true"><use href="#icon-store"/></svg></span></span><span class="name">Store</span>';
     add.onclick = openAdd;
     box.append(files, add);
   }

@@ -82,7 +82,8 @@ enum Catalog {
         Service(id: "movies", name: "Movies", kind: .movies, accent: "#5E5CE6", deep: "#14133A"),
         Service(id: "iina", name: "IINA", kind: .app(bundleID: "com.colliderli.iina"),
                 icon: "iina.png"),
-        Service(id: "add-app", name: "Add App", kind: .addApp),
+        // Store：现在里面是添加 App；以后是完整的商店
+        Service(id: "add-app", name: "Store", kind: .addApp),
         Service(id: "settings", name: "Settings", kind: .settings),
     ]
 }

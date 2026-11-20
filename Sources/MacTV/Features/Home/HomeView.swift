@@ -301,13 +301,15 @@ struct AppTile: View {
 
     @ViewBuilder private var artwork: some View {
         if case .addApp = service.kind {
+            // Store: the white "A" (Icons/store.svg) on App Store's blue.
             ZStack {
-                Color.white.opacity(0.08)
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(.white.opacity(0.45), style: StrokeStyle(lineWidth: 3, dash: [10, 8]))
-                Image(systemName: "plus")
-                    .font(.system(size: 64, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
+                LinearGradient(colors: [Color(hex: "#1BC7FC"), Color(hex: "#027AFF")],
+                               startPoint: .top, endPoint: .bottom)
+                if let glyph = StoreTile.glyph {
+                    Image(nsImage: glyph).resizable().interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 78)
+                }
             }
         } else if case .movies = service.kind {
             ZStack {
@@ -366,5 +368,12 @@ struct AppTile: View {
 @MainActor
 enum DedaoTile {
     static let owl: NSImage? = Bundle.main.url(forResource: "dedao-owl.png", withExtension: nil, subdirectory: "Icons")
+        .flatMap(NSImage.init(contentsOf:))
+}
+
+/// Store 磁贴上的白色"A"
+@MainActor
+enum StoreTile {
+    static let glyph: NSImage? = Bundle.main.url(forResource: "store.svg", withExtension: nil, subdirectory: "Icons")
         .flatMap(NSImage.init(contentsOf:))
 }

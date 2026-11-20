@@ -53,7 +53,7 @@ enum UserGuide {
             .heading("Arrange Apps"),
             .paragraph("Press and hold Select on an app on the Home Screen and choose Edit Home Screen, or go to Settings › Apps › Arrange Apps. Select an app, move it with the arrow keys or the remote, and select again to put it down. Press and hold Select to hide an app."),
             .heading("Add Apps"),
-            .paragraph("Choose Add App on the Home Screen or in Settings › Apps to add a website, a Mac app, or a Steam game."),
+            .paragraph("Open Store on the Home Screen, or choose Add App in Settings › Apps, to add a website, a Mac app, or a Steam game."),
             .heading("Profiles"),
             .paragraph("Choose your picture at the top right of the Home Screen to switch profiles. Each profile has its own apps on the Home Screen, its own sign-ins and history, and its own settings."),
         ]),
