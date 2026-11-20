@@ -512,7 +512,7 @@ final class BrowserStore: ObservableObject {
     /// 系统设置 → 隐私与安全性 → 完全磁盘访问权限（只是打开那一页，打勾要你自己来）
     private func openPrivacySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-            NSWorkspace.shared.open(url)
+            SystemGuard.open(url)
         }
     }
 
@@ -644,7 +644,7 @@ final class BrowserStore: ObservableObject {
         save()
     }
 
-    /// 离开浏览器（回主屏、开别的应用）。无痕标签页这时就关掉、数据扔掉（电视家里人都会用，别留给下一个人）
+    /// 离开浏览器（回主屏、开别的应用）：标签页都留着，无痕的也留着，再进来还在（Mac TV decision）
     func leave() {
         if pageWebView != nil { suspendPage() }
         onStartPage = false
@@ -653,6 +653,13 @@ final class BrowserStore: ObservableObject {
         menu = nil
         videoMode = false
         stopEditing()
+        snapshots.removeAllObjects()
+        save()
+    }
+
+    /// Web quits (the App Switcher), someone else starts watching, or Mac TV quits: the private tabs close and their
+    /// data goes (a TV is shared by the family; the next person mustn't find them).
+    func closePrivateTabs() {
         let privateTabs = tabs.filter(\.isPrivate)
         if !privateTabs.isEmpty {
             tabs.removeAll(where: \.isPrivate)
@@ -660,9 +667,11 @@ final class BrowserStore: ObservableObject {
             if activeTab == nil { activeID = lastNormalID }
         }
         dropPrivateSessionIfUnused()
-        snapshots.removeAllObjects()
         save()
     }
+
+    /// Memory pressure: the tab pictures kept decoded go (they're on disk; private tabs' come back when shown).
+    func trimMemory() { snapshots.removeAllObjects() }
 
     /// 回到开始页（网页的标签栏上返回，或者看一个空白标签页）
     func openStartPage(origin: Origin) {
@@ -1268,7 +1277,10 @@ final class BrowserStore: ObservableObject {
 
 extension BrowserStore: ProfileApp {
     /// 要换人了：开着的网页收起来，标签页存进这个人自己的那一份（无痕的扔掉）
-    func profileWillChange() { leave() }
+    func profileWillChange() {
+        leave()
+        closePrivateTabs()
+    }
 
     /// 换了人：他自己的标签页、截图、看过的页面、缩放；Safari 那几排只有第一个人有
     func profileChanged() {

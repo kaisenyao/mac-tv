@@ -9,6 +9,7 @@ import WebKit
 /// BrowserPageScript 把 <iframe> 的 color-scheme 明确设成框架里那一页的（这里是浅色），白底就没了。
 /// 没有脚本时这个角是白的（说明这一页确实会出白框），有脚本时是网页的黑色
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserIframeTests {
     static let child = """
         <!doctype html><html><head><style>html,body{background:transparent;margin:0}

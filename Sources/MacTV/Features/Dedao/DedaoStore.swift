@@ -240,7 +240,15 @@ final class DedaoStore: ObservableObject {
         }
     }
 
-    /// 离开得到：正在要的音频不要了（不然回到主屏以后它在后台响起来），正在放的停下
+    /// 回主屏、得到留在后台（见 AppQuit）：书接着放，只在屏幕上才有用的停掉——扫码登录不再问
+    /// （再进来 opened 换一张新码），按住左右的快进快退在走到的地方停下
+    func backgrounded() {
+        polling?.cancel()
+        polling = nil
+        endHold()
+    }
+
+    /// 退出得到（见 closeDedao）：正在要的音频不要了（不然退出以后它在后台响起来），正在放的停下
     func closed() {
         polling?.cancel()
         polling = nil
@@ -855,6 +863,16 @@ final class DedaoStore: ObservableObject {
         holdTimer?.invalidate()
         holdTimer = nil
         player.endScrub()
+    }
+
+    /// 按住左右在快进快退
+    var holdSeeking: Bool { holdTimer != nil }
+
+    /// 测试用：当作登录了、播放界面开着、在听这一讲（不联网、不出声）
+    func pretendListening(_ track: DedaoAPI.Track) {
+        phase = .ready
+        playerOpen = true
+        player.pretendLoaded(track)
     }
 
     // MARK: 播放界面的"⋯"菜单（同网易云）
@@ -1861,7 +1879,7 @@ extension TVController {
         dedaoStore.opened()
     }
 
-    /// 离开得到（回主屏、打开别的应用）：页面收起来，正在放的停下（报一下听到哪了）
+    /// 退出得到（App Switcher，见 AppQuit；回主屏是 backgrounded）：页面收起来，正在放的停下（报一下听到哪了）
     func closeDedao() {
         guard dedaoOpen else { return }
         dedaoStore.closed()

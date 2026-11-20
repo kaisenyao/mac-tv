@@ -2,7 +2,7 @@ import AppKit
 import Testing
 @testable import MacTV
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct SteamArtworkTests {
     @Test
     func bigPictureHasNoLibraryHero() async {
@@ -29,7 +29,7 @@ struct SteamArtworkTests {
     }
 }
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct SteamShelfArtTests {
     @Test func artIsReadOnceUntilItChanges() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("steam-art-\(UUID().uuidString)")

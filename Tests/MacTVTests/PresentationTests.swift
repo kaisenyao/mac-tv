@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import MacTV
 
-@Suite @MainActor struct PresentationTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct PresentationTests {
     @Test func recoverySelectionStaysWithinActions() throws {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("work/tests/\(UUID().uuidString)")

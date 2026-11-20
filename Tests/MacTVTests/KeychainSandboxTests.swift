@@ -4,7 +4,7 @@ import Testing
 
 /// The tests never reach the real Keychain: TestSandbox switches every Keychain user to memory before any test runs,
 /// and SystemKeychain, the only place that calls SecItem, refuses (and counts) any call that would still get there.
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct KeychainSandboxTests {
     @Test func onlySystemKeychainCallsSecItem() throws {
         let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

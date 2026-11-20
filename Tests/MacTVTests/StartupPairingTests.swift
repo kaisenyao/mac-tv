@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor struct StartupPairingTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct StartupPairingTests {
     private func withController(_ body: (TVController) throws -> Void) throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent("work/tests/startup-\(UUID().uuidString)")

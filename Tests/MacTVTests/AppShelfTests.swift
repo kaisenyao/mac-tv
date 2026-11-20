@@ -6,6 +6,7 @@ import Testing
 @testable import MacTV
 
 /// 主屏顶部的哔哩哔哩、网易云轮播，以及哔哩哔哩的直播卡片
+@Suite(.timeLimit(.minutes(1)))
 struct AppShelfTests {
     @Test
     func publishedTimeReadsLikeBilibili() {

@@ -15,21 +15,8 @@ extension NSScreen {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    /// Esc 按下的时刻，和这一次按住是否已经触发过"回主屏"
-    var escapeDownAt: Date?
-    var escapeHeld = false
-    /// 确认键按下的时刻（哔哩哔哩的列表里：按一下 = 确认，按住 = 这张卡片的菜单）
-    var selectDownAt: Date?
-    var selectHeld = false
-    /// 长按用计时器来认（不靠系统的"按键重复"，那个可以在系统设置里关掉或调慢）
-    var escapeTimer: Timer?
-    var selectTimer: Timer?
-    /// 网易云播放界面里的左右键：短按切歌，按住快进 / 快退
-    var arrowDownAt: Date?
-    var arrowHeld = false
-    var arrowForward = true
-    var arrowTimer: Timer?
-    static let holdTime: TimeInterval = 0.5
+    /// ⌘H is down as the keyboard's TV button: letting go of ⌘ first lets go of it too
+    var commandHDown = false
     let tv = TVController()
     var window: NSWindow!
     var server: RemoteServer?
@@ -222,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     try? png.write(to: folder.appendingPathComponent("\(name).png"))
                 }
             }
-            let saver = ImageRenderer(content: Screensaver().frame(width: 1920, height: 1080).environment(\.colorScheme, .dark))
+            let saver = ImageRenderer(content: Screensaver(idle: tv.idleCoordinator).frame(width: 1920, height: 1080).environment(\.colorScheme, .dark))
             saver.scale = 1
             if let image = saver.nsImage, let tiff = image.tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
@@ -234,7 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.mainMenu = makeMainMenu()
 
         // A normal window; the green button or ⌃⌘F takes it full screen.
-        window = NSWindow(
+        window = TVWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
@@ -247,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: RootView(tv: tv))
+        (window as? TVWindow)?.unhandledCancel = { [weak self] in self?.tv.pageLetBackThrough() }
         tv.window = window
         if !window.setFrameUsingName("MacTVWindow") { placeOnTV() }
         window.setFrameAutosaveName("MacTVWindow")
@@ -258,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         startRemoteServer()
         installLauncherKeys()
         tv.startPowerManagement()
+        tv.startMemoryPressureWatch()
         tv.startControllers()
         // 自用分支：启动时就把哔哩哔哩每一页的内容取好，进去和切换时不用等
         tv.bilibiliStore.tv = tv
@@ -316,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // 正在看哔哩哔哩、听得到：先把看到哪 / 听到哪记下（这台 Mac 上马上记好；告诉它们那一下不一定来得及）
         tv.bilibiliStore.player.stop()
         tv.dedaoStore.player.stop()
+        tv.browserStore.closePrivateTabs()   // Mac TV quitting: private tabs don't survive it
         server?.stop()
         tv.closeExternalBrowser()
         tv.closeIINAPlayback(terminating: true)
@@ -333,8 +323,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                width: size.width, height: size.height), display: true)
     }
 
-    @objc private func displaysSlept() { tv.noteDisplaySleep(true) }
-    @objc private func displaysWoke() { tv.noteDisplaySleep(false) }
+    @objc private func displaysSlept() { tv.macDisplaySlept() }
+    @objc private func displaysWoke() { tv.macDisplayWoke() }
     /// The network can drop the remote's listener while the Mac sleeps; phones must find it again.
     @objc private func macWoke() { server?.ensureListening() }
 
@@ -383,40 +373,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if tv.noteActivity() { return nil }
             return tv.trackpadGestures.feed(TrackpadGestures.Sample(event), from: .trackpad) ? nil : event
         }
-        // ⌘ let go while ⌘Q is held: too soon, Mac TV stays (see AppQuit)
+        // ⌘ let go while ⌘Q is held: too soon, Mac TV stays (see AppQuit). Let go while ⌘H is held: the TV button is.
         NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            if !event.modifierFlags.contains(.command) { self?.tv.quitKeyUp() }
+            guard let self, !event.modifierFlags.contains(.command) else { return event }
+            tv.quitKeyUp()
+            if commandHDown { commandHDown = false; tv.inputPresses.up(.home, from: .keyboard) }
             return event
         }
+        // A key that went down as a button (Esc, Return, ⌘H, the Home key, a seeking arrow): its release
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
-            if event.charactersIgnoringModifiers?.lowercased() == "q" { self?.tv.quitKeyUp() }
-            // 网易云、得到播放界面的左右键松开：没按到"按住"的程度就是切歌 / 换一讲，按住过就是快进 / 快退结束、从那里接着放
-            if let self, event.keyCode == 123 || event.keyCode == 124, self.arrowDownAt != nil {
-                let held = self.arrowHeld
-                self.arrowDownAt = nil
-                self.arrowTimer?.invalidate()
-                if held {
-                    if self.tv.dedaoOpen { self.tv.dedaoStore.endHold() } else { self.tv.neteaseStore.endScrub() }
-                } else {
-                    self.tv.handle(.move(self.arrowForward ? .right : .left))
-                }
-                return nil
+            guard let self else { return event }
+            if event.charactersIgnoringModifiers?.lowercased() == "q" { tv.quitKeyUp() }
+            guard let key = Self.button(event) else { return event }
+            if key == .home, commandHDown, event.keyCode != 115 { commandHDown = false }
+            return tv.inputPresses.up(key, from: .keyboard) ? nil : event
+        }
+        // Mac TV no longer in front: a key held now never comes up here, so nothing stays held
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.commandHDown = false
+                self.tv.quitKeyUp()
+                self.tv.inputPresses.reset(.keyboard)
+                self.tv.inputPresses.reset(.controller)   // macOS sends controllers to the app in front
             }
-            // 确认键松开：没按到"长按"的程度，才是一次"确认"
-            if let self, event.keyCode == 36 || event.keyCode == 76, self.selectDownAt != nil {
-                let held = self.selectHeld
-                self.selectDownAt = nil
-                self.selectTimer?.invalidate()
-                if !held { self.tv.handle(.select) }
-                return nil
-            }
-            // Esc 松开：没按到"长按"的程度，才是一次"返回"
-            guard let self, event.keyCode == 53, self.escapeDownAt != nil else { return event }
-            let held = self.escapeHeld
-            self.escapeDownAt = nil
-            self.escapeTimer?.invalidate()
-            if !held { self.tv.handle(.back) }
-            return nil
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let tv = self?.tv else { return event }
@@ -430,95 +410,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 if !event.isARepeat { tv.quitKeyDown() }
                 return nil
             }
+            // ⌘H is the keyboard's TV button, everywhere (a web page and a text field too), before the menu sees it:
+            // pressed, the Home Screen; twice, the App Switcher; held, Control Center. "Hide Mac TV" has no shortcut.
+            if mods == [.command], event.charactersIgnoringModifiers?.lowercased() == "h" {
+                self?.commandHDown = true
+                tv.inputPresses.down(.home, from: .keyboard)   // a key repeat does nothing
+                return nil
+            }
             guard event.window === self?.window else { return event }
-            if tv.noteActivity() { return nil }
-            // 自用分支：Esc 的规矩，在哪都一样：
-            //   按一下 = 返回（松开时才算数）；按住半秒 = 回主屏（应用留在后台，见 AppQuit）。
-            // 搜索框里输入法还有待选字时，Esc 是输入法的，不拦。
+            tv.noteInput()   // typing into a field counts too, so the screen saver doesn't start meanwhile
+            // The screen saver: Left, Right, Esc, Return, Space and the Home key are its buttons (see
+            // handleScreensaver); any other key just ends it
+            if tv.screensaver, Self.button(event) == nil, event.keyCode != 49 {
+                tv.screensaverOff()
+                return nil
+            }
+            // Esc is Back, the same everywhere: pressed, Back; held, the Home Screen (see AppQuit). While an input
+            // method has characters waiting in a search field, Esc is the input method's.
             if event.keyCode == 53, mods.isEmpty {
                 let composing = (tv.mode == .launcher
                     && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.typing)
                         || (tv.browserOpen && tv.browserStore.editing)) || (tv.browserPageInFront && tv.browserStore.editing))
                     && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
                 if composing { return event }
-                if !event.isARepeat {
-                    self?.escapeDownAt = Date()
-                    self?.escapeHeld = false
-                    self?.escapeTimer?.invalidate()
-                    self?.escapeTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated {
-                            guard let self, self.escapeDownAt != nil, !self.escapeHeld else { return }
-                            self.escapeHeld = true
-                            self.tv.handle(.home)
-                        }
-                    }
-                }
-                return nil   // 按住时系统重发的 Esc 一律忽略
+                tv.inputPresses.down(.back, from: .keyboard)
+                return nil
             }
-            // Home 键（Mac 键盘上是 fn+←）：回主屏，连按两下是 App Switcher（见 AppQuit）。在哪都一样，网页里也是
+            // The Home key (Fn-Left Arrow on a Mac keyboard) is the TV button too, as ⌘H
             if event.keyCode == 115, mods.isEmpty {
-                if !event.isARepeat { tv.handle(.home) }
+                tv.inputPresses.down(.home, from: .keyboard)
                 return nil
             }
-            // 哔哩哔哩里的确认键：
-            //   在列表里，按一下（松开时算数）= 确认；在视频卡片上按住半秒 = 这张卡片的菜单。
-            //   看视频时，按一下 = 暂停 / 继续；按住半秒 = 从右边拉出面板（UP 主、点赞、投币、收藏、倍速、字幕）。
-            //   按住不放时系统重发的"确认"一律不当成新的一次——菜单弹出来以后，不管还按着多久都不会自己选中第一项。
-            //   不是视频卡片的地方没有菜单，按多久都还是一次普通的确认。
-            //   卡片菜单、面板开着时也一样：按一下（松开时算数）是确认，再按住半秒是收起（TVController.toggle）。
-            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.bilibiliOpen, tv.activeSheet == nil,
-               !tv.bilibiliStore.editing {
-                if event.isARepeat { return nil }
-                let store = tv.bilibiliStore, player = store.player
-                let inList = player.current == nil && !store.settingsOpen
-                let watching = player.current != nil && !player.qualityMenuVisible && !player.relatedVisible
-                if inList || watching {
-                    self?.selectDownAt = Date()
-                    self?.selectHeld = false
-                    self?.selectTimer?.invalidate()
-                    self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated {
-                            guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            // 和手机遥控器上按住 OK 是同一套，响一声、震一下（TVController.holdSelect）
-                            if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
-                        }
-                    }
-                    return nil
-                }
-                // 清晰度栏、下面那一块、设置开着：新按下的这一次立刻生效（走下面的常规处理）
-            }
-            // Arrange Apps, and an app on the Home Screen: Return pressed and let go is Select; held half a second, the
-            // app's menu (Edit Home Screen, Hide), and held again it closes, as with the phone's OK (TVController.holdSelect)
-            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.activeSheet == .organizer || tv.homeAppFocused {
-                if event.isARepeat { return nil }
-                self?.selectDownAt = Date()
-                self?.selectHeld = false
-                self?.selectTimer?.invalidate()
-                self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                        if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
-                    }
-                }
-                return nil
-            }
-            // 网易云音乐、得到的播放界面：短按左右 = 上一首 / 下一首、上一讲 / 下一讲（松开时算数）；
-            // 按住 = 快退 / 快进，松手从那里接着放
+            // In 网易云's and 得到's players Left and Right are buttons: pressed, the previous or next song or lecture;
+            // held, seek, and letting go plays from there (PhonePresses, as the phone's)
             if (event.keyCode == 123 || event.keyCode == 124), mods.isEmpty, tv.mode == .launcher, tv.activeSheet == nil,
                (tv.neteaseOpen && tv.neteaseStore.canHoldSeek) || (tv.dedaoOpen && tv.dedaoStore.canHoldSeek) {
-                if event.isARepeat { return nil }
-                let forward = event.keyCode == 124
-                self?.arrowDownAt = Date()
-                self?.arrowHeld = false
-                self?.arrowForward = forward
-                self?.arrowTimer?.invalidate()
-                self?.arrowTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        guard let self, self.arrowDownAt != nil else { return }
-                        self.arrowHeld = true
-                        if self.tv.dedaoOpen { self.tv.dedaoStore.beginHold(forward: forward) } else { self.tv.neteaseStore.beginHold(forward: forward) }
-                    }
-                }
+                tv.inputPresses.down(event.keyCode == 124 ? .right : .left, from: .keyboard)
                 return nil
             }
             // 网易云音乐里的空格：就在当前界面放 / 停，不进播放界面（回车才进）
@@ -531,61 +458,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if event.keyCode == 49, mods.isEmpty, tv.mode == .launcher, tv.dedaoOpen, tv.activeSheet == nil {
                 if !event.isARepeat { tv.dedaoStore.handle(.playPause) }
                 return nil
-            }
-            // 得到的播放界面里的确认键，和网易云一样：按一下（松开时算数）= 放 / 停；按住半秒 = "⋯"菜单
-            //（倍速、定时关闭、讲目列表），菜单开着时按一下是确认、再按住半秒是收起。
-            // 讲目列表、别的菜单开着时，新按下的这一次立刻生效（走下面的常规处理）
-            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.dedaoOpen, tv.activeSheet == nil,
-               tv.dedaoStore.canHoldSeek || tv.dedaoStore.holdMenuOpen {
-                if event.isARepeat { return nil }
-                self?.selectDownAt = Date()
-                self?.selectHeld = false
-                self?.selectTimer?.invalidate()
-                self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                        // 和手机上按住 OK 一样：响一声、震一下（TVController.holdSelect）
-                        if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
-                    }
-                }
-                return nil
-            }
-            // Web 的开始页、History 里的确认键：按一下（松开时算数）= 确认；在一个网站、History 的一行上按住半秒 = 它的菜单
-            //（个人收藏：Open in New Tab、Rename、Edit Address…、Delete），菜单开着时再按住半秒是收起
-            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.browserOpen, tv.activeSheet == nil,
-               !tv.browserStore.editing, tv.browserStore.barFocus == nil,
-               tv.browserStore.historyState != nil || tv.browserStore.itemMenu != nil || tv.browserStore.focusedPage != nil {
-                if event.isARepeat { return nil }
-                self?.selectDownAt = Date()
-                self?.selectHeld = false
-                self?.selectTimer?.invalidate()
-                self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                        if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
-                    }
-                }
-                return nil
-            }
-            // 网易云音乐里的确认键，规矩一样：按一下（松开时算数）= 确认；
-            // 在歌曲、歌单卡片上或播放界面里按住半秒 = 菜单（喜欢、收藏到歌单、播放模式），菜单开着时再按住半秒是收起。
-            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,
-               !tv.neteaseStore.typing, tv.neteaseStore.account != nil {
-                if event.isARepeat { return nil }
-                if tv.neteaseStore.menu == nil || tv.neteaseStore.holdMenuOpen {
-                    self?.selectDownAt = Date()
-                    self?.selectHeld = false
-                    self?.selectTimer?.invalidate()
-                    self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated {
-                            guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            // 和手机上按住 OK 是同一套：响一声、震一下（TVController.holdSelect）
-                            if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
-                        }
-                    }
-                    return nil
-                }
-                // 头像、设置的菜单开着：新按下的这一次立刻生效
             }
             // 哔哩哔哩的搜索框正在输入时，其余按键整个交给输入框（中文输入法要用到方向键、回车）
             if tv.mode == .launcher, tv.bilibiliOpen, tv.bilibiliStore.editing {
@@ -637,20 +509,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 }
                 let composing = !inBar && ((self?.window.firstResponder as? NSTextInputClient)?.hasMarkedText() ?? false)
                 if event.keyCode == 36 || event.keyCode == 76, !composing {
-                    if event.isARepeat { return nil }
-                    self?.selectDownAt = Date()
-                    self?.selectHeld = false
-                    self?.selectTimer?.invalidate()
-                    self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated {
-                            guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
-                        }
-                    }
+                    tv.inputPresses.down(.select, from: .keyboard)
                     return nil
                 }
             }
-            guard tv.mode == .launcher || tv.mode == .movie else { return event }
+            // Over a web page or a movie, a sheet (Control Center, the App Switcher…) takes the keys
+            guard tv.mode == .launcher || tv.mode == .movie || tv.activeSheet != nil else { return event }
             // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.
             // So does naming a new profile.
             if tv.adder != nil || tv.profilePicker?.naming != nil || tv.settings?.typing == true || tv.movies?.shareForm != nil {
@@ -677,15 +541,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case 124: tv.handle(.move(.right))
             case 125: tv.handle(.move(.down))
             case 126: tv.handle(.move(.up))
-            case 36, 76, 49: if !event.isARepeat { tv.handle(.select) }   // 按住回车、空格只算一次
-            case 53: tv.handle(.back)
+            // Return is the remotes' Select: pressed and let go, Select; held, the menu where there is one
+            case 36, 76: tv.inputPresses.down(.select, from: .keyboard)
+            case 49: if !event.isARepeat { tv.handle(.select) }   // Space: one Select, however long it's held
             default: return event
             }
             return nil
         }
     }
 
-    @objc func goHome(_ sender: Any?) { tv.handle(.home) }
+    /// A key that's one of the buttons InputPresses times: Esc (Back), Return (Select), ⌘H and the Home key (TV),
+    /// Left and Right (in a player that seeks).
+    private static func button(_ event: NSEvent) -> PhonePresses.Key? {
+        switch event.keyCode {
+        case 53: .back
+        case 36, 76: .select
+        case 115: .home
+        case 123: .left
+        case 124: .right
+        default: event.charactersIgnoringModifiers?.lowercased() == "h" ? .home : nil
+        }
+    }
+
+    @objc func goHome(_ sender: Any?) { tv.handle(.goHome) }   // the Home Screen item: the Home Screen, not a TV press
     @objc func reloadPage(_ sender: Any?) { tv.webView?.reload() }
     /// 浏览器的快捷键（Safari 的那一套）：只在浏览器开着时能用，别的时候灰掉，键照常给输入框、网页
     @objc func browserShortcut(_ sender: NSMenuItem) {
@@ -715,16 +593,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         tv.bringToFront()
     }
     @objc func reportBug(_ sender: Any?) {
-        NSWorkspace.shared.open(URL(string: "https://github.com/kaisenyao/mac-tv/issues/new?template=bug_report.md")!)
+        SystemGuard.open(URL(string: "https://github.com/kaisenyao/mac-tv/issues/new?template=bug_report.md")!)
     }
 
     private func makeMainMenu() -> NSMenu {
         let main = NSMenu()
 
         let app = NSMenu()
-        app.addItem(withTitle: "Home", action: #selector(goHome(_:)), keyEquivalent: "H")
+        // No shortcuts: ⌘H is the TV button (the key monitor takes it, for its double press and hold)
+        app.addItem(withTitle: "Home Screen", action: #selector(goHome(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(withTitle: "Hide Mac TV", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(withTitle: "Hide Mac TV", action: #selector(NSApplication.hide(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Quit Mac TV", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         main.addItem(submenu: app, title: "Mac TV")
 

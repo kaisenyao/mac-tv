@@ -5,7 +5,7 @@ import Testing
 
 /// Control Center as tvOS lays it out: Sleep Now, the Remotes / Display / Audio / Sleep Timer tiles, and four
 /// round buttons, the third depending on whether the Mac has a lid.
-@Suite @MainActor struct ControlCenterTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct ControlCenterTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }
@@ -32,9 +32,9 @@ import Testing
             }
         }
         // The grid, in Apple's order: Sleep Now, Remotes, Display, Audio, Sleep Timer, then the round buttons.
-        #expect(ControlCenterPanel.neighbour(of: .sleepMac, .right) == .remotes)
+        #expect(ControlCenterPanel.neighbour(of: .sleepNow, .right) == .remotes)
         #expect(ControlCenterPanel.neighbour(of: .remotes, .down) == .display)
-        #expect(ControlCenterPanel.neighbour(of: .sleepMac, .down) == .audio)
+        #expect(ControlCenterPanel.neighbour(of: .sleepNow, .down) == .audio)
         #expect(ControlCenterPanel.neighbour(of: .audio, .right) == .sleepTimer)
         #expect(ControlCenterPanel.neighbour(of: .audio, .down) == .screenSaver)
         #expect(ControlCenterPanel.neighbour(of: .screenSaver, .right) == .screenOff)
@@ -136,13 +136,14 @@ import Testing
         }
     }
 
-    @Test func screenSaverStartsNowAndSleepNowAsksAgain() throws {
+    @Test func screenSaverStartsNowAndSleepNowIsTVStandby() throws {
         try withTV { tv in
             tv.openControlCenter()
-            tv.activateControl(.sleepMac)
-            #expect(tv.controlCenter?.confirmingSleep == true)
-            tv.handleControlCenter(.move(.right))   // moving on cancels it
-            #expect(tv.controlCenter?.confirmingSleep == false)
+            tv.activateControl(.sleepNow)   // at once, no second press: standby, never the Mac's sleep
+            #expect(tv.standby && tv.controlCenter == nil)
+            tv.handle(.press(.select, .tap), from: .remote)   // Select wakes it, and does nothing else
+            #expect(!tv.standby && tv.controlCenter == nil)
+            tv.openControlCenter()
             tv.activateControl(.screenSaver)
             #expect(tv.screensaver && tv.controlCenter == nil)
             tv.screensaverOff()

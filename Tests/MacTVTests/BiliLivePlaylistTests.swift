@@ -3,6 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 直播的播放列表经我们的手：段和初始化段的地址改成绝对的；和上一份接起来留得更长；旧的不交出去
+@Suite(.timeLimit(.minutes(1)))
 struct BiliLivePlaylistTests {
     /// 列表的地址（带着签名，段的地址按它补全时签名不带过去）
     private let base = URL(string: "https://d1--ov-gotcha207.bilivideo.com/live-bvc/123/live_1_2/index.m3u8?expires=1&sign=abc")!

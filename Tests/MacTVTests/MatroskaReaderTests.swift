@@ -3,7 +3,7 @@ import Testing
 @testable import MacTV
 
 /// Small Matroska files built byte by byte, so the reader is tested without real videos.
-@Suite struct MatroskaReaderTests {
+@Suite(.timeLimit(.minutes(1))) struct MatroskaReaderTests {
     // MARK: Building files
 
     private static func element(_ id: UInt32, _ body: Data) -> Data {

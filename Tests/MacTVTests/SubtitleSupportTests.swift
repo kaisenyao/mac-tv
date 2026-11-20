@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
+@Suite(.timeLimit(.minutes(1)))
 struct SubtitleSupportTests {
     @Test func acceptsOnlySupportedSimpleNames() {
         #expect(SubtitleSupport.validExtension("episode.SRT") == "srt")

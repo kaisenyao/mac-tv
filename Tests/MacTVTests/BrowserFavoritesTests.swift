@@ -6,6 +6,7 @@ import Testing
 /// 个人收藏：Web 自己的一份（第一个人从 Safari 抄一次，以后只改自己的），按住确认的菜单（Open in New Tab、Rename、
 /// Edit Address…、Delete），别的几排的 Add to Favorites，网页上"⋯"里的 Add / Remove
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserFavoritesTests {
     static func storage() -> (BrowserTabStorage, cleanup: () -> Void) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacTVTests.favorites.\(UUID().uuidString)", isDirectory: true)

@@ -40,8 +40,10 @@ final class TVController: NSObject, ObservableObject {
     let feedback: Feedback
     private var coordinatorChanges: [AnyCancellable] = []
 
-    /// 手机遥控器上按住的键（规矩和键盘一样，见 PhonePresses）
+    /// 每个遥控器、键盘、手柄上按住的键是什么意思（见 PhonePresses）
     lazy var phonePresses = PhonePresses(tv: self)
+    /// The keyboard's and controllers' buttons, timed as the remotes' are (see InputPresses)
+    lazy var inputPresses = InputPresses(tv: self)
     /// 双指滑动：Mac 的触控板、滚轮和手机遥控器的触控板共用（见 TrackpadGestures）
     lazy var trackpadGestures = TrackpadGestures(tv: self)
     /// 哔哩哔哩、网易云、YouTube 在主屏顶部的轮播（见 AppShelf）
@@ -115,7 +117,7 @@ final class TVController: NSObject, ObservableObject {
 
     // MARK: 打开它的键再按一次就收起（全局唯一的规矩）
     //
-    // 打开菜单、面板的键：按住 TV / 主屏键（控制中心）、按住确认（卡片菜单、看视频时右边的面板、浏览器的"⋯"、
+    // 打开菜单、面板的键：按住 TV 键（控制中心）、按住确认（卡片菜单、看视频时右边的面板、浏览器的"⋯"、
     // 网易云和得到的菜单）、手机上的快捷键（清晰度、倍速、字幕、选集、投币、取消收藏的确认、每日推荐、定时关闭）。
     // 它打开的那个正在最上面时，同一个键再按一次就是收起：和按返回一样（同样的动画，"返回"的声音），不用去按返回；
     // 有菜单的好几层时整个收起（它打开的是整个）。最上面是别的菜单时照常打开它自己的（换过去）。
@@ -227,8 +229,14 @@ final class TVController: NSObject, ObservableObject {
     /// The apps in the background, most recent first, and what each looked like when it went there (see AppQuit).
     @Published var backgroundApps: [Service] = []
     var appSnapshots: [String: NSImage] = [:]
-    /// The last press of Home: a second one soon after opens the App Switcher.
-    var lastHomePress: Date?
+    /// The last TV press: a second one from the same device soon after opens the App Switcher (see AppQuit).
+    var lastTVPress: TVPress?
+    /// TV standby: Mac TV turned the display off and paused everything (see Standby). Not macOS's own display sleep.
+    @Published var standby = false
+    /// macOS's memory pressure, while Mac TV runs (see memoryPressure)
+    var memoryPressureSource: DispatchSourceMemoryPressure?
+    /// A swipe on the screen saver so far (see handleScreensaver)
+    var saverSwipe: (dx: Double, dy: Double) = (0, 0)
     /// ⌘Q is down, and Mac TV quits if it stays down (see AppQuit).
     var quitKeyHeld = false
     var quitKeyPresses = 0
@@ -351,7 +359,6 @@ final class TVController: NSObject, ObservableObject {
     func startPowerManagement() { displayCoordinator.startPowerManagement() }
     func stopPowerManagement() { displayCoordinator.stopPowerManagement() }
     func refreshPower() { displayCoordinator.refreshPower() }
-    func noteDisplaySleep(_ sleeping: Bool) { displayCoordinator.noteDisplaySleep(sleeping) }
     func wakeDisplays() { displayCoordinator.wakeDisplays() }
 
     @discardableResult
@@ -444,6 +451,8 @@ final class TVController: NSObject, ObservableObject {
         }
         services = library.services()
         // 哔哩哔哩、网易云、得到、浏览器：每个人（个人资料）一份数据，换人时各自重新读（见 ProfileApp）
+        bilibiliStore.player.onPlay = { [weak self] in self?.startedPlaying(BilibiliStore.appID) }
+        dedaoStore.player.onPlay = { [weak self] in self?.startedPlaying(DedaoStore.appID) }
         profileApps.register(bilibiliStore)
         profileApps.register(neteaseStore)
         profileApps.register(dedaoStore)
@@ -456,6 +465,7 @@ final class TVController: NSObject, ObservableObject {
     var sleepAt: Date? { idleCoordinator.sleepAt }
     @discardableResult
     func noteActivity() -> Bool { idleCoordinator.noteActivity() }
+    func noteInput() { idleCoordinator.noteInput() }
     func showScreensaver() { idleCoordinator.showScreensaver() }
     func screensaverOff() { idleCoordinator.hideScreensaver() }
     func setSleepTimer(minutes: Int) { idleCoordinator.setSleepTimer(minutes: minutes) }
@@ -547,13 +557,10 @@ final class TVController: NSObject, ObservableObject {
             case .status(let item): activateStatus(item)
             }
         case .back:
-            switch focus {
-            case .status: setFocus(shelfCount > 0 ? .shelf(0) : .app(shelfAppIndex))
-            case .shelf: setFocus(.app(shelfAppIndex))
-            case .app(let index):
-                // As on Apple TV: from the grid, up to the first app; on the top row's first app, the screen saver.
-                if inGrid { setFocus(.app(0)) } else if index == 0 { showScreensaver() }
-            }
+            // As on Apple TV, Back on the top row's first app starts the screen saver. Anywhere else on Home, Back goes
+            // to that app first, in one press, so pressing Back over and over always ends in the screen saver (Mac TV
+            // decision: Apple documents the outcome, not the way there)
+            if case .app(0) = focus { showScreensaver() } else { setFocus(.app(0)) }
         case .pointer(let dx, let dy): movePointer(dx: dx, dy: dy)
         case .click: clickPointer()
         case .playPause: toggleBackgroundAudio()
@@ -573,28 +580,28 @@ final class TVController: NSObject, ObservableObject {
     // MARK: - Command Dispatch
 
     func handle(_ command: RemoteCommand, from source: Feedback.Source = .keyboard) {
-        // 手机遥控器上的按键（点一下 / 按住 / 松开）：按键盘的规矩换成具体的动作，再走下面同一条路
+        // 一个键的点一下 / 按住 / 松开（手机、Siri Remote、键盘、手柄都一样，见 PhonePresses）：换成具体的动作，再走下面同一条路
         if case .press(let key, let phase) = command {
             phonePresses.handle(key, phase, from: source)
             return
         }
-        if source == .remote || source == .siriRemote {
-            if source == .remote { noteRemoteConnection() }
-            switch command {
-            case .screenOff, .sleepMac: break   // 关屏幕、睡眠时不能又报"有人在用"
-            default: RemoteActivity.note()
-            }
-            if displaysSleeping {
-                switch command {
-                case .screenOff, .screenOn, .sleepMac: break
-                default: wakeDisplays()
-                }
-            }
+        if source == .remote { noteRemoteConnection() }
+        noteInput()
+        // One input, one layer, in this order (docs/custom/interaction-spec.md, section 4): TV standby, the screen
+        // saver, the system buttons, then the overlays, the app in front and Home.
+        // 1. TV standby: Power, Back, TV and Select wake it, and that press does nothing else; the rest do nothing
+        if standby {
+            if command.wakesFromStandby { wakeFromStandby() }
+            return
         }
-        let dismissedScreensaver = noteActivity()
-        switch command {
-        case .screenOff, .screenOn, .sleepMac: break
-        default: if dismissedScreensaver { return }
+        if source == .remote || source == .siriRemote, !command.entersStandby {
+            RemoteActivity.note()   // someone is using the Mac (it keeps macOS from dimming the display)
+            if displaysSleeping { wakeDisplays() }   // macOS dimmed it on its own: the press wakes it and acts too
+        }
+        // 2. The screen saver
+        if screensaver {
+            handleScreensaver(command, from: source)
+            return
         }
 
         switch command {
@@ -626,13 +633,12 @@ final class TVController: NSObject, ObservableObject {
                 handle(.move(direction), from: source)
             }
             return
-        case .home:
-            // 控制中心开着时：按一下 TV / 主屏键只把它收起来（按住拉下来、按一下收回去，和 Apple TV 一样）
-            // 从控制中心打开的面板（连接遥控器、音频）还盖在上面时，就照常回主屏
-            if controlCenter != nil, sheets.top == .controlCenter { controlCenter = nil; return }
-            // 连按两下：App Switcher（见 AppQuit）；开着时再按是关上它、回主屏
-            if pressHome() { return }
-            goHome(); return
+        // 3. The system buttons, the same over everything (see AppQuit)
+        case .home: pressTV(from: source); return
+        case .goHome: holdBack(); return
+        case .controlCenter: holdTV(); return
+        case .power(let hold): if hold { enterStandby(reason: "Power held") }; return   // pressed while awake: nothing
+        case .sleepNow: enterStandby(reason: "Sleep Now"); return
         case .swipe(let dx, let dy, let phase, let focusFollowsFinger):
             // 手机触控板上的双指滑动：和 Mac 触控板上滑一样（同一套门槛、惯性、声音）。
             // 点按区、Siri Remote 上的滑动也走这里，只是焦点跟着手指走（见 TrackpadGestures）。
@@ -650,7 +656,7 @@ final class TVController: NSObject, ObservableObject {
             holdPointer()
             return
         case .longSelect:
-            // 手机遥控器上按住 OK = 键盘上按住回车（同一个键）：在视频卡片、歌上是菜单，看视频时是右边的面板；
+            // 旧版手机页的按住 OK，和按住确认一样：在视频卡片、歌上是菜单，看视频时是右边的面板；
             // 菜单开着时再按住是收起；没有菜单可开的地方就是一次普通的确认
             if holdSelect(from: source) { return }
             handle(.select, from: source)
@@ -674,11 +680,6 @@ final class TVController: NSObject, ObservableObject {
             if playbackCoordinator.iinaOpen { playbackCoordinator.handleIINACommand(command) }
             else { audioCoordinator.pressMute() }
             return
-        case .screenOff:
-            displayCoordinator.noteDisplaySleep(true)
-            SystemControl.displayOff()
-            return
-        case .screenOn: wakeDisplays(); return
         case .sleepTimer(let minutes): setSleepTimer(minutes: minutes); return
         case .shortcut(let id): runShortcut(id, from: source); return   // 手机遥控器上的快捷键（见 RemoteShortcuts）
         case .setting(let key, let value):
@@ -688,20 +689,18 @@ final class TVController: NSObject, ObservableObject {
             if key == "lidOverride" { lidOverride = value }
             return
         case .sleepMac:
+            // The whole Mac, from Settings › System › Sleep Mac or the phone's Settings (each asks first). The remotes
+            // can't wake it.
             goHome()
             SystemControl.sleepNow()
             return
-        case .controlCenter:
-            guard setup == nil, profilePicker == nil else { return }
-            if controlCenter != nil {
-                sheets.closeDismissible()   // with whatever it opened over itself
-            } else {
-                if mode != .launcher || movies != nil { goHome() }
-                sheets.closeDismissible()
-                openControlCenter()
-            }
-            return
         default: break
+        }
+
+        // 4. Overlays: a sheet over Home, an app or a web page takes the input (see ModalSheetRouter)
+        if sheets.top != nil {
+            handleInLauncherWithFeedback(command, from: source)
+            return
         }
 
         if externalBrowser != nil {
@@ -730,28 +729,32 @@ final class TVController: NSObject, ObservableObject {
         }
 
         switch mode {
-        case .launcher:
-            let before = feedbackState
-            // 走一格的声音按焦点（走之前）所在的区域：长条、进度是轻快的"嗒"，其余一格一格的（挑选、抽屉）是"咔"
-            var moveCue = Feedback.Cue.step
-            if case .move(let direction) = command, [.strip, .scrub].contains(module(horizontal: direction == .left || direction == .right)) {
-                moveCue = .move
-            }
-            handleInLauncher(command)
-            let changed = feedbackState != before
-            switch command {
-            case .move where changed: feedback.play(moveCue, from: source)
-            case .seek: feedback.play(.move, from: source)   // 快进 / 快退（滚轮、手柄的肩键）：轻快的"嗒"
-            case .select: feedback.play(.select, from: source)
-            case .back where changed: feedback.play(.back, from: source)
-            default: break
-            }
+        case .launcher: handleInLauncherWithFeedback(command, from: source)
         case .player(let service):
             if handleInBrowserChrome(command, from: source) { break }   // 浏览器网页：标签栏、"⋯"菜单，网页里的返回
             if !bilibiliStore.handleInPlayer(command, service: service), !neteaseStore.handleInPlayer(command, service: service) {
                 playbackCoordinator.handleInPlayer(command, service: service)
             }
         case .movie: playbackCoordinator.handleInMovie(command)
+        }
+    }
+
+    /// Mac TV's own screens (Home, its apps and sheets): the command, and its sound when it changed something.
+    private func handleInLauncherWithFeedback(_ command: RemoteCommand, from source: Feedback.Source) {
+        let before = feedbackState
+        // 走一格的声音按焦点（走之前）所在的区域：长条、进度是轻快的"嗒"，其余一格一格的（挑选、抽屉）是"咔"
+        var moveCue = Feedback.Cue.step
+        if case .move(let direction) = command, [.strip, .scrub].contains(module(horizontal: direction == .left || direction == .right)) {
+            moveCue = .move
+        }
+        handleInLauncher(command)
+        let changed = feedbackState != before
+        switch command {
+        case .move where changed: feedback.play(moveCue, from: source)
+        case .seek: feedback.play(.move, from: source)   // 快进 / 快退（滚轮、手柄的肩键）：轻快的"嗒"
+        case .select: feedback.play(.select, from: source)
+        case .back where changed: feedback.play(.back, from: source)
+        default: break
         }
     }
 
@@ -763,26 +766,19 @@ final class TVController: NSObject, ObservableObject {
         open(app)
     }
 
+    /// Opens an app. What's in front goes to the background first, as the TV button sends it, and nothing else
+    /// closes (see AppQuit): music and audio books keep playing until something else starts to (startedPlaying).
     func open(_ service: Service) {
-        if service.id == DedaoStore.appID {
-            closeNetease(); if bilibiliOpen { closeBilibili() }; if browserOpen { closeBrowser() }
-            openDedao(); return
-        }
-        closeDedao()   // 开别的应用时，得到不能还在后台放着
-        if service.id == BrowserStore.appID { closeNetease(); if bilibiliOpen { closeBilibili() }; openBrowser(); return }
-        if browserOpen { closeBrowser() }
-        if service.id == BilibiliStore.appID { openBilibili(); return }   // 它自己会停下网易云、得到、浏览器
-        if bilibiliOpen { closeBilibili() }   // 开别的应用时，哔哩哔哩不能还在后台放着
-        if service.id == NeteaseStore.appID { openNetease(); return }
-        // 开网站、Mac 应用、Steam 游戏：网易云停下（不然两边一起响）；设置、添加应用、影片的片库不放东西，后台的歌接着放
-        switch service.kind {
-        case .web, .app, .steam: closeNetease()
-        case .movies, .addApp, .settings: break
-        }
-        // What's in front goes to the background, as Home sends it; nothing closes (see AppQuit)
-        if mode != .launcher || movies != nil || playbackCoordinator.iinaOpen || externalBrowser != nil { goHome() }
+        if appInFront != nil || mode != .launcher || movies != nil || playbackCoordinator.iinaOpen || externalBrowser != nil { goHome() }
         playbackCoordinator.resetPlaybackRequest()
         sheets.closeDismissible()
+        switch service.id {
+        case DedaoStore.appID: openDedao(); return
+        case BrowserStore.appID: openBrowser(); return
+        case BilibiliStore.appID: openBilibili(); return
+        case NeteaseStore.appID: openNetease(); return
+        default: break
+        }
         switch service.kind {
         case .web(let url):
             // In the background since Home: back to it as it was.
@@ -790,11 +786,12 @@ final class TVController: NSObject, ObservableObject {
                 playbackCoordinator.playWeb(service, url: url)
             }
         case .app(let bundleID):
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
+                  SystemGuard.allows("open \(bundleID)") else { return }
             launchedAppID = bundleID
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         case .steam(let appID):
-            NSWorkspace.shared.open(SteamLibrary.launchURL(for: appID))
+            SystemGuard.open(SteamLibrary.launchURL(for: appID))
             openedSteam = true
             if appID != SteamLibrary.bigPicture.appID { watchForSteamGame() }
         case .movies:
@@ -806,7 +803,7 @@ final class TVController: NSObject, ObservableObject {
         }
     }
 
-    /// Home, from the Home button, holding Back, or Back at an app's top level: the app in front goes to the
+    /// The Home Screen, from the TV button, holding Back, or Back at an app's top level: the app in front goes to the
     /// background, as on Apple TV (see AppQuit). Apps quit from the App Switcher.
     func goHome() {
         noteAppInBackground()   // before anything changes, while it still shows (see AppQuit)

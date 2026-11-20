@@ -3,7 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 哔哩哔哩"看到哪了"：每一 P 各记各的；合集记得上次看的是哪一集，看完了接下一集
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 struct BiliResumeTests {
     private func clean() {
         for key in ["bilibiliResumePositions", "bilibiliResumeSeasons", "bilibiliResumeSeasonOrder", "bilibiliResumeLastEpisode",

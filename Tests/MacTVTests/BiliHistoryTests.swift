@@ -3,6 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 哔哩哔哩的历史记录：视频和看过的直播间都要，番剧、专栏这些不要
+@Suite(.timeLimit(.minutes(1)))
 struct BiliHistoryTests {
     @Test
     func historyKeepsVideosAndLiveRoomsOnly() throws {

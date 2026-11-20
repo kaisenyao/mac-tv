@@ -45,6 +45,7 @@ private func waitUntil(_ timeout: Duration = .seconds(3), _ condition: @MainActo
 }
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct BilibiliLoginPageTests {
     // MARK: 头像
 

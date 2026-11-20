@@ -1668,19 +1668,16 @@ final class BilibiliStore: ObservableObject {
 }
 
 extension TVController {
+    /// Opened from open(), which sent what was in front to the background (music stops only when a video plays)
     func openBilibili() {
-        if mode != .launcher { goHome() }   // 比如从手机上直接点开哔哩哔哩时，先把正在放的别的东西收掉
-        // 别的应用收起来、停下（网易云的歌、得到的书不能和视频一起响）
-        closeNetease()
-        closeDedao()
-        closeBrowser()
-        sheets.closeDismissible()
-        movies = nil
         bilibiliOpen = true
+        bilibiliStore.player.returnFromBackground()
         bilibiliStore.opened()
     }
 
-    func closeBilibili() {
+    /// 哔哩哔哩 quits (the App Switcher, a profile switch): what it was playing stops and saves, everything transient
+    /// goes; next time it opens fresh. (Home doesn't come here: it only sends it to the background, see AppQuit.)
+    func quitBilibili() {
         bilibiliStore.resetTransient()
         bilibiliStore.player.stop()
         bilibiliStore.player.warm(nil)

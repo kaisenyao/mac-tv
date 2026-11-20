@@ -58,6 +58,19 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     @Published private(set) var movieInBackground = false
     private(set) var parkedMovies: MoviesBrowser?
 
+    /// TV standby: the page in front, a movie and IINA pause where they are (pages in the background are paused
+    /// already). Brave isn't reached: Mac TV has no way to pause its page without running script in it.
+    func pauseAll() {
+        webView?.pauseAllMediaPlayback(completionHandler: nil)
+        moviePlayer?.background()   // paused and saved, and its clock stops
+        iinaSession?.pause()
+    }
+
+    /// Out of TV standby: a movie in front shows its controls again, still paused.
+    func returnFromStandby() {
+        if tv?.mode == .movie { moviePlayer?.foreground() }
+    }
+
     /// Home: Movies (its library or its player), IINA and Brave go to the background. Nothing closes.
     func sendToBackground(movies: MoviesBrowser?) {
         if iinaSession != nil || externalBrowser != nil {
@@ -148,6 +161,8 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         tv?.clearPointer()
         tv?.displayCoordinator.holdPlaybackKeepAwake(reason: "Watching \(service.name) in Mac TV")
         tv?.bringToFront()
+        // A website app is a video app, and its page starts playing as it opens (Web's pages and sign-in pages aren't)
+        if ![BrowserStore.pageID, BilibiliStore.loginID, NeteaseStore.loginID].contains(service.id) { tv?.startedPlaying(service.id) }
         Task { @MainActor [weak self] in self?.tv?.window?.makeFirstResponder(web) }
     }
 
@@ -161,10 +176,13 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         tv?.displayCoordinator.releasePlaybackKeepAwake()
     }
 
-    /// A website app (or YouTube) Home sent to the background: its page, paused and kept as it was, so opening the
-    /// app again comes back to the same place, as on Apple TV. One is kept at a time. Web keeps its own tabs, and
-    /// the apps' sign-in pages aren't kept.
-    private var parkedWeb: (service: Service, web: WKWebView, profile: String)?
+    /// The website apps (and YouTube) Home sent to the background: each page paused and kept as it was, so opening
+    /// the app again comes back to the same place, as on Apple TV. As many as there are; only memory pressure
+    /// releases one (see reclaimWeb). Web keeps its own tabs, and the apps' sign-in pages aren't kept.
+    private var parkedWeb: [String: (service: Service, web: WKWebView, profile: String)] = [:]
+    /// The website apps memory pressure released: where each was, to open it there again (its address, and what
+    /// WebKit can bring back of its history and scroll position). Their switcher cards and pictures stay.
+    private var reclaimedWeb: [String: (url: URL, state: Any?, profile: String)] = [:]
 
     /// Home over a page: pause it and keep it, or close it when it's one that isn't kept.
     func parkWebPlayback() {
@@ -173,23 +191,34 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
             closeWebPlayback()
             return
         }
+        // Paused, and suspended so the page can't start its own media again while it waits (it's out of the window,
+        // so WebKit already treats it as hidden: no drawing, timers throttled).
         web.pauseAllMediaPlayback(completionHandler: nil)
-        dropParkedWeb()
-        parkedWeb = (service, web, profile)
+        web.setAllMediaPlaybackSuspended(true, completionHandler: nil)
+        parkedWeb[service.id] = (service, web, profile)
+        reclaimedWeb[service.id] = nil
         webView = nil
         closePopups()
         tv?.displayCoordinator.releasePlaybackKeepAwake()
     }
 
-    /// Opening a website app that's in the background: its page as it was. False when there's none for it (or it
-    /// was someone else's, before a profile switch).
+    /// Opening a website app that's in the background: its page as it was, or, if memory pressure released it,
+    /// opened again at the same address. False when there's none for it (or it was someone else's, before a
+    /// profile switch).
     func resumeParkedWeb(_ service: Service) -> Bool {
-        guard let parked = parkedWeb, parked.service.id == service.id else { return false }
-        guard parked.profile == tv?.profile.id else {
-            dropParkedWeb()
+        guard let profile = tv?.profile.id else { return false }
+        if let reclaimed = reclaimedWeb.removeValue(forKey: service.id) {
+            guard reclaimed.profile == profile else { return false }
+            playWeb(service, url: reclaimed.url, restoring: reclaimed.state)
+            return true
+        }
+        guard let parked = parkedWeb[service.id] else { return false }
+        parkedWeb[service.id] = nil
+        guard parked.profile == profile else {
+            parked.web.stopLoading()
             return false
         }
-        parkedWeb = nil
+        parked.web.setAllMediaPlaybackSuspended(false, completionHandler: nil)   // still paused: play goes on from there
         playbackRequest = UUID()
         currentLocalMovie = nil
         tv?.playerFailure = nil
@@ -202,15 +231,25 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         return true
     }
 
-    /// The website app in the background quits (all of them with no id): its page goes.
+    /// A website app in the background quits (all of them with no id): its page goes, and where it was.
     func dropParkedWeb(_ id: String? = nil) {
-        guard let parked = parkedWeb, id == nil || parked.service.id == id else { return }
-        parked.web.stopLoading()
-        parkedWeb = nil
+        for key in Array(parkedWeb.keys) where id == nil || key == id { parkedWeb.removeValue(forKey: key)?.web.stopLoading() }
+        for key in Array(reclaimedWeb.keys) where id == nil || key == id { reclaimedWeb[key] = nil }
     }
 
-    /// The website app kept in the background, if any.
-    var parkedWebID: String? { parkedWeb?.service.id }
+    /// Memory pressure: this website app's page is released, keeping where it was (see reclaimedWeb). Its sign-ins,
+    /// cookies and stored data are untouched: they live in the profile's own website data store.
+    func reclaimWeb(_ id: String) {
+        guard let parked = parkedWeb.removeValue(forKey: id) else { return }
+        if let url = parked.web.url { reclaimedWeb[id] = (url, parked.web.interactionState, parked.profile) }
+        parked.web.stopLoading()
+        Log.playback.notice("Released \(id, privacy: .public)'s page: memory pressure")
+    }
+
+    /// The website apps whose pages are kept in the background now.
+    var parkedWebIDs: Set<String> { Set(parkedWeb.keys) }
+    /// The website apps memory pressure released, to open again where they were.
+    var reclaimedWebIDs: Set<String> { Set(reclaimedWeb.keys) }
 
     private func closePopups() {
         for popup in popups { popup.close() }
@@ -227,6 +266,9 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         }
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsAirPlayForMediaPlayback = true
+        // A page's Fullscreen API never reaches the window: Mac TV's full screen is TV mode's (see TVWindow). Videos
+        // fill the page as they are; YouTube's TV page plays inside its own page.
+        config.preferences.isElementFullscreenEnabled = false
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         config.userContentController.addUserScript(
             WKUserScript(source: WebPlayback.script, injectionTime: .atDocumentStart, forMainFrameOnly: false))
@@ -333,7 +375,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         case .openInBrowser:
             if let url = web.url {
                 tv?.goHome()
-                NSWorkspace.shared.open(url)
+                SystemGuard.open(url)
             }
         default: break
         }
@@ -342,7 +384,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     // MARK: - Native Movies
 
     func playMovie(_ movie: Movie, from seconds: Double) {
-        tv?.closeNetease()   // 开始放影片：后台的歌停下
+        tv?.startedPlaying("movies")   // 开始放影片：后台的歌、书停下
         closeIINAPlayback()
         closeExternalBrowser()
         let request = UUID()
@@ -431,7 +473,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         let iina = "com.colliderli.iina", vlc = "org.videolan.vlc"
         if NSWorkspace.shared.urlForApplication(withBundleIdentifier: iina) != nil,
            playInIINA(movie, screen: tv?.playbackScreen) { return }
-        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: vlc) {
+        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: vlc), SystemGuard.allows("open VLC") {
             NSWorkspace.shared.open([movie.url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
             tv?.setLaunchedAppID(vlc)
             tv?.showToast("Playing in VLC")

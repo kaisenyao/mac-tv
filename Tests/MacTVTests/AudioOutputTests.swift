@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct AudioOutputTests {
     init() { AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) } }
 
@@ -143,7 +143,7 @@ struct AudioOutputTests {
 
 /// Interface sounds across an output switch: the next press is heard, and nothing pressed meanwhile is saved up
 /// and played at once. No sound is played here: the engines are never started.
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct FeedbackOutputTests {
     @Test
     func aStuckOutputIsReplacedAndTapsNeverPileUp() {

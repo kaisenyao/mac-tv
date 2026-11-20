@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor struct BraveSessionTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct BraveSessionTests {
     @Test func streamingAddresses() throws {
         #expect(try BraveSession.streamingURL(URL(string: "https://www.youtube.com/tv#/browse")!).absoluteString == "https://www.youtube.com/")
         let unusual = URL(string: "https://example.com/watch?q=%22%5C%27%26x%3D1")!

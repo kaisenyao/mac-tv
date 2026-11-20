@@ -5,7 +5,7 @@ import Testing
 
 /// Home's apps: one order whose first six are the dock, apps people add shared by every profile, and each
 /// profile's own order and hidden apps.
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct AppLibraryTests {
     // Keep fixtures in the project rather than the system temporary directory or Documents.
     private func withFolder(_ body: (URL) throws -> Void) throws {

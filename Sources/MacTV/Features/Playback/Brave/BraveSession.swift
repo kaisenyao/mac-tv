@@ -72,6 +72,7 @@ final class BraveSession {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.brave.Browser") else {
             throw SessionError.unavailable
         }
+        guard SystemGuard.allows("open Brave") else { throw SessionError.unavailable }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         let app = try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)

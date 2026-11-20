@@ -3,6 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 主屏顶部的 YouTube：读电视版存着的登录、读电视版给的内容
+@Suite(.timeLimit(.minutes(1)))
 struct YouTubeShelfTests {
     @Test
     func signInIsUsedOnlyWhileItIsStillValid() {

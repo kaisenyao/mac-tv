@@ -57,7 +57,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     return await condition()
 }
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct DisplayVolumeTests {
     // MARK: 包
 
@@ -296,7 +296,7 @@ struct DisplayVolumeTests {
     }
 }
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct FixedOutputVolumeTests {
     let suite = "MacTVTests.\(UUID().uuidString)"
     let defaults: UserDefaults
@@ -460,7 +460,7 @@ struct FixedOutputVolumeTests {
     }
 }
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct PlaybackVolumeTests {
     @Test func playersFollowTheAppLevelOnlyOnFixedOutputs() {
         let suite = "MacTVTests.\(UUID().uuidString)"
@@ -528,7 +528,7 @@ struct PlaybackVolumeTests {
 
 /// 在这台 Mac 上真的问显示器（只读）：MACTV_LIVE_DDC_TEST=1 才跑。声音输出不改。
 /// 再加 MACTV_LIVE_DDC_WRITE=1：把刚读到的音量原样写回去（听不出变化），再读一次核对
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["MACTV_LIVE_DDC_TEST"] == "1")) @MainActor
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["MACTV_LIVE_DDC_TEST"] == "1"), .timeLimit(.minutes(1))) @MainActor
 struct DisplayVolumeLiveTests {
     @Test func theConnectedDisplayAnswersDDC() async throws {
         let coordinator = AudioCoordinator()
@@ -551,7 +551,7 @@ struct DisplayVolumeLiveTests {
 }
 
 /// 网页脚本在真的 WebKit 里：MACTV_LIVE_WEBKIT_TEST=1 才跑（要 WebKit，构建机上可能没有）
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["MACTV_LIVE_WEBKIT_TEST"] == "1")) @MainActor
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["MACTV_LIVE_WEBKIT_TEST"] == "1"), .timeLimit(.minutes(1))) @MainActor
 struct WebVolumeLiveTests {
     @Test func webMediaPlaysAtMacTVsLevelInEveryFrame() async throws {
         _ = NSApplication.shared

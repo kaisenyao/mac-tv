@@ -388,6 +388,7 @@ final class NeteaseStore: ObservableObject {
         open = false
         loginTask?.cancel()
         stopLogin()
+        endScrub()   // 按住左右快进、双指拖着的时候离开：停在拖到的地方，计时器不留在后台
         endEditing()
         menu = nil
         menuParents = []
@@ -1634,6 +1635,7 @@ final class NeteaseStore: ObservableObject {
         current = song
         // 换音质时保持原来的暂停 / 播放；换歌就放（恢复上次的歌时停着）
         if resumeAt == nil || startPaused { paused = startPaused }
+        if !paused { tv?.startedPlaying(Self.appID) }
         if changed {
             // 上一首还在等下载的跳转作废，不会跑到这首上来
             seekCount += 1
@@ -1964,6 +1966,11 @@ final class NeteaseStore: ObservableObject {
     /// 主屏上按了播放 / 暂停（网易云在后台放歌时）
     func toggleFromHome() { togglePause() }
 
+    /// TV standby: the song pauses where it is
+    func pauseIfPlaying() {
+        if current != nil, !paused { togglePause() }
+    }
+
     private func togglePause() {
         paused.toggle()
         if paused {
@@ -1974,6 +1981,7 @@ final class NeteaseStore: ObservableObject {
             // 停了一刻钟以上：歌的地址大概已经过期了（只管二十分钟左右），重新要一次再从原处接着放
             play(song, resumeAt: playbackTime())
         } else {
+            tv?.startedPlaying(Self.appID)   // 后台在放的书停下
             // 继续之前，先在原地精确对齐一次再放（还在暂停中做，听不出来）：无损、超清母带这类边下边放的文件，
             // 暂停后接着放时，声音和播放器报的时间可能错开，歌词就对不上了。效果和点一下歌词一样
             jump(to: playbackTime()) { [weak self] in
@@ -2132,6 +2140,15 @@ final class NeteaseStore: ObservableObject {
             if resume, self?.paused == false, self?.scrubbing == false { self?.player.play() }
         }
         scrubbing = false
+    }
+
+    /// 按住左右在快进快退
+    var holdSeeking: Bool { scrubTimer != nil }
+
+    /// 测试用：当作播放界面开着、在放这首歌（不联网、不出声）
+    func pretendPlaying(_ song: NeteaseSong) {
+        current = song
+        nowPlayingVisible = true
     }
 
     /// 按住左右键：快进 / 快退，按得越久越快
@@ -2317,22 +2334,19 @@ extension TVController {
         bringToFront()
     }
 
-    /// 回主屏：页面收起来。设置里开着后台播放时音乐接着放（和 Apple TV 一样），再点进来还在原来的地方；
-    /// 关着时就像退出了应用，歌停掉
+    /// 回主屏：页面收起来，再点进来还在原来的地方。设置里开着后台播放时音乐接着放（和 Apple TV 一样），关着时停在这里
     func leaveNetease() {
         guard neteaseOpen else { return }
-        if neteaseStore.backgroundPlay {
-            // 网易云留在后台：歌接着放，正在看的那一页（比如播放界面）留着
-            neteaseStore.closed(keepingScreen: true)
-        } else {
-            neteaseStore.closed()
-            neteaseStore.quit()
-            Log.app.notice("Stopped netease on Home: its Background Playback is off")
+        // 网易云留在后台，正在看的那一页（比如播放界面）留着：设置里开着后台播放时歌接着放，关着时停在这里
+        neteaseStore.closed(keepingScreen: true)
+        if !neteaseStore.backgroundPlay {
+            neteaseStore.pauseIfPlaying()
+            Log.app.notice("Paused netease on Home: its Background Playback is off")
         }
         neteaseOpen = false
     }
 
-    /// 打开别的应用：页面收起来，音乐也停（下次进来停在这首歌、这个位置）
+    /// 退出网易云（App Switcher，见 AppQuit）：页面收起来，音乐也停（下次进来停在这首歌、这个位置）
     func closeNetease() {
         neteaseStore.closed()
         if neteaseStore.playing { neteaseStore.stopUntilNextVisit() }

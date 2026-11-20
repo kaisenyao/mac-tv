@@ -4,7 +4,7 @@ import Testing
 @testable import MacTV
 
 /// Back, Home and Quit in every app, as on Apple TV, and ⌘Q held to quit Mac TV, as Chrome.
-@Suite(.serialized) @MainActor struct AppQuitTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor struct AppQuitTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }
@@ -64,10 +64,10 @@ import Testing
             #expect(tv.mode == .player(site) && tv.appInFront?.id == site.id)
             tv.handle(.home)
             #expect(tv.mode == .launcher && tv.webView == nil)
-            #expect(tv.playbackCoordinator.parkedWebID == site.id)   // paused, kept
+            #expect(tv.playbackCoordinator.parkedWebIDs == [site.id])   // paused, kept
             tv.open(site)
             #expect(tv.webView === page && tv.mode == .player(site))   // the same page, where it was
-            #expect(tv.playbackCoordinator.parkedWebID == nil)
+            #expect(tv.playbackCoordinator.parkedWebIDs.isEmpty)
         }
     }
 
@@ -77,9 +77,11 @@ import Testing
             tv.dedaoOpen = true
             tv.sendAppsToBackground()
             #expect(!tv.dedaoOpen)
-            // The sleep timer still stops what Home leaves playing.
-            tv.stopBackgroundAudio(reason: "test")
-            #expect(!tv.neteaseOpen)
+            // TV standby (the sleep timer, Power held, Sleep Now) pauses everything, audio too.
+            tv.enterStandby(reason: "test")
+            #expect(tv.standby && tv.dedaoStore.player.paused)
+            tv.wakeFromStandby()
+            #expect(!tv.standby)
         }
     }
 
@@ -136,11 +138,11 @@ import Testing
             tv.handle(.home)
             tv.handle(.home)
             #expect(tv.appSwitcher == nil && tv.backgroundApps.isEmpty && tv.mode == .launcher)
-            // Two apps in the background, then Home twice from the second.
+            // Two apps in the background, then the TV button twice from the second.
             tv.movies = MoviesBrowser()
             tv.handle(.home)
             tv.open(site)
-            try await Task.sleep(for: .seconds(TVController.homeDoublePress + 0.1))
+            tv.lastTVPress = nil   // a press of its own, not the second of two
             tv.handle(.home)   // the site goes to the background
             tv.handle(.home)   // and again: the switcher
             #expect(tv.backgroundApps.map(\.id) == [site.id, "movies"])
@@ -150,9 +152,9 @@ import Testing
             #expect(tv.appSwitcher?.index == 0)
             for _ in 0..<4 { tv.handle(.move(.right)) }
             #expect(tv.appSwitcher?.index == 1)
-            // Home again closes it.
+            // The TV button again leaves it for where it was opened: the site.
             tv.handle(.home)
-            #expect(tv.appSwitcher == nil)
+            #expect(tv.appSwitcher == nil && tv.mode == .player(site))
         }
     }
 
@@ -164,12 +166,21 @@ import Testing
             tv.handle(.home)
             tv.handle(.select)
             #expect(tv.appSwitcher == nil && tv.mode == .player(site) && tv.webView === page)
-            // Back closes it without switching: Home, the site still in the background.
-            try await Task.sleep(for: .seconds(TVController.homeDoublePress + 0.1))
+            // Back leaves it without switching: back in the site, as it was.
+            tv.lastTVPress = nil
             tv.handle(.home)
             tv.handle(.home)
             tv.handle(.back)
-            #expect(tv.appSwitcher == nil && tv.mode == .launcher && tv.backgroundApps.first?.id == site.id)
+            #expect(tv.appSwitcher == nil && tv.mode == .player(site) && tv.webView === page)
+            // Opened from Home, Back leaves it for Home.
+            tv.lastTVPress = nil
+            tv.handle(.home)
+            tv.lastTVPress = nil
+            tv.handle(.home)
+            tv.handle(.home)
+            #expect(tv.appSwitcher?.origin == nil && tv.appSwitcher?.index == 0)
+            tv.handle(.back)
+            #expect(tv.appSwitcher == nil && tv.mode == .launcher)
         }
     }
 
@@ -195,10 +206,10 @@ import Testing
                 up()
                 #expect(tv.appSwitcher?.leaving == site.id, "\(name): the card slides up")
                 try await Task.sleep(for: TVController.switcherQuitSlide + .milliseconds(150))
-                #expect(tv.backgroundApps.isEmpty && tv.playbackCoordinator.parkedWebID == nil, "\(name): quit")
+                #expect(tv.backgroundApps.isEmpty && tv.playbackCoordinator.parkedWebIDs.isEmpty, "\(name): quit")
                 #expect(tv.appSnapshots[site.id] == nil, "\(name): its picture goes too")
                 #expect(tv.appSwitcher == nil && tv.mode == .launcher, "\(name): the last one quit, Home")
-                try await Task.sleep(for: .seconds(TVController.homeDoublePress))
+                tv.lastTVPress = nil
             }
         }
     }
@@ -208,7 +219,7 @@ import Testing
             tv.movies = MoviesBrowser()
             tv.handle(.home)
             tv.open(site)
-            try await Task.sleep(for: .seconds(TVController.homeDoublePress + 0.1))
+            tv.lastTVPress = nil
             tv.handle(.home)
             tv.handle(.home)
             #expect(tv.backgroundApps.map(\.id) == [site.id, "movies"])
@@ -219,7 +230,7 @@ import Testing
             #expect(tv.backgroundApps.map(\.id) == [site.id])
             #expect(tv.appSwitcher?.index == 0 && tv.appSwitcher?.leaving == nil, "on the card that's left")
             tv.handle(.back)
-            #expect(tv.appSwitcher == nil)
+            #expect(tv.appSwitcher == nil && tv.mode == .player(site), "back where it was opened")
         }
     }
 

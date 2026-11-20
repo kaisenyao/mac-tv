@@ -3,7 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 哔哩哔哩设置里的"左边栏显示"：首页一直都在；藏起来的页左边栏里没有，上下走时跳过
-@Suite(.serialized) @MainActor
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct BilibiliSidebarTests {
     private let key = "bilibiliSidebarHidden"
 

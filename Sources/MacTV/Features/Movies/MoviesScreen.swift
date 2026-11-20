@@ -94,8 +94,6 @@ extension TVController {
     }
 
     func openMovies() {
-        // 从设置里进来时，哔哩哔哩、网易云、得到、浏览器的页面可能还开着：先收起来，不然片库被它们挡住
-        closeBilibili(); leaveNetease(); closeDedao(); closeBrowser()
         movies = MoviesBrowser()
         movieLibrary.refresh()
     }

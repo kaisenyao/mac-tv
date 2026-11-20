@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor struct DisplaySetupTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct DisplaySetupTests {
     @Test func selectionMovesTheWindowOutsideDedicatedModeAndRejectsDisconnectedIDs() async throws {
         _ = NSApplication.shared
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

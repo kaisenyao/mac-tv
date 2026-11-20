@@ -143,10 +143,10 @@ async function run() {
           x: rect.left + rect.width / 2, y: rect.top + rect.height / 2,
           displayed: getComputedStyle(button).display !== 'none', keyboard: sentCommands.slice(before).join(' ') };
       })()`);
-      assert.match(home.label, /\bHome\b/, `${label}: Home is labeled`);
-      assert.ok(home.displayed && home.width >= 44 && home.height >= 44, `${label}: Home stays available`);
-      assert.equal(home.keyboard, 'home', `${label}: Home sends its command from the keyboard`);
-      assert.equal(await tapAt(home.x, home.y), 'home', `${label}: Home sends its command on a tap`);
+      assert.match(home.label, /^TV\b/, `${label}: the TV button is labeled, as Apple names it`);
+      assert.ok(home.displayed && home.width >= 44 && home.height >= 44, `${label}: the TV button stays available`);
+      assert.equal(home.keyboard, 'home', `${label}: the TV button sends its command from the keyboard`);
+      assert.equal(await tapAt(home.x, home.y), 'home', `${label}: the TV button sends its command on a tap`);
       await evaluate('scrollTo(0, 0)');
       if (width === 320 && height === 568 && (mode === 'none' || mode === 'brave')) await screenshot(`320x568-${mode}.png`);
       if (mode === 'none' && height > width) assert.ok(geometry.tool.bottom <= geometry.height + 1, `${label}: portrait remote fits one screen`);

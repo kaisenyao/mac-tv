@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Apple TV's Control Center, under the status row at the top right: Sleep Now, four tiles that open a list or
-/// a sheet (Remotes, Display, Audio, Sleep Timer) and four round buttons (Screen Saver, Turn Off Display,
+/// Apple TV's Control Center, under the status row at the top right: Sleep Now (TV standby), four tiles that open a
+/// list or a sheet (Remotes, Display, Audio, Sleep Timer) and four round buttons (Screen Saver, Turn Off Display,
 /// Lid Closed on a laptop or Keep Mac Awake on a desktop, and Settings). Opened from the status row's
-/// Control Center button, or by holding TV / Home.
+/// Control Center button, or by holding the TV button, over whatever is in front.
 struct ControlCenterPanel: Equatable {
     enum Item: CaseIterable {
-        case sleepMac, remotes, display, audio, sleepTimer, screenSaver, screenOff, stayAwake, settings
+        case sleepNow, remotes, display, audio, sleepTimer, screenSaver, screenOff, stayAwake, settings
     }
 
     /// A tile's list, shown in place of the tiles until Back: the display choices, or the sleep timer's.
@@ -20,8 +20,6 @@ struct ControlCenterPanel: Equatable {
     }
 
     var item: Item = .remotes
-    /// Sleep Now asks for a second press.
-    var confirmingSleep = false
     var list: List?
     var listRow = 0
     /// Select or a click: the focused control dips and settles back each time this goes up.
@@ -30,9 +28,9 @@ struct ControlCenterPanel: Equatable {
     /// Where each direction goes from each item.
     static func neighbour(of item: Item, _ direction: RemoteCommand.Direction) -> Item? {
         switch (item, direction) {
-        case (.sleepMac, .right): .remotes
-        case (.sleepMac, .down): .audio
-        case (.remotes, .left), (.display, .left), (.audio, .up): .sleepMac
+        case (.sleepNow, .right): .remotes
+        case (.sleepNow, .down): .audio
+        case (.remotes, .left), (.display, .left), (.audio, .up): .sleepNow
         case (.remotes, .down): .display
         case (.display, .up): .remotes
         case (.display, .down), (.audio, .right): .sleepTimer
@@ -62,7 +60,6 @@ extension TVController {
 
     func handleControlCenter(_ command: RemoteCommand) {
         guard var panel = controlCenter else { return }
-        if case .select = command {} else { panel.confirmingSleep = false }
         if let list = panel.list {
             let choices = controlCenterChoices(list)
             panel.listRow = min(panel.listRow, choices.count - 1)
@@ -102,18 +99,13 @@ extension TVController {
     /// Select or a click. Sheets opened from here (Connect a Remote, Audio, Settings) open over Control Center, so
     /// Back comes back to it, on the control that opened them.
     func activateControl(_ item: ControlCenterPanel.Item) {
-        if controlCenter?.item != item { controlCenter?.confirmingSleep = false }
         controlCenter?.item = item
         controlCenter?.presses += 1
         switch item {
-        case .sleepMac:
-            if controlCenter?.confirmingSleep == true {
-                controlCenter = nil
-                goHome()
-                SystemControl.sleepNow()
-            } else {
-                controlCenter?.confirmingSleep = true
-            }
+        case .sleepNow, .screenOff:
+            // TV standby, at once: any wake button undoes it, and the Mac stays awake (see Standby)
+            controlCenter = nil
+            enterStandby(reason: item == .sleepNow ? "Sleep Now" : "Turn Off Display")
         case .remotes: pairing = true
         case .display: openControlCenterList(.display)
         case .audio: openAudioPicker()
@@ -121,7 +113,6 @@ extension TVController {
         case .screenSaver:
             controlCenter = nil
             showScreensaver()
-        case .screenOff: SystemControl.displayOff()
         case .stayAwake: if macHasLid { lidOverride.toggle() } else { keepMacAwake.toggle() }
         case .settings: openSettings()
         }
@@ -280,20 +271,18 @@ struct ControlCenterView: View {
     }
 
     private func sleepTile(_ panel: ControlCenterPanel) -> some View {
-        let focused = panel.item == .sleepMac
-        let warning = panel.confirmingSleep
+        let focused = panel.item == .sleepNow
         let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
-        return Button { tv.activateControl(.sleepMac) } label: {
+        return Button { tv.activateControl(.sleepNow) } label: {
             VStack(spacing: 10) {
                 Image(systemName: "power").font(.system(size: 76, weight: .regular))
-                    .symbolEffect(.bounce, value: warning)
-                Text(warning ? "Press Again to Sleep" : "Sleep Now").font(.system(size: 22, weight: .semibold))
+                Text("Sleep Now").font(.system(size: 22, weight: .semibold))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
             }
-            .foregroundStyle(focused && !warning ? .black : .white)
+            .foregroundStyle(focused ? .black : .white)
             .frame(width: Self.column, height: Self.row * 2 + Self.gap)
-            .focusPlatter(shape, focused: focused || warning, color: warning ? Color(hex: "#FF453A") : .white)
+            .focusPlatter(shape, focused: focused, color: .white)
             .contentShape(shape)
             .lifted(focused, in: shape)
         }

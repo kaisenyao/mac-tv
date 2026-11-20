@@ -8,7 +8,7 @@ private final class Record<Value>: @unchecked Sendable {
     init(_ value: Value) { self.value = value }
 }
 
-@Suite struct DisplayPowerTests {
+@Suite(.timeLimit(.minutes(1))) struct DisplayPowerTests {
     @Test func successfulWakeReleasesTheAcquiredAssertion() {
         let released = Record<IOPMAssertionID?>(nil)
         var scheduled: (@Sendable () -> Void)?

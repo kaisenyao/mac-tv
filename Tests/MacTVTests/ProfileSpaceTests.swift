@@ -5,7 +5,7 @@ import Testing
 
 /// Where each profile keeps its things, the app contract and the switch order. Everything here is in a
 /// folder of its own: other profiles' defaults are plists inside it and the Keychain is in memory.
-@Suite @MainActor struct ProfileSpaceTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct ProfileSpaceTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }

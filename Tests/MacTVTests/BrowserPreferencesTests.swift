@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserPreferencesTests {
     @Test
     func choicesArePersistedPerProfileAndDefaultToBuiltIn() throws {

@@ -83,7 +83,7 @@ struct SettingsPanel: Equatable {
     var row = 0
     /// The pages opened below the section's page, deepest last.
     var path: [Level] = []
-    /// Sleep Now asks for a second press: this is the first. Anything else cancels it.
+    /// Sleep Mac asks for a second press: this is the first. Anything else cancels it.
     var confirming = false
     /// 左右调了几次设置（真变了的才算）：焦点没动，但要和走一格一样响一声、震一下
     var changes = 0
@@ -235,7 +235,10 @@ enum SiriRemoteSupport {
     static var available = ProcessInfo.processInfo.isOperatingSystemAtLeast(
         OperatingSystemVersion(majorVersion: 27, minorVersion: 2, patchVersion: 1))
     /// macOS's own question, "“Mac TV” would like to receive keystrokes from any application". A test puts in its own.
-    static var requestAccess: () -> Void = { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
+    static var requestAccess: () -> Void = {
+        guard SystemGuard.allows("ask for Input Monitoring") else { return }
+        _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+    }
 }
 
 extension TVController {
@@ -545,7 +548,7 @@ extension TVController {
         case .keepMacAwake: return onOff("Keep Mac Awake", keepMacAwake)
         case .lidOverride: return onOff("Stay Awake With Lid Closed", lidOverride)
         case .screenOff: return Content(title: "Turn Off Display")
-        case .sleepMac: return Content(title: confirming ? "Press Again to Sleep" : "Sleep Now", warning: confirming)
+        case .sleepMac: return Content(title: confirming ? "Press Again to Sleep" : "Sleep Mac", warning: confirming)
         case .version: return Content(title: "Version", value: AppVersion.current)
         case .source: return Content(title: "Source Code", value: "github.com/kaisenyao/mac-tv")
         case .report: return Content(title: "Copy Diagnostics Report")
@@ -721,7 +724,7 @@ extension TVController {
         pages?.row = index
     }
 
-    /// Sleep Now: the first press asks again, the second does it. True on the second.
+    /// Sleep Mac: the first press asks again, the second does it. True on the second.
     private func confirmSetting() -> Bool {
         if pages?.confirming == true {
             pages?.confirming = false
@@ -761,7 +764,7 @@ extension TVController {
         case .remoteStatus where remoteBlocked:
             // System Settings › Privacy & Security › Input Monitoring. Status says Connected once it's allowed there.
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-                NSWorkspace.shared.open(url)
+                SystemGuard.open(url)
             }
         case .setupDone: advanceSetup()
         case .bluetooth: PairSheet.openBluetoothSettings()
@@ -802,11 +805,11 @@ extension TVController {
         case .softwareUpdates: openSettingsPage(.softwareUpdates)
         case .keepMacAwake: keepMacAwake.toggle()
         case .lidOverride: lidOverride.toggle()
-        case .screenOff: SystemControl.displayOff()
+        case .screenOff: enterStandby(reason: "Turn Off Display")
         case .sleepMac:
+            // The whole Mac (the remotes can't wake it); TV standby is Control Center's Sleep Now
             guard confirmSetting() else { return }
-            goHome()
-            SystemControl.sleepNow()
+            handle(.sleepMac)
         case .update: updater.activate()
         case .autoUpdate: updater.automatic.toggle()
         case .report: DiagnosticReport.copy(from: self)

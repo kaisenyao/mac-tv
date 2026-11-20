@@ -2,7 +2,7 @@ import AppKit
 import Testing
 @testable import MacTV
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct SheetStackTests {
     init() {
         _ = NSApplication.shared
@@ -38,7 +38,7 @@ struct SheetStackTests {
 
         tv.profilePicker = ProfilePicker()
         tv.settings = SettingsPanel()
-        tv.lastHomePress = nil   // a press of its own, not the second of two (that's the App Switcher)
+        tv.lastTVPress = nil   // a press of its own, not the second of two (that's the App Switcher)
         tv.handle(.home)
         #expect(tv.sheets.open == [.profilePicker])
     }

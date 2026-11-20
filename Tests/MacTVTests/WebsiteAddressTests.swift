@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
+@Suite(.timeLimit(.minutes(1)))
 struct WebsiteAddressTests {
     @Test func acceptsTypedAddressesAndPreservesQueries() {
         #expect(WebsiteAddress.url(from: "  youtube.com  ")?.absoluteString == "https://youtube.com")

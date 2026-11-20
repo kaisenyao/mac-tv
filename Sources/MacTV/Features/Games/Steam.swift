@@ -202,6 +202,7 @@ enum GameWindow {
     /// True once the game's window is full screen, or already fills its display.
     @MainActor
     static func makeFullScreen(pid: pid_t, on screen: NSScreen?) -> Bool {
+        guard SystemGuard.allows("resize a game's window") else { return true }
         let prompt = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         guard AXIsProcessTrustedWithOptions(prompt) else { return true }
         let app = AXUIElementCreateApplication(pid)

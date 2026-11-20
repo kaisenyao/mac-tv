@@ -35,17 +35,15 @@ struct ControllerNotice: Equatable {
 }
 
 /// Game controllers drive Mac TV the way they drive Apple TV: the D-pad or left stick moves
-/// focus (repeating while held), A selects, B goes back, Menu goes home, X plays or pauses, and
-/// the shoulder buttons skip. macOS delivers controller input only to the app in front, so while
-/// a Steam game is playing the controller belongs to the game.
+/// focus (repeating while held), A is Select, B is Back, Menu (and the Home button, where there is one)
+/// is the TV button, X plays or pauses, and the shoulder buttons skip. A, B and Menu are pressed, held and
+/// let go by the same rule as every input (InputPresses). macOS delivers controller input only to the
+/// app in front, so while a Steam game is playing the controller belongs to the game.
 @MainActor
 final class ControllerInput {
     private weak var tv: TVController?
     private var held: RemoteCommand.Direction?
     private var repeatTimer: Timer?
-    /// B is down: let go soon it's Back; held past the hold time it's Home (see AppQuit).
-    private var backTimer: Timer?
-    private var backHeld = false
     private var observers: [NSObjectProtocol] = []
 
     init(tv: TVController) {
@@ -71,10 +69,14 @@ final class ControllerInput {
         guard let controller, let pad = controller.extendedGamepad else { return }
         // A PlayStation controller's light bar glows Mac TV's phosphor green.
         controller.light?.color = GCColor(red: 0.25, green: 0.94, blue: 0.56)
-        press(pad.buttonA, .select)
-        pressBack(pad.buttonB)
+        hold(pad.buttonA, .select)
+        hold(pad.buttonB, .back)
+        hold(pad.buttonMenu, .home)
+        if let home = pad.buttonHome {
+            home.preferredSystemGestureState = .disabled   // Mac TV's TV button, not macOS's game overlay
+            hold(home, .home)
+        }
         press(pad.buttonX, .playPause)
-        press(pad.buttonMenu, .home)
         press(pad.leftShoulder, .seek(forward: false))
         press(pad.rightShoulder, .seek(forward: true))
         pad.dpad.valueChangedHandler = { [weak self] _, x, y in MainActor.assumeIsolated { self?.steer(x: x, y: y) } }
@@ -84,31 +86,19 @@ final class ControllerInput {
 
     private func disconnect(_ controller: GCController?) {
         guard let controller else { return }
+        held = nil
         stopRepeat()
+        tv?.inputPresses.reset(.controller)   // a button held as it went away does nothing later
         let next = GCController.controllers().first { $0 !== controller && $0.extendedGamepad != nil }
         tv?.controllerChanged(Self.info(for: controller), connected: false, remaining: next.map(Self.info(for:)))
     }
 
-    /// B, as Esc on the keyboard: a press is Back when it's let go; held half a second, Home.
-    private func pressBack(_ button: GCControllerButtonInput) {
+    /// A button with a press and a hold (A, B, Menu): down and up go to InputPresses, which times them.
+    private func hold(_ button: GCControllerButtonInput, _ key: PhonePresses.Key) {
         button.pressedChangedHandler = { [weak self] _, _, pressed in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                if pressed {
-                    self.backHeld = false
-                    self.backTimer?.invalidate()
-                    self.backTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated {
-                            guard let self else { return }
-                            self.backHeld = true
-                            self.send(.home)
-                        }
-                    }
-                } else {
-                    self.backTimer?.invalidate()
-                    self.backTimer = nil
-                    if !self.backHeld { self.send(.back) }
-                }
+                guard let presses = self?.tv?.inputPresses else { return }
+                if pressed { presses.down(key, from: .controller) } else { presses.up(key, from: .controller) }
             }
         }
     }
@@ -128,9 +118,9 @@ final class ControllerInput {
         stopRepeat()
         guard let direction else { return }
         send(.move(direction))
-        repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) { [weak self] _ in
+        repeatTimer = Timer.scheduledTimer(withTimeInterval: InputTiming.directionHold, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.13, repeats: true) { [weak self] _ in
+                self?.repeatTimer = Timer.scheduledTimer(withTimeInterval: InputTiming.directionRepeat, repeats: true) { [weak self] _ in
                     MainActor.assumeIsolated { if let held = self?.held { self?.send(.move(held)) } }
                 }
             }

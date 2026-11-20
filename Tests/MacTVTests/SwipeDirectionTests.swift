@@ -6,7 +6,7 @@ import Testing
 /// 遥控器（Siri Remote、手机的点按区）上焦点跟着手指走，像 Apple TV：往右 / 上滑焦点往右 / 上，到处都一样，
 /// 甩出去的惯性也接着往这边走。Mac 的触控板和手机触控板上的双指滑动不变：内容跟着手指走（挑选、面板里光标跟着手指走）。
 /// 方向只在 TrackpadGestures.towardsNext 一处定
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct SwipeDirectionTests {
     init() {
         _ = NSApplication.shared
@@ -161,7 +161,7 @@ struct SwipeDirectionTests {
             swipe(tv, source, dx: 0, dy: -150)       // 往上
             #expect(tv.controlCenter?.item == .remotes)
             swipe(tv, source, dx: -150, dy: 20)      // 往左
-            #expect(tv.controlCenter?.item == .sleepMac)
+            #expect(tv.controlCenter?.item == .sleepNow)
             #expect(tv.focus == home)
         }
     }

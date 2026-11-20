@@ -251,9 +251,10 @@ final class AppShelf: ObservableObject {
     }
 
     private func tick() {
-        // 只在看得见主屏的时候走：别的应用、浏览器、影片、弹出的面板、屏保、显示器睡着时都不翻也不取
+        // 只在看得见主屏的时候走：别的应用、浏览器、影片、弹出的面板、屏保、显示器睡着、窗口整个被挡住时都不翻也不取
         guard let tv, tv.mode == .launcher, !tv.bilibiliOpen, !tv.neteaseOpen, !tv.dedaoOpen, !tv.browserOpen,
-              tv.movies == nil, tv.activeSheet == nil, !tv.screensaver, !tv.displaysSleeping else { return }
+              tv.movies == nil, tv.activeSheet == nil, !tv.screensaver, !tv.displaysSleeping,
+              tv.window?.occlusionState.contains(.visible) == true else { return }
         if case .movies = tv.shelfService.kind {
             beatStarted = Date()
             withAnimation(.easeInOut(duration: 1.4)) { beat += 1 }
@@ -361,12 +362,14 @@ final class AppShelf: ObservableObject {
         target[id] = next
         direction = delta >= 0 ? 1 : -1
         turns += 1
-        Task { @MainActor in
+        afterThisFrame {
             guard let pages = self.items[id], !pages.isEmpty else { return }
             withAnimation(Self.pageAnimation) { self.index[id] = min(next, pages.count - 1) }
             if self.target[id] == next { self.target[id] = nil }
         }
     }
+    /// 换页的第二步什么时候做（平时是下一个 main actor 任务；测试里自己挑时候）
+    var afterThisFrame: (@escaping @MainActor () -> Void) -> Void = { work in Task { @MainActor in work() } }
 
     /// 测试用：这个应用顶部直接是这几页（不去网上取）
     func show(_ id: String, pages: [AppShelfItem], label: String = "") {
@@ -577,17 +580,30 @@ struct AppShelfBanner: View {
         return ArtPalette(accent: accentHex)
     }
 
-    /// 换页：这一页先很快地往翻的方向滑走、淡掉，下一页稍后从另一边滑进来——两页不会叠在一起出现重影
-    ///（distance 越大越像是整页在移）
-    private func slide(_ distance: CGFloat) -> AnyTransition {
-        let d = CGFloat(shelf.direction) * distance
-        return .asymmetric(
-            insertion: .offset(x: d).combined(with: .opacity).animation(.spring(response: 0.5, dampingFraction: 0.9).delay(0.14)),
-            removal: .offset(x: -d * 0.6).combined(with: .opacity).animation(.easeIn(duration: 0.16)))
+    /// 换页时滑的那一块：这一页先很快地往翻的方向滑走、淡掉，下一页稍后从另一边滑进来——两页不会叠在一起出现重影
+    ///（distance 越大越像是整页在移）。滑动交给 Core Animation（见 ShelfPage）。
+    /// extra：除了这一页，里面画的东西还取决于什么（没变时这一块不重算）
+    private func page<Content: View>(_ distance: CGFloat, _ item: AppShelfItem, _ extra: AnyHashable...,
+                                     @ViewBuilder content: @escaping () -> Content) -> ShelfPage<Content> {
+        ShelfPage(offset: CGFloat(shelf.direction) * distance, id: item.id, key: [AnyHashable(item)] + extra, content: content)
+    }
+
+    /// 左上角标签上写的（这一页自己的，或者这个应用统一的那个）
+    private func tagText(_ item: AppShelfItem) -> String { item.tag ?? shelf.labels[service.id] ?? "" }
+
+    /// 封面里的颜色斜着渐变，右边（唱片、书后面）透出一大圈亮，左边压一层黑托住字：换页时颜色跟着变（见 ShelfBackdrop）。
+    /// 那层黑也放在这里（Core Animation 的渐变层）：和 Core Animation 的层叠在一起的 SwiftUI 渐变要在主线程上一点点画
+    private func wash(_ colors: ArtPalette, center: UnitPoint, radius: CGFloat) -> ShelfBackdrop {
+        ShelfBackdrop(layers: [
+            ShelfGradient(kind: .linear(start: .topTrailing, end: .bottomLeading), colors: [colors.glow.opacity(0.55), colors.base]),
+            ShelfGradient(kind: .radial(center: center, radius: radius), colors: [colors.glow.opacity(0.55), .clear]),
+            ShelfGradient(kind: .linear(start: .leading, end: .trailing), colors: [.black.opacity(0.45), .black.opacity(0.1), .clear],
+                          locations: [0, 0.45, 0.6]),
+        ])
     }
 
     private func tag(_ item: AppShelfItem) -> some View {
-        Text(item.tag ?? shelf.labels[service.id] ?? "")
+        Text(tagText(item))
             .font(.system(size: 20, weight: .bold))
             .tracking(0.6)
             .padding(.horizontal, 14).frame(height: 34)
@@ -598,19 +614,23 @@ struct AppShelfBanner: View {
     /// 第几个：一排小点，现在这个是一段长一点的。不跟着换页滑，一直在原地
     private var dots: some View {
         let count = shelf.items[service.id]?.count ?? 0, current = shelf.index[service.id] ?? 0
-        return HStack(spacing: 0) {
-            ForEach(0..<count, id: \.self) { index in
-                Capsule().fill(.white.opacity(index == current ? 0.95 : 0.32))
-                    .frame(width: index == current ? 30 : 8, height: 8)
-                    // 每个点都能点：点哪个跳到哪一页（点的范围比点本身大一圈，好点中）
-                    .padding(.horizontal, 4.5).padding(.vertical, 12)
-                    .contentShape(Rectangle())
-                    .onTapGesture { shelf.jump(service.id, to: index) }
+        // 点画在 Core Animation 的层上，换页时跟着同一条弹簧挪（见 ShelfDots）
+        return ShelfDots(count: count, current: current)
+            .overlay(alignment: .leading) {
+                // 每个点都能点：点哪个跳到哪一页（点的范围比点本身大一圈，好点中）。看不见，不用动画
+                HStack(spacing: 0) {
+                    ForEach(0..<count, id: \.self) { index in
+                        Color.clear
+                            .frame(width: ShelfDots.width(index, current: current), height: ShelfDots.height)
+                            .padding(.horizontal, ShelfDots.gap / 2).padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                            .onTapGesture { shelf.jump(service.id, to: index) }
+                    }
+                }
+                .transaction { $0.animation = nil }
             }
-        }
-        .animation(AppShelf.pageAnimation, value: current)
-        .opacity(count > 1 ? 1 : 0)
-        .frame(height: 8)
+            .opacity(count > 1 ? 1 : 0)
+            .frame(height: 8)
     }
 
     /// "播放"：一直在同一个地方，不跟着换页滑（焦点在它上面，左右翻页时它不动）
@@ -642,54 +662,57 @@ struct AppShelfBanner: View {
         let colors = colors(item)
         let width = canvas.width * 0.7, height = width * 9 / 16
         // 底色：封面里取的深色，右上角透出一点封面的亮色（换页时颜色跟着动画慢慢变）
-        ZStack {
-            colors.base
-            RadialGradient(colors: [colors.glow.opacity(0.45), .clear], center: UnitPoint(x: 0.82, y: 0.3),
-                           startRadius: 0, endRadius: canvas.width * 0.55)
-        }
+        ShelfBackdrop(layers: [
+            ShelfGradient(kind: .solid, colors: [colors.base]),
+            ShelfGradient(kind: .radial(center: UnitPoint(x: 0.82, y: 0.3), radius: canvas.width * 0.55),
+                          colors: [colors.glow.opacity(0.45), .clear]),
+        ])
         .frame(width: canvas.width, height: canvas.height)
         // 封面：右上角，左边、下边淡进底色里
-        DriftingCover(url: item.image)
-            .frame(width: width, height: height)
-            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.42)],
-                                 startPoint: .leading, endPoint: .trailing))
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0.62), .init(color: .clear, location: 1)],
-                                 startPoint: .top, endPoint: .bottom))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .id("cover-" + item.id)
-            .transition(slide(140))
+        page(140, item) {
+            DriftingCover(url: item.image)
+                .frame(width: width, height: height)
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.42)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0.62), .init(color: .clear, location: 1)],
+                                     startPoint: .top, endPoint: .bottom))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         // 托字：左下角再压一层底色，标题落在封面上的那一截也看得清
-        LinearGradient(stops: [.init(color: colors.base.opacity(0.85), location: 0), .init(color: colors.base.opacity(0.35), location: 0.38),
-                               .init(color: .clear, location: 0.6)], startPoint: .leading, endPoint: .trailing)
-            .frame(width: canvas.width, height: canvas.height)
+        ShelfBackdrop(layers: [
+            ShelfGradient(kind: .linear(start: .leading, end: .trailing),
+                          colors: [colors.base.opacity(0.85), colors.base.opacity(0.35), .clear], locations: [0, 0.38, 0.6]),
+        ])
+        .frame(width: canvas.width, height: canvas.height)
         VStack(alignment: .leading, spacing: 0) {
             // 标签每一页都一样（"关注更新""为你推荐"），不跟着滑
             tag(item)
             // 跟着换页滑的那一块
-            VStack(alignment: .leading, spacing: 0) {
-                Text(item.title)
-                    .font(.system(size: Self.videoTitleSize, weight: .bold))
-                    .lineLimit(2)
-                    .lineSpacing(2)
-                    .shadow(color: .black.opacity(0.35), radius: 14, y: 4)
-                    .frame(height: Self.videoTitleBox, alignment: .topLeading)
-                    .padding(.top, 20)
-                HStack(spacing: 12) {
-                    // 头像：哔哩哔哩每一页都有这个位置（没头像时空着，名字不跳）；YouTube 没有头像，名字顶格
-                    if service.id == BilibiliStore.appID {
-                        BiliImage(url: item.avatar).frame(width: 40, height: 40).clipShape(Circle())
-                            .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1.5))
-                            .opacity(item.avatar == nil ? 0 : 1)
+            page(70, item) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(item.title)
+                        .font(.system(size: Self.videoTitleSize, weight: .bold))
+                        .lineLimit(2)
+                        .lineSpacing(2)
+                        .shadow(color: .black.opacity(0.35), radius: 14, y: 4)
+                        .frame(height: Self.videoTitleBox, alignment: .topLeading)
+                        .padding(.top, 20)
+                    HStack(spacing: 12) {
+                        // 头像：哔哩哔哩每一页都有这个位置（没头像时空着，名字不跳）；YouTube 没有头像，名字顶格
+                        if service.id == BilibiliStore.appID {
+                            BiliImage(url: item.avatar).frame(width: 40, height: 40).clipShape(Circle())
+                                .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1.5))
+                                .opacity(item.avatar == nil ? 0 : 1)
+                        }
+                        Text(item.subtitle).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white.opacity(0.92))
+                        Text(item.detail).font(.system(size: 24, weight: .regular)).foregroundStyle(.white.opacity(0.62))
                     }
-                    Text(item.subtitle).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white.opacity(0.92))
-                    Text(item.detail).font(.system(size: 24, weight: .regular)).foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(1)
+                    .frame(height: 40)
+                    .padding(.top, 14)
                 }
-                .lineLimit(1)
-                .frame(height: 40)
-                .padding(.top, 14)
+                .foregroundStyle(.white)
             }
-            .id("info-" + item.id)
-            .transition(slide(70))
             // 不跟着滑的：按钮、小点
             if expanded { buttons.padding(.top, 34) }
             dots.padding(.top, 32)
@@ -708,43 +731,39 @@ struct AppShelfBanner: View {
     private static let playlistTitleSize: CGFloat = 56
     private static let playlistTitleBox: CGFloat = 140
 
+    /// 封套里的黑胶比封套小一点：12 寸唱片（约 302 毫米）装在 12⅜ 寸的封套里（约 314 毫米），是封套的 0.96
+    static func disc(in sleeve: CGFloat) -> CGFloat { (sleeve * 0.96).rounded() }
+
     /// 网易云：歌单的封面是一张唱片的封套，一张黑胶从封套里滑出来、慢慢转（网易云自己的标志就是这张转着的黑胶）。
     /// 左边是歌单名、多少首，下面是前四首歌
     @ViewBuilder private func playlistLayout(_ item: AppShelfItem) -> some View {
         let colors = colors(item)
-        let sleeve: CGFloat = 540, disc: CGFloat = 600
+        let sleeve: CGFloat = 540, disc = Self.disc(in: sleeve)
         let sleeveX = canvas.width - 510 - sleeve, top: CGFloat = 140
         // 背景：封面里的颜色斜着渐变，唱片后面透出一大圈亮
-        ZStack {
-            LinearGradient(colors: [colors.glow.opacity(0.55), colors.base], startPoint: .topTrailing, endPoint: .bottomLeading)
-            RadialGradient(colors: [colors.glow.opacity(0.55), .clear], center: UnitPoint(x: (sleeveX + sleeve) / canvas.width, y: 0.3),
-                           startRadius: 0, endRadius: 620)
-            LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.1), location: 0.45),
-                                   .init(color: .clear, location: 0.6)], startPoint: .leading, endPoint: .trailing)
-        }
-        .frame(width: canvas.width, height: canvas.height)
-        RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: disc, daily: isDaily(item))
+        wash(colors, center: UnitPoint(x: (sleeveX + sleeve) / canvas.width, y: 0.3), radius: 620)
+            .frame(width: canvas.width, height: canvas.height)
+        page(160, item) { RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: disc, daily: isDaily(item)).id(item.id) }
             .padding(.leading, sleeveX).padding(.top, top)
-            .id("record-" + item.id)
-            .transition(slide(160))
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                tag(item)
-                Text(item.title)
-                    .font(.system(size: Self.playlistTitleSize, weight: .bold))
-                    .lineLimit(2)
-                    .lineSpacing(2)
-                    .frame(height: Self.playlistTitleBox, alignment: .topLeading)
-                    .padding(.top, 18)
-                Text(item.subtitle)
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .lineLimit(1)
-                    .frame(height: 30, alignment: .leading)
-                songList(item).padding(.top, 22)
+            page(70, item, tagText(item)) {
+                VStack(alignment: .leading, spacing: 0) {
+                    tag(item)
+                    Text(item.title)
+                        .font(.system(size: Self.playlistTitleSize, weight: .bold))
+                        .lineLimit(2)
+                        .lineSpacing(2)
+                        .frame(height: Self.playlistTitleBox, alignment: .topLeading)
+                        .padding(.top, 18)
+                    Text(item.subtitle)
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(1)
+                        .frame(height: 30, alignment: .leading)
+                    songList(item).padding(.top, 22)
+                }
+                .foregroundStyle(.white)
             }
-            .id("info-" + item.id)
-            .transition(slide(70))
             if expanded { buttons.padding(.top, 30) }
             dots.padding(.top, 30)
         }
@@ -761,40 +780,36 @@ struct AppShelfBanner: View {
 
     @ViewBuilder private func nowPlayingLayout(_ item: AppShelfItem, song: NeteaseSong, paused: Bool) -> some View {
         let colors = colors(item)
-        let sleeve: CGFloat = 540, disc: CGFloat = 600
+        let sleeve: CGFloat = 540, disc = Self.disc(in: sleeve)
         let sleeveX = canvas.width - 510 - sleeve, top: CGFloat = 140
         let store = tv.neteaseStore
-        ZStack {
-            LinearGradient(colors: [colors.glow.opacity(0.55), colors.base], startPoint: .topTrailing, endPoint: .bottomLeading)
-            RadialGradient(colors: [colors.glow.opacity(0.55), .clear], center: UnitPoint(x: (sleeveX + sleeve) / canvas.width, y: 0.3),
-                           startRadius: 0, endRadius: 620)
-            LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.1), location: 0.45),
-                                   .init(color: .clear, location: 0.6)], startPoint: .leading, endPoint: .trailing)
+        wash(colors, center: UnitPoint(x: (sleeveX + sleeve) / canvas.width, y: 0.3), radius: 620)
+            .frame(width: canvas.width, height: canvas.height)
+        page(160, item) {
+            RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: disc, daily: false,
+                         playing: paused ? .paused : .playing)
+                .id(item.id)
         }
-        .frame(width: canvas.width, height: canvas.height)
-        RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: disc, daily: false,
-                     playing: paused ? .paused : .playing)
-            .padding(.leading, sleeveX).padding(.top, top)
-            .id("record-" + item.id)
-            .transition(slide(160))
+        .padding(.leading, sleeveX).padding(.top, top)
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                tag(item)
-                Text(item.title)
-                    .font(.system(size: Self.playlistTitleSize, weight: .bold))
-                    .lineLimit(2)
-                    .lineSpacing(2)
-                    .frame(height: Self.playlistTitleBox, alignment: .topLeading)
-                    .padding(.top, 18)
-                Text(item.subtitle)
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .lineLimit(1)
-                    .frame(height: 30, alignment: .leading)
-                NeteaseNowPanel(store: store, clock: store.clock).padding(.top, 22)
+            page(70, item, tagText(item)) {
+                VStack(alignment: .leading, spacing: 0) {
+                    tag(item)
+                    Text(item.title)
+                        .font(.system(size: Self.playlistTitleSize, weight: .bold))
+                        .lineLimit(2)
+                        .lineSpacing(2)
+                        .frame(height: Self.playlistTitleBox, alignment: .topLeading)
+                        .padding(.top, 18)
+                    Text(item.subtitle)
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(1)
+                        .frame(height: 30, alignment: .leading)
+                    NeteaseNowPanel(store: store, clock: store.clock).padding(.top, 22)
+                }
+                .foregroundStyle(.white)
             }
-            .id("info-" + item.id)
-            .transition(slide(70))
             if expanded { buttons.padding(.top, 30) }
             dots.padding(.top, 30)
         }
@@ -823,68 +838,63 @@ struct AppShelfBanner: View {
         // 左边那一栏和网易云一样宽（它的封套从 canvas.width - 510 - 540 开始）；书的右边离屏幕右边 300
         let columnEnd = canvas.width - 510 - 540
         let bookX = canvas.width - 300 - book.width, top: CGFloat = 150
-        ZStack {
-            LinearGradient(colors: [colors.glow.opacity(0.55), colors.base], startPoint: .topTrailing, endPoint: .bottomLeading)
-            RadialGradient(colors: [colors.glow.opacity(0.55), .clear],
-                           center: UnitPoint(x: (bookX + book.width / 2) / canvas.width, y: (top + book.height / 2) / canvas.height),
-                           startRadius: 0, endRadius: 640)
-            LinearGradient(stops: [.init(color: .black.opacity(0.45), location: 0), .init(color: .black.opacity(0.1), location: 0.45),
-                                   .init(color: .clear, location: 0.6)], startPoint: .leading, endPoint: .trailing)
+        wash(colors, center: UnitPoint(x: (bookX + book.width / 2) / canvas.width, y: (top + book.height / 2) / canvas.height),
+             radius: 640)
+            .frame(width: canvas.width, height: canvas.height)
+        page(160, item, now, paused) {
+            DedaoShelfBook(cover: item.image, size: book)
+                .scaleEffect(now && paused ? 0.94 : 1)
+                .animation(.spring(response: 0.5, dampingFraction: 0.85), value: paused)
         }
-        .frame(width: canvas.width, height: canvas.height)
-        DedaoShelfBook(cover: item.image, size: book)
-            .scaleEffect(now && paused ? 0.94 : 1)
-            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: paused)
-            .padding(.leading, bookX).padding(.top, top)
-            .id("book-" + item.id)
-            .transition(slide(160))
+        .padding(.leading, bookX).padding(.top, top)
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 12) {
-                    tag(item)
-                    // 书名前面的"英文新书""英文原版"这些：一个小小的框，不放进大标题里
-                    if let badge = dedaoBadge(item) {
-                        Text(badge)
-                            .font(.system(size: 19, weight: .semibold))
-                            .padding(.horizontal, 12).frame(height: 32)
-                            .overlay(PillOutline().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
-                            .foregroundStyle(.white.opacity(0.85))
+            page(70, item, tagText(item)) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 12) {
+                        tag(item)
+                        // 书名前面的"英文新书""英文原版"这些：一个小小的框，不放进大标题里
+                        if let badge = dedaoBadge(item) {
+                            Text(badge)
+                                .font(.system(size: 19, weight: .semibold))
+                                .padding(.horizontal, 12).frame(height: 32)
+                                .overlay(PillOutline().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                    }
+                    // 书名不占两行的空位（一行的书名下面不留一大块空）；整块贴着下沿，按钮、小点照样在网易云的位置
+                    Text(item.title)
+                        .font(.system(size: Self.playlistTitleSize, weight: .bold))
+                        .lineLimit(2)
+                        .lineSpacing(4)
+                        .padding(.top, 24)
+                    Text(item.subtitle)
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                        .frame(height: 30, alignment: .leading)
+                        .padding(.top, 16)
+                    switch item.kind {
+                    case .dedaoNow(let track, let paused):
+                        DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: track, book: nil,
+                                            paused: paused, intro: track.summary)
+                            .padding(.top, 34)
+                    case .dedao(let book, true):
+                        DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: nil, book: book,
+                                            paused: true, intro: book.intro)
+                            .padding(.top, 34)
+                    case .dedao(let book, false):
+                        DedaoShelfDetail(item: book, intro: item.detail).padding(.top, 34)
+                    default:
+                        EmptyView()
                     }
                 }
-                // 书名不占两行的空位（一行的书名下面不留一大块空）；整块贴着下沿，按钮、小点照样在网易云的位置
-                Text(item.title)
-                    .font(.system(size: Self.playlistTitleSize, weight: .bold))
-                    .lineLimit(2)
-                    .lineSpacing(4)
-                    .padding(.top, 24)
-                Text(item.subtitle)
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(1)
-                    .frame(height: 30, alignment: .leading)
-                    .padding(.top, 16)
-                switch item.kind {
-                case .dedaoNow(let track, let paused):
-                    DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: track, book: nil,
-                                        paused: paused, intro: track.summary)
-                        .padding(.top, 34)
-                case .dedao(let book, true):
-                    DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: nil, book: book,
-                                        paused: true, intro: book.intro)
-                        .padding(.top, 34)
-                case .dedao(let book, false):
-                    DedaoShelfDetail(item: book, intro: item.detail).padding(.top, 34)
-                default:
-                    EmptyView()
-                }
+                // 最后一行字和按钮（收起时是小点）之间留出和网易云最后一首歌一样的空
+                .padding(.bottom, 16)
+                // 字多得放不下（两行的书名、正在听一门课还有接下来两讲）时往上长，不把书名挤成一行
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(height: Self.dedaoInfoHeight, alignment: .bottomLeading)
+                .foregroundStyle(.white)
             }
-            // 最后一行字和按钮（收起时是小点）之间留出和网易云最后一首歌一样的空
-            .padding(.bottom, 16)
-            // 字多得放不下（两行的书名、正在听一门课还有接下来两讲）时往上长，不把书名挤成一行
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(height: Self.dedaoInfoHeight, alignment: .bottomLeading)
-            .id("info-" + item.id)
-            .transition(slide(70))
             if expanded { buttons.padding(.top, 30) }
             dots.padding(.top, 30)
         }
@@ -964,7 +974,6 @@ private struct RecordSleeve: View {
     let daily: Bool
     /// 网易云正在放的歌：黑胶转（暂停就停在那个角度，接着放从那里接着转）。nil 是歌单：不转
     var playing: Playback? = nil
-    @State private var out = false
 
     enum Playback {
         case playing, paused
@@ -973,8 +982,12 @@ private struct RecordSleeve: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            vinyl
-                .offset(x: out ? sleeve - disc / 2 + 30 : sleeve / 2 - disc / 2, y: (sleeve - disc) / 2)
+            // 出现时黑胶从封套里滑出来（晚 0.15 秒、一条弹簧）：滑动交给 Core Animation（见 ShelfSlideIn），
+            // 黑胶上的纹路、影子不用每一帧都重画
+            ShelfSlideIn(distance: sleeve / 2 - disc / 2 - (sleeve - disc / 2 + 30), delay: 0.15,
+                         spring: ShelfSpring(response: 0.9, dampingFraction: 0.85)) { vinyl }
+                .frame(width: disc, height: disc)
+                .offset(x: sleeve - disc / 2 + 30, y: (sleeve - disc) / 2)
             BiliImage(url: cover)
                 .frame(width: sleeve, height: sleeve)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -992,9 +1005,6 @@ private struct RecordSleeve: View {
                 .shadow(color: .black.opacity(0.55), radius: 40, x: 18, y: 26)
         }
         .frame(width: sleeve + disc / 2 + 60, height: sleeve, alignment: .topLeading)
-        .onAppear {
-            withAnimation(.spring(response: 0.9, dampingFraction: 0.85).delay(0.15)) { out = true }
-        }
     }
 
     private var vinyl: some View {

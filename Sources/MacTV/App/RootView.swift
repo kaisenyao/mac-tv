@@ -48,13 +48,14 @@ struct RootView: View {
                         .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
                         .accessibilityHidden(tv.activeSheet != nil || tv.screensaver)
                 }
-                ModalSheetRouter(tv: tv)
-                if tv.screensaver {
-                    TVCanvas { Screensaver() }
-                        .ignoresSafeArea()
-                        .transition(.opacity.animation(.easeInOut(duration: 1.2)))
-                        .zIndex(100)   // 在所有弹出的面板上面（面板有固定的层级，见 ModalSheetRouter）
-                }
+            }
+            // Sheets over whatever is in front: Home, an app, a web page or a movie (Control Center opens over them)
+            ModalSheetRouter(tv: tv)
+            if tv.screensaver {
+                TVCanvas { Screensaver(idle: tv.idleCoordinator) }
+                    .ignoresSafeArea()
+                    .transition(.opacity.animation(.easeInOut(duration: 1.2)))
+                    .zIndex(100)   // 在所有弹出的面板上面（面板有固定的层级，见 ModalSheetRouter）
             }
 
             NoticesOverlay(notices: tv.notices)

@@ -162,6 +162,8 @@ final class BilibiliNativePlayer: ObservableObject {
     /// 显示一句提示（由外面接到应用的提示条上）
     var toast: ((String) -> Void)?
     var noteActivity: () -> Void = {}
+    /// It starts playing: Mac TV pauses music and audio books in the background (see TVController.startedPlaying)
+    var onPlay: () -> Void = {}
 
     private var warmed: (video: BiliVideo, item: AVPlayerItem, stream: BiliStream)?
     private var warming: (video: BiliVideo, task: Task<Void, Never>)?
@@ -201,6 +203,9 @@ final class BilibiliNativePlayer: ObservableObject {
     private var liveStalls = 0
     /// 自己按了暂停（看门狗不把它当成卡住）
     private var userPaused = false
+    /// 哔哩哔哩在后台（回了主屏，见 AppQuit）：什么都不自己开始放——还在取的流、换清晰度、拖完进度回来得晚，
+    /// 也只停在那里；直播断开（画面、弹幕、看门狗都停），回来按播放再连
+    private(set) var inBackground = false
     private let loaderQueue = DispatchQueue(label: "bilibili.playlists")
 
     init() {
@@ -452,13 +457,7 @@ final class BilibiliNativePlayer: ObservableObject {
                 player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
             }
         }
-        // 放着的时候每 15 秒把看到哪告诉哔哩哔哩一次（网页版也是这样），中途关掉 Mac TV 也丢不了多少
-        heartbeat = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.current == video, self.player.timeControlStatus == .playing else { return }
-                self.report()
-            }
-        }
+        startHeartbeat(video)
         if startPaused {
             // 停在那一帧：画面准备好就把封面换成画面，控制条一直露着（暂停时本来就一直显示）
             player.pause()
@@ -470,9 +469,27 @@ final class BilibiliNativePlayer: ObservableObject {
                 }
             }
         } else {
-            player.play()
+            resume()
         }
         flashControls(seconds: 4)
+    }
+
+    /// 放着的时候每 15 秒把看到哪告诉哔哩哔哩一次（网页版也是这样），中途关掉 Mac TV 也丢不了多少。在后台不报
+    private func startHeartbeat(_ video: BiliVideo) {
+        heartbeat?.invalidate()
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.current == video, self.player.timeControlStatus == .playing else { return }
+                self.report()
+            }
+        }
+    }
+
+    /// 自己开始放（取到流、换完清晰度、拖完进度）都走这里：在后台的时候不放，停在那里，回来按播放才放
+    private func resume() {
+        guard !inBackground else { player.pause(); paused = true; return }
+        player.play()
+        onPlay()
     }
 
     // MARK: 直播
@@ -631,7 +648,7 @@ final class BilibiliNativePlayer: ObservableObject {
         liveStalls = 0
         clearDanmaku()   // 换了线路、重新连：时间轴是新的，排好的弹幕对不上了（弹幕服务器接着连着）
         player.replaceCurrentItem(with: item)
-        player.play()
+        resume()
         for _ in 0..<32 {
             try? await Task.sleep(for: .milliseconds(250))
             guard current == video, !Task.isCancelled, player.currentItem === item else { return true }
@@ -676,21 +693,51 @@ final class BilibiliNativePlayer: ObservableObject {
     /// 暂停 / 接着放（确认键、播放键、媒体键、点画面、面板开着时按播放键，都走这里）。
     /// 直播接着放时跳回正在直播的地方（不然停了多久就落后多久）。放不了的不理
     private func togglePause() {
-        guard current != nil, !failed else { return }
+        guard let video = current, !failed else { return }
         if player.timeControlStatus != .paused { userPaused = true; player.pause(); report(); return }
         userPaused = false
+        // 直播在后台断开了（见 pauseForBackground）：从正在直播的地方重新连上
+        if isLive, player.currentItem == nil, liveConnect == nil {
+            connectLive(video, reconnects: 0)
+            connectLiveDanmaku(video)
+            return
+        }
+        onPlay()
         if isLive, let edge = player.currentItem?.seekableTimeRanges.last?.timeRangeValue.end, edge.seconds.isFinite {
             player.seek(to: edge - CMTime(seconds: Self.liveOffset, preferredTimescale: 600))
         }
         player.play()
     }
 
-    /// 回主屏（哔哩哔哩到后台，和 Apple TV 一样）：视频停在这里（报一下看到哪了），再进来还是这个视频、暂停着
+    /// 回主屏（哔哩哔哩到后台，和 Apple TV 一样）：视频停在这里（报一下看到哪了），再进来还是这个视频、暂停着。
+    /// 还在取的流取到了也不放（见 resume）；报进度停掉。直播断开：画面、弹幕、看门狗、正在连的都停，
+    /// 回来按播放从正在直播的地方重新连。没在看的时候，提前准备的那个摘掉
     func pauseForBackground() {
-        guard current != nil, player.timeControlStatus != .paused else { return }
+        inBackground = true
+        guard let video = current else { warm(nil); return }
+        if player.timeControlStatus != .paused { report() }
         userPaused = true
         player.pause()
-        report()
+        paused = true
+        heartbeat?.invalidate()
+        heartbeat = nil
+        if scrubbing { endScrub() }
+        if video.isLive {
+            liveConnect?.cancel()
+            liveConnect = nil
+            liveWatchdog?.cancel()
+            liveWatchdog = nil
+            disconnectLiveDanmaku()
+            player.replaceCurrentItem(with: nil)
+            liveLoader = nil
+        }
+    }
+
+    /// 回到哔哩哔哩：还是离开时的那个视频、暂停着（按播放接着放）
+    func returnFromBackground() {
+        guard inBackground else { return }
+        inBackground = false
+        if let video = current, !video.isLive, stream != nil { startHeartbeat(video) }
     }
 
     /// 同上，顺便把控制条露出来（画面上没有别的东西盖着时）
@@ -909,7 +956,7 @@ final class BilibiliNativePlayer: ObservableObject {
             self.qualityID = prepared.stream.qualityID
             self.qualities = prepared.stream.available
             await self.player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-            if !wasPaused { self.player.play() }
+            if !wasPaused { self.resume() }
             self.flashControls()
         }
     }
@@ -979,7 +1026,7 @@ final class BilibiliNativePlayer: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.scrubbing = false
-                if resume { self.player.play() }
+                if resume { self.resume() }
                 self.flashControls()
                 self.publishNowPlaying()
             }
@@ -1570,6 +1617,19 @@ extension BilibiliNativePlayer {
         self.qualities = qualities
         qualityID = qualities.first ?? 0
     }
+
+    /// 测试用：当作取的流、换的清晰度刚到，或者拖完了进度（不联网）：走它们开始放的那一步（resume）
+    func pretendStreamArrived() { resume() }
+
+    /// 测试用：当作直播连上了（不联网）：看门狗在看，弹幕在连
+    func pretendLiveConnected() {
+        guard let video = current, video.isLive else { return }
+        watchLive(video, reconnects: 0)
+        connectLiveDanmaku(video)
+    }
+
+    /// 直播的看门狗、弹幕、正在连的，还有在跑的吗
+    var liveTasksRunning: Bool { liveWatchdog != nil || liveConnect != nil || liveDanmakuTask != nil }
 }
 
 /// 系统播放器的画面

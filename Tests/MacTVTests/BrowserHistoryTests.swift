@@ -5,6 +5,7 @@ import Testing
 
 /// History（Show All History，⌘Y）：按天分组的标题、搜索、Remove from History、Clear History…、返回
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserHistoryTests {
     static func storage() -> (BrowserTabStorage, cleanup: () -> Void) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacTVTests.history.\(UUID().uuidString)", isDirectory: true)

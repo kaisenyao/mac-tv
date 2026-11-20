@@ -112,13 +112,16 @@ enum ScreenSaverSettings {
 struct ScreenSaverBackdrop: View {
     let wallpaper: ScreenSaverSettings.Wallpaper
     let pictures: [URL]
+    /// The film or photo showing, and what moves on to the next one (its end, or the slide's time)
+    var index = 0
+    var next: @MainActor () -> Void = {}
 
     var body: some View {
         switch wallpaper {
         case .aerials where !pictures.isEmpty:
-            AerialPlayer(films: pictures)
+            AerialPlayer(films: pictures, index: index, next: next)
         case .photos:
-            if pictures.isEmpty { DriftingColor() } else { Slideshow(files: pictures) }
+            if pictures.isEmpty { DriftingColor() } else { Slideshow(files: pictures, index: index, next: next) }
         case .flipClock:
             FlipClock()
         default:
@@ -176,6 +179,8 @@ enum Aerials {
         let id: String
         let category: String
         let remote: URL?
+        /// Where it was filmed, in the user's language when macOS has the name
+        let place: String?
     }
 
     struct Category: Identifiable {
@@ -207,7 +212,9 @@ enum Aerials {
             }
         let films = ((json["assets"] as? [[String: Any]]) ?? []).compactMap { entry -> Film? in
             guard let id = entry["id"] as? String, let category = (entry["categories"] as? [String])?.first else { return nil }
-            return Film(id: id, category: category, remote: (entry["url-4K-SDR-240FPS"] as? String).flatMap(URL.init(string:)))
+            let place = (entry["localizedNameKey"] as? String).flatMap { strings[$0] } ?? entry["accessibilityLabel"] as? String
+            return Film(id: id, category: category, remote: (entry["url-4K-SDR-240FPS"] as? String).flatMap(URL.init(string:)),
+                        place: place)
         }
         return Catalog(films: films, categories: categories)
     }()
@@ -250,6 +257,12 @@ enum Aerials {
         let streamed = chosen.filter { local($0.id) == nil }.compactMap(\.remote).shuffled()
         let films = downloaded + streamed.prefix(24)
         return films.isEmpty ? olderFilms.shuffled() : films
+    }
+
+    /// Where a film playing in the screen saver was filmed, when the catalog says (a tap shows it, as on Apple TV).
+    static func place(of film: URL) -> String? {
+        let id = film.deletingPathExtension().lastPathComponent
+        return catalog.films.first { $0.id == id || $0.remote == film }?.place
     }
 
     /// A category's picture (nil for all): its representative wallpaper's thumbnail.

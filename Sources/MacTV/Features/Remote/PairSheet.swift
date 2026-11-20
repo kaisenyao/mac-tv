@@ -8,7 +8,7 @@ struct PairSheet: View {
 
     /// System Settings › Bluetooth, where a Siri Remote or game controller is paired.
     static func openBluetoothSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") { NSWorkspace.shared.open(url) }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") { SystemGuard.open(url) }
     }
 
     var body: some View {

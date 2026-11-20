@@ -2,7 +2,7 @@ import Testing
 @testable import MacTV
 
 /// 手机遥控器的转盘：手机把还没送到的格数攒在一起送，Mac 收到几格就走几格
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct RemoteWheelTests {
     private func steps(_ d: Any?) -> Int? {
         var json: [String: Any] = ["a": "wheel"]

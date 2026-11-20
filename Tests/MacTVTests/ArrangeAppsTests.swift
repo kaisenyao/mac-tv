@@ -7,7 +7,7 @@ import Testing
 /// Arrange Apps on the TV shows Home as it is: the dock (Home's first six apps) and the rows below. Select picks
 /// an app up, the D-pad moves it, Select puts it down and Back puts it back; press and hold for Hide, and Delete
 /// for Everyone on an app someone added. After Select, Home shows exactly what Arrange Apps showed.
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct ArrangeAppsTests {
     private static let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -247,15 +247,15 @@ struct ArrangeAppsTests {
         }
     }
 
-    /// Back on the top row's first app starts the screen saver, as on Apple TV; from the rows below it goes to that
-    /// app first, and elsewhere on the top row it does nothing.
+    /// Back on the top row's first app starts the screen saver, as on Apple TV; anywhere else on Home it goes to that
+    /// app first, in one press.
     @Test func backOnHomesFirstAppStartsTheScreenSaver() throws {
         _ = NSApplication.shared
         try withFolder { folder in
             let tv = twoRows(folder)
             tv.setFocus(.app(2))
             tv.handle(.back)
-            #expect(!tv.screensaver && tv.focus == .app(2))
+            #expect(!tv.screensaver && tv.focus == .app(0))
             tv.setFocus(.app(dock + 1))
             tv.handle(.back)
             #expect(!tv.screensaver && tv.focus == .app(0))

@@ -197,14 +197,14 @@ const drain = async () => { for (let i = 0; i < 50 && run('activeCommand !== nul
     addEventListener: (type, fn) => { volumeListeners[type] = fn; } };
   const volumeContext = vm.createContext({
     document: { querySelectorAll: selector => selector === '[data-a]' || selector === '[data-repeat]' ? [volup] : [] },
-    $: () => ({ addEventListener() {} }), haptic() {},
+    haptic() {},
     send: (a, extra = {}, repeat = false) => { volumeSends.push(a + (repeat ? '~' : '')); return Promise.resolve(); },
     setTimeout: (fn, ms) => { volumeTimers.push({ fn, ms }); return volumeTimers.length; },
     setInterval: (fn, ms) => { volumeTimers.push({ fn, ms }); return volumeTimers.length; },
     clearTimeout: id => { if (volumeTimers[id - 1]) volumeTimers[id - 1].fn = null; },
     clearInterval: id => { if (volumeTimers[id - 1]) volumeTimers[id - 1].fn = null; },
   });
-  vm.runInContext('let screenAsleep = false;' + volume, volumeContext);
+  vm.runInContext(volume, volumeContext);
   const due = ms => volumeTimers.filter(t => t.fn && t.ms === ms).forEach(t => t.fn());
   volumeListeners.pointerdown({});
   assert.deepEqual(volumeSends.splice(0), ['volup'], 'one step as the finger goes down');

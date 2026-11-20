@@ -1,7 +1,12 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
-// Keeps a test run away from Mac TV's real data. +load runs as the test bundle loads, before any test can reach it.
+// Keeps a test run away from Mac TV's real data and the real Mac. +load runs as the test bundle loads, before any
+// test can reach it.
+//
+// The Mac: MACTV_SYSTEM=fake makes SystemGuard refuse (log and record) every action on the Mac itself: the display
+// off or awake, sleep, keeping the Mac or display awake, the lid's sleep switch, the output's volume, mute and
+// device, DDC, posted keys, the login item, System Settings.
 //
 // Keychain: MACTV_KEYCHAIN=memory makes every Keychain user keep its items in memory, and SystemKeychain refuse
 // any call that would reach the real Keychain.
@@ -21,6 +26,7 @@ static NSUserDefaults *testStandard;
 
 + (void)load {
     setenv("MACTV_KEYCHAIN", "memory", 1);
+    setenv("MACTV_SYSTEM", "fake", 1);
 
     NSFileManager *files = NSFileManager.defaultManager;
 

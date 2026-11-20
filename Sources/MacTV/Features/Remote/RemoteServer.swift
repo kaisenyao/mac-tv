@@ -440,9 +440,11 @@ final class RemoteServer {
         }
     }
 
-    /// Shortcuts aren't here: they run the owner's own Apple Shortcut and open the owner's app menus.
+    /// Shortcuts aren't here: they run the owner's own Apple Shortcut and open the owner's app menus. Nor is Power:
+    /// a guest can't put the TV in standby (pressed or held), as it couldn't turn the display off before.
     private static func guestAllows(_ command: RemoteCommand) -> Bool {
         switch command {
+        case .press(.power, _): return false
         case .move, .select, .longSelect, .press, .back, .home, .playPause, .volume, .mute,
              .text, .deleteBackward, .pointer, .click, .pointerHold, .swipe, .scroll, .nextControl, .previousControl,
              .activateBrowser, .browserFullscreen, .retryBrowser:

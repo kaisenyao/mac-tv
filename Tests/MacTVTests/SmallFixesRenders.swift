@@ -6,7 +6,7 @@ import Testing
 /// 1920×1080 renders of the Audio Output sheet's Volume row, the 得到 Top Shelf checklist with its section headers,
 /// and the Movies app's Settings button and Folders sheet. Only with MACTV_RENDER_SMALL=<folder>; everything it
 /// sets up lives in a temporary folder, and the 得到 categories are registered in memory only.
-@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["MACTV_RENDER_SMALL"] != nil)) @MainActor
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["MACTV_RENDER_SMALL"] != nil), .timeLimit(.minutes(1))) @MainActor
 struct SmallFixesRenders {
     private let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["MACTV_RENDER_SMALL"] ?? "/tmp", isDirectory: true)
 

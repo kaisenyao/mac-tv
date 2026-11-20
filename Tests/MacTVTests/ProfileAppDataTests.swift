@@ -5,7 +5,7 @@ import Testing
 
 /// 网易云、得到：每个人（个人资料）一份登录、设置和播放器，换人时不带过去；换人前发出去的请求回来，
 /// 不会把上一个人的登录信息记到下一个人身上。只用测试自己文件夹里的设置，不碰真的
-@Suite(.serialized) @MainActor struct ProfileAppDataTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor struct ProfileAppDataTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }

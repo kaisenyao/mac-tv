@@ -2,24 +2,35 @@ import AppKit
 import SwiftUI
 import WebKit
 
-// Back, Home and the App Switcher, the same in every app on Mac TV (哔哩哔哩, 网易云音乐, 得到, YouTube, Movies, Web and
-// the website apps), as on Apple TV:
+// Back, the TV button and the App Switcher, the same in every app on Mac TV (哔哩哔哩, 网易云音乐, 得到, YouTube, Movies,
+// Web and the website apps), as on Apple TV (docs/custom/interaction-spec.md):
 //
 // | Input | What it does |
 // |---|---|
-// | Back (Esc, the Siri Remote's Back, the phone's Back, a controller's B) | Back one level; at an app's top level, Home, with the app in the background; on Home's first app, the screen saver |
-// | Holding Back | Home, with the app in the background |
-// | Home (the Siri Remote's TV button, the phone's Home, a controller's Menu, the Home key) | Home, with the app in the background: music and audio books keep playing, video pauses |
-// | Home twice | The App Switcher: the apps in the background, most recent first. Up on one quits it; Select switches to it |
+// | Back (Esc, the Siri Remote's and phone's Back, a controller's B) | Back one level; at an app's top level, the Home Screen, with the app kept; on Home's first app, the screen saver |
+// | Holding Back | The Home Screen from anywhere, with the app kept (not a TV press: it doesn't count toward a double press) |
+// | The TV button (the Siri Remote's and phone's, ⌘H, the Home key, a controller's Menu or Home) | The Home Screen at once, with the app kept: music and audio books keep playing, video pauses |
+// | The TV button twice (the same device) | The App Switcher, on the app it was pressed in. Back or TV leaves it for exactly where that was; Up quits an app; Select switches |
+// | Holding the TV button | Control Center, over whatever is in front; TV or Back closes it, back to that |
 // | ⌘Q | As Chrome: a press shows "Hold ⌘Q to Quit" (Mac TV's own toast); holding it quits Mac TV |
 //
 // The Quit Mac TV menu item quits at once, as Chrome's does, and so do a logout, restart, shutdown and the updater's
 // relaunch: only the ⌘Q key holds.
 
-/// The App Switcher: every app in the background, most recent first, as on Apple TV.
+/// A press of the TV button, kept for a moment: a second one from the same device opens the App Switcher.
+struct TVPress {
+    let time: Date
+    let source: Feedback.Source
+    /// What was in front before it: the App Switcher opens on it, and leaving the switcher goes back to it.
+    let origin: String?
+}
+
+/// The App Switcher: every open app, most recent first; the one it was opened from first (Mac TV decision).
 struct AppSwitcher: Equatable {
     /// The focused card: an index into `TVController.backgroundApps`.
     var index = 0
+    /// The app it was opened from (nil: Home). Back or TV with nothing chosen goes back to it.
+    var origin: String?
     /// The app whose card is sliding up as it quits.
     var leaving: String?
     /// Select or a click: the focused card dips and settles back each time this goes up.
@@ -29,8 +40,6 @@ struct AppSwitcher: Equatable {
 extension TVController {
     /// How long ⌘Q is held before Mac TV quits, as Chrome's "Hold ⌘Q to Quit".
     static let quitKeyHold: Duration = .milliseconds(1500)
-    /// Two presses of Home this close together open the App Switcher.
-    static let homeDoublePress: TimeInterval = 0.45
     /// How long a quitting card takes to slide up before the others close the gap.
     static let switcherQuitSlide: Duration = .milliseconds(280)
 
@@ -54,24 +63,70 @@ extension TVController {
 
     // MARK: The App Switcher
 
-    /// Home was pressed (it has gone Home already, or is about to). True when it was the second press of
-    /// two with apps in the background, which opens the App Switcher, or a press while the switcher is open, which
-    /// closes it. With nothing in the background the second press is just Home again.
-    func pressHome(at now: Date = Date()) -> Bool {
-        defer { lastHomePress = now }
-        if appSwitcher != nil {
-            appSwitcher = nil
-            lastHomePress = nil
-            return true
+    /// A TV press: the Home Screen at once (no waiting to see if a second press comes). A second press from the same
+    /// device soon after opens the App Switcher on the app the first one left. A press that closes Control Center
+    /// or the App Switcher does only that, and doesn't count toward a double press.
+    func pressTV(from source: Feedback.Source, at now: Date = Date()) {
+        if sheets.top == .controlCenter {
+            controlCenter = nil
+            lastTVPress = nil
+            return
         }
-        guard let last = lastHomePress, now.timeIntervalSince(last) < Self.homeDoublePress else { return false }
+        if appSwitcher != nil {
+            leaveAppSwitcher()
+            lastTVPress = nil
+            return
+        }
+        if let last = lastTVPress, last.source == source, now.timeIntervalSince(last.time) < InputTiming.doublePress {
+            lastTVPress = nil
+            openAppSwitcher(returningTo: last.origin)
+            return
+        }
+        let origin = appInFront?.id
         goHome()
-        guard !backgroundApps.isEmpty else { return true }
-        appSwitcher = AppSwitcher()   // on the app just left
-        return true
+        lastTVPress = TVPress(time: now, source: source, origin: origin)
     }
 
-    /// Left and Right move along the cards; Select switches to one; Up quits it; Back closes the switcher.
+    /// The TV button held: Control Center, over whatever is in front (held again, it closes). Over the App Switcher,
+    /// the switcher goes first (back to where it was opened). Another app's window (IINA, Brave, a Mac app, a game)
+    /// can't have Mac TV drawn over it: there Mac TV comes to the front, on Home.
+    func holdTV() {
+        guard setup == nil, profilePicker == nil else { return }
+        lastTVPress = nil
+        if controlCenter != nil {
+            sheets.closeDismissible()   // with whatever it opened over itself
+            return
+        }
+        if appSwitcher != nil { leaveAppSwitcher() }
+        if playbackCoordinator.iinaOpen || externalBrowser != nil || frontAppTakesKeys { goHome() }
+        sheets.closeDismissible()
+        openControlCenter()
+        bringToFront()
+    }
+
+    /// Back held: the Home Screen from anywhere, with the app kept, closing whatever is open over it.
+    func holdBack() {
+        lastTVPress = nil
+        goHome()
+    }
+
+    /// The App Switcher, on `origin`'s card (the app the first TV press left), or the most recent app from Home.
+    /// Nothing open: nothing to switch to, so it doesn't open.
+    func openAppSwitcher(returningTo origin: String?) {
+        guard !backgroundApps.isEmpty else { return }
+        let index = origin.flatMap { id in backgroundApps.firstIndex { $0.id == id } } ?? 0
+        appSwitcher = AppSwitcher(index: index, origin: origin)
+    }
+
+    /// Back, or a TV press, with nothing chosen: back to exactly where the switcher was opened from, the app as it
+    /// was or Home. If that app was quit meanwhile, Home.
+    func leaveAppSwitcher() {
+        let origin = appSwitcher?.origin
+        appSwitcher = nil
+        if let origin, let app = backgroundApps.first(where: { $0.id == origin }) { open(app) }
+    }
+
+    /// Left and Right move along the cards; Select switches to one; Up quits it; Back leaves (see leaveAppSwitcher).
     func handleAppSwitcher(_ command: RemoteCommand) {
         guard var switcher = appSwitcher else { return }
         let last = backgroundApps.count - 1
@@ -81,13 +136,13 @@ extension TVController {
         case .move(.up) where backgroundApps.indices.contains(switcher.index) && switcher.leaving == nil:
             quitFromSwitcher(backgroundApps[switcher.index])
             return
-        case .select:
+        case .select where switcher.leaving == nil:   // a card on its way out is quitting, not to be chosen
             switcher.presses += 1
             appSwitcher = switcher
             chooseInSwitcher(switcher.index)
             return
         case .back:
-            appSwitcher = nil
+            leaveAppSwitcher()
             return
         default:
             break
@@ -134,7 +189,11 @@ extension TVController {
             let configuration = WKSnapshotConfiguration()
             configuration.snapshotWidth = NSNumber(value: Double(width))
             web.takeSnapshot(with: configuration) { [weak self] image, _ in
-                MainActor.assumeIsolated { if let image { self?.appSnapshots[id] = image } }
+                MainActor.assumeIsolated {
+                    // Late: only for an app that's still open (one quit meanwhile has no card)
+                    guard let self, let image, self.backgroundApps.contains(where: { $0.id == id }) else { return }
+                    self.appSnapshots[id] = image
+                }
             }
             return
         }
@@ -154,10 +213,10 @@ extension TVController {
     /// loaded, its snapshot. Next time it opens fresh, as if it had just launched; Web's tabs come back, as Safari's do.
     func quitApp(_ id: String, reason: String) {
         switch id {
-        case BilibiliStore.appID: closeBilibili()
+        case BilibiliStore.appID: quitBilibili()
         case NeteaseStore.appID: closeNetease(); neteaseStore.quit()
         case DedaoStore.appID: closeDedao()
-        case BrowserStore.appID: closeBrowser()
+        case BrowserStore.appID: closeBrowser(); browserStore.closePrivateTabs()
         case "movies":
             movies = nil
             playbackCoordinator.quitMovies()
@@ -169,6 +228,7 @@ extension TVController {
             || (id == BilibiliStore.appID && service.id == BilibiliStore.loginID)
             || (id == NeteaseStore.appID && service.id == NeteaseStore.loginID) {
             playbackCoordinator.closeWebPlayback()
+            setMode(.launcher)   // the app quit was in front: Home
         }
         if externalBrowserService?.id == id { playbackCoordinator.closeExternalBrowser() }
         playbackCoordinator.dropParkedWeb(id)
@@ -182,22 +242,46 @@ extension TVController {
         Log.app.notice("Quit \(id, privacy: .public): \(reason, privacy: .public)")
     }
 
-    /// Home, as the Home button does it: the app in front goes to the background. Music and audio books keep
+    /// The Home Screen, as the TV button goes there: the app in front goes to the background. Music and audio books keep
     /// playing (网易云音乐 as its own Background Playback setting says); video pauses, and is still there on
     /// coming back. Web keeps its tabs.
     func sendAppsToBackground() {
         if bilibiliOpen {
             bilibiliStore.player.pauseForBackground()
+            bilibiliStore.closeLogin()   // its QR code stops being polled; opening 哔哩哔哩 again shows where it was
             bilibiliOpen = false
             BiliImageCache.shared.trim()   // decoded covers (up to 64 MB) come back from the network cache on return
         }
         leaveNetease()
         if dedaoOpen {
-            if dedaoStore.player.scrubbing { dedaoStore.player.endScrub() }
+            dedaoStore.backgrounded()
             dedaoOpen = false
         }
         closeBrowser()
         playbackCoordinator.parkWebPlayback()
+    }
+
+    /// Back went into a web page as Escape (YouTube's TV page and the other apps that move with their own keys), and
+    /// the page had nothing to close with it: that's the app's top level, so Back goes Home with the app kept, as
+    /// everywhere else. (Unhandled, AppKit would have taken that Escape to leave full screen; see TVWindow.)
+    func pageLetBackThrough() {
+        guard case .player(let service) = mode, webView != nil else { return }
+        Log.app.info("Back at the top of \(service.id, privacy: .public): Home")
+        if service.id == BrowserStore.pageID { returnToBrowser() } else { goHome() }
+    }
+
+    /// Something started to play (a video, a song, a lecture): music or an audio book in the background pauses, so
+    /// only one thing plays. Opening an app doesn't do this; playing does.
+    func startedPlaying(_ appID: String) {
+        if appID != NeteaseStore.appID { neteaseStore.pauseIfPlaying() }
+        if appID != DedaoStore.appID { dedaoStore.player.pause() }
+    }
+
+    /// A held Left or Right let go: the seek ends where it got to, in 网易云 or 得到, whichever started it, even if it
+    /// has gone to the background since (both ends do nothing when that app isn't seeking).
+    func endHoldSeek() {
+        dedaoStore.endHold()
+        neteaseStore.endScrub()
     }
 
     /// Someone else starts watching: what Home kept in the background is the last person's, so it quits (the apps
@@ -211,11 +295,34 @@ extension TVController {
         appSnapshots = [:]
     }
 
-    /// The sleep timer: after Home, the music and audio books that would keep playing in the background stop.
-    func stopBackgroundAudio(reason: String) {
-        Log.app.notice("Stopped background audio: \(reason, privacy: .public)")
-        closeNetease()
-        if dedaoStore.player.current != nil, !dedaoStore.player.paused { dedaoStore.player.pause() }
+    // MARK: Memory pressure: the one place that gives memory back
+
+    /// Listens for macOS's memory pressure (warning and critical) for as long as Mac TV runs. This Mac runs other
+    /// services too, so Mac TV gives memory back at the warning, not only when it's critical. Nothing else in Mac TV
+    /// has a limit: apps stay in the background as long as memory allows.
+    func startMemoryPressureWatch() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            MainActor.assumeIsolated {
+                guard let event = source?.data else { return }
+                self?.memoryPressure(critical: event.contains(.critical))
+            }
+        }
+        source.activate()
+        memoryPressureSource = source
+    }
+
+    /// Warning: decoded pictures go (they come back from disk), and the least recently used background web page is
+    /// released. Critical: every background web page. A released app keeps its switcher card and picture, and opens
+    /// again where it was (see PlaybackCoordinator.reclaimWeb). Sign-ins, cookies and stored data are never touched,
+    /// and nothing in front is.
+    func memoryPressure(critical: Bool) {
+        Log.app.notice("Memory pressure (\(critical ? "critical" : "warning", privacy: .public)): giving memory back")
+        BiliImageCache.shared.trim()
+        browserStore.trimMemory()
+        let parked = playbackCoordinator.parkedWebIDs
+        let leastRecentFirst = backgroundApps.reversed().map(\.id).filter(parked.contains)
+        for id in critical ? leastRecentFirst : Array(leastRecentFirst.prefix(1)) { playbackCoordinator.reclaimWeb(id) }
     }
 
     // MARK: ⌘Q: quit Mac TV, as Chrome

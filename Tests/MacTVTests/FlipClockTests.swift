@@ -3,7 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 屏保翻页时钟上写的字
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct FlipClockTests {
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)

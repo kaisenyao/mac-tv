@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite struct RemotePageTests {
+@Suite(.timeLimit(.minutes(1))) struct RemotePageTests {
     @Test func pageIsServedWholeWithItsStylesAndScriptInline() {
         let html = RemotePage.html
         #expect(html.hasPrefix("<!doctype html>"))

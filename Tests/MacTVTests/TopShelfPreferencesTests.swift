@@ -3,7 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 设置 › Apps › Top Shelf：每个应用一行，往里一层勾选项。存的、规则都和各应用自己设置里的"主屏幕顶部"是同一份
-@Suite(.serialized) @MainActor struct TopShelfPreferencesTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor struct TopShelfPreferencesTests {
     private static let keys = ["bilibiliShelf", "neteaseShelfSources", "neteaseShelfNowPlaying", "dedaoShelfListening",
                                "dedaoShelfNewBooks", "dedaoShelfHiddenCategories", "dedaoShelfNowPlaying", "dedaoShelfSources",
                                "youtubeShelf", "dedaoTopics"]

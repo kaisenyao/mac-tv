@@ -4,7 +4,7 @@ import Testing
 @testable import MacTV
 
 /// 手机遥控器的快捷键：能选什么、每个地方显示哪几个、/state 里的样子、/shortcuts 的读写
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct RemoteShortcutsTests {
     init() { _ = NSApplication.shared }
 

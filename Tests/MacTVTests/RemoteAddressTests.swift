@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct RemoteAddressTests {
     private func server(origins: [String]) -> RemoteServer {
         RemoteServer(token: "unused", onCommand: { _ in }, state: { [:] }, icon: { _ in nil }, routes: { _ in nil },
@@ -68,7 +68,7 @@ struct RemoteAddressTests {
     }
 }
 
-@Suite struct RemoteAddressParsingTests {
+@Suite(.timeLimit(.minutes(1))) struct RemoteAddressParsingTests {
     @Test func preflightRequestsAreParsed() throws {
         let raw = "OPTIONS /state HTTP/1.1\r\nHost: 192.168.1.5:8765\r\nOrigin: http://arun.local:8765\r\n\r\n"
         guard case .complete(let request, _) = HTTPRequest.parseResult(Data(raw.utf8)) else {

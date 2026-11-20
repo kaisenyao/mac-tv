@@ -4,7 +4,7 @@ import Testing
 @testable import MacTV
 
 /// Siri Remote：按键（和手机遥控器一样报点一下 / 按住 / 还按着 / 松开）、沿外圈转、触控面滑动和惯性
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct SiriRemoteTests {
     // MARK: Buttons
 
@@ -91,7 +91,8 @@ struct SiriRemoteTests {
         #expect(r.press(.playPause, at: 0) == [.playPause])
         #expect(r.release(.playPause, at: 0.1) == [])
         #expect(r.press(.mute, at: 1) == [.mute])
-        #expect(r.press(.power, at: 2) == [.power])
+        #expect(r.press(.power, at: 2) == [])               // Power is a button with a hold (see PressTiming)
+        #expect(r.release(.power, at: 2.1) == [.press(.power, .tap)])
         #expect(r.press(.siri, at: 3) == [])          // Siri: nothing yet, pressed or held
         #expect(r.advance(to: 4) == [])
         #expect(r.release(.siri, at: 4) == [])
@@ -318,7 +319,7 @@ struct SiriRemoteTests {
 }
 
 /// 遥控器有输入时报告用户活动：几秒最多一次
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct RemoteActivityTests {
     @Test
     func reportsAtMostOnceEveryFewSeconds() {
@@ -330,7 +331,7 @@ struct RemoteActivityTests {
 
 /// 控制中心、设置这些弹出的面板里：滑一下走一格，方向跟着手指，惯性不走。
 /// 一处管（TrackpadGestures）：手机触控板 / 点按区、Siri Remote、Mac 触控板都一样，滑动不漏到下面的主屏
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct PanelSwipeTests {
     init() {
         _ = NSApplication.shared
@@ -384,7 +385,7 @@ struct PanelSwipeTests {
             phoneSwipe(tv, dx: 0, dy: -150)              // 往上
             #expect(tv.controlCenter?.item == .remotes)
             phoneSwipe(tv, dx: -150, dy: 20)             // 往左
-            #expect(tv.controlCenter?.item == .sleepMac)
+            #expect(tv.controlCenter?.item == .sleepNow)
             #expect(tv.focus == home)                    // 下面的主屏没动
         }
     }
@@ -405,7 +406,7 @@ struct PanelSwipeTests {
             tv.settings = nil
             tv.handle(.controlCenter)
             siriSwipe(tv, from: .init(x: 0.9, y: 0.5), to: .init(x: 0.1, y: 0.45), at: 20)  // 往左
-            #expect(tv.controlCenter?.item == .sleepMac)
+            #expect(tv.controlCenter?.item == .sleepNow)
         }
     }
 
@@ -433,7 +434,7 @@ struct PanelSwipeTests {
 }
 
 /// 控制中心：和 Apple TV 一样，走到边上停住，按返回才关（遥控器一滑容易冲过头）
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct ControlCenterEdgeTests {
     @Test
     func movingPastTheEdgeKeepsItOpen() throws {

@@ -30,6 +30,8 @@ final class DedaoPlayer: ObservableObject {
     /// 能选的倍速：0.75 到 2，每档差 0.25
     static let speeds: [Float] = [0.75, 1, 1.25, 1.5, 1.75, 2]
 
+    /// It starts playing: Mac TV pauses what else plays (see TVController.startedPlaying)
+    var onPlay: () -> Void = {}
     private let player = PlaybackVolume.attached(AVPlayer())   // 电视的音量调不了时，音量键调它（见 PlaybackVolume）
     private var timeObserver: Any?
     private var itemWatch: Set<AnyCancellable> = []
@@ -58,6 +60,13 @@ final class DedaoPlayer: ObservableObject {
     private var fadeTask: Task<Void, Never>?
 
     var current: DedaoAPI.Track? { queue.indices.contains(index) ? queue[index] : nil }
+
+    /// 测试用：当作这一讲已经取到、停在开头（不联网、不出声）
+    func pretendLoaded(_ track: DedaoAPI.Track) {
+        queue = [track]
+        index = 0
+        duration = track.duration
+    }
     /// 进度条、文稿用的时间：拖的时候是要去的地方
     var shownTime: Double { scrubbing ? scrubTarget : time }
 
@@ -167,6 +176,7 @@ final class DedaoPlayer: ObservableObject {
         loading = player.timeControlStatus != .playing
         player.playImmediately(atRate: speed)
         paused = false
+        onPlay()
         segmentStart = Date()
         guard let track = current else { return }
         let first = started.insert(track.id).inserted

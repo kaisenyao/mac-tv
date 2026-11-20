@@ -256,6 +256,7 @@ final class TVMode {
     }
 
     func setLoginEnabled(_ value: Bool) {
+        guard SystemGuard.allows(value ? "add the login item" : "remove the login item") else { return }
         do {
             if value { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }

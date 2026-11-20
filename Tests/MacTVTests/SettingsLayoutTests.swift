@@ -5,7 +5,7 @@ import Testing
 
 /// Settings laid out as Apple TV's: tvOS's sections and names, Connect a Remote's picture following focus, profile
 /// photos, text fields with a caret, and Movies' forms inside Settings.
-@Suite @MainActor struct SettingsLayoutTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct SettingsLayoutTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }

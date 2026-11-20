@@ -5,7 +5,7 @@ import Testing
 
 /// The browser, 哔哩哔哩 and movie places per profile, and removing a profile leaving nothing behind. Everything is
 /// in a folder of its own: other profiles' defaults are plists inside it and the Keychain is in memory.
-@Suite(.serialized) @MainActor struct ProfileContentTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor struct ProfileContentTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }

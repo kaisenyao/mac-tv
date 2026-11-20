@@ -1,22 +1,24 @@
 import AppKit
 
-/// 手机遥控器上的按键：和键盘上的同一个键是一样的意思（按一下、按住都一样）。
+/// What a press and a hold of each button mean, the same on every input: the phone (which times its own
+/// presses), and the Siri Remote, a game controller and the keyboard (timed by PressTiming, through InputPresses).
+/// Each reports tap, hold (InputTiming.hold, directions InputTiming.directionHold), alive (still held) and release.
 ///
-/// 手机自己判断这一下是"点了一下"还是"按住了"（它知道手指按了多久，不受网络快慢影响），
-/// 发来四种消息：tap 点了一下、hold 按住了（开始）、alive 还按着、release 松开了。
-/// Mac 这边按键盘的规矩来做（规矩和 main.swift 里键盘那一套一样，用的是同样的几个动作）：
-///
-/// | 键 | 点一下 | 按住 |
+/// | Button | Tap | Hold (acts when the hold time passes; letting go does nothing more) |
 /// |---|---|---|
-/// | 上下左右 | 走一格 | 按 Mac 的按键重复速度一直走；网易云播放界面里左右是快退 / 快进，松手从那里接着放 |
-/// | OK（确认） | 确认 | 卡片菜单、看视频时右边的面板，开着时再按住收起；没有菜单的地方松手时是一次确认 |
-/// | 返回 | 返回（应用最上一层是回主屏，应用留在后台） | 回主屏，应用留在后台（和按住 Esc 一样，见 AppQuit） |
-/// | 主屏 | 回主屏；连按两下是 App Switcher | 控制中心，开着时再按住收起（和 Siri Remote 上按住电视键一样） |
+/// | Directions | One step | Steps at the Mac's key repeat rate; in 网易云's and 得到's players Left and Right seek, and letting go plays from there |
+/// | Select | Select | The menu where there is one (held again, it closes); elsewhere, one Select on release |
+/// | Back | Back (at an app's top level, the Home Screen, with the app kept) | The Home Screen, from anywhere |
+/// | TV | The Home Screen; twice, the App Switcher | Control Center (held again, it closes) |
+/// | Power | Wakes from TV standby; awake, nothing | TV standby |
 ///
-/// 按住时手机每隔一会儿发一次 alive；万一"松开"在网络上丢了，Mac 一秒多收不到就当松开了，不会一直走下去
+/// While a button is held, "alive" comes every 0.3 s; with none for 1.2 s (a release lost on the network), it's let go.
 @MainActor
 final class PhonePresses {
-    enum Key: String { case up, down, left, right, select, back, home }
+    enum Key: String, CaseIterable {
+        case up, down, left, right, select, back, home, power
+        var isDirection: Bool { [.up, .down, .left, .right].contains(self) }
+    }
     enum Phase: String { case tap, hold, alive, release }
 
     private weak var tv: TVController?
@@ -36,6 +38,7 @@ final class PhonePresses {
             case .select: tv.handle(.select, from: source)
             case .back: tv.handle(.back, from: source)
             case .home: tv.handle(.home, from: source)
+            case .power: tv.handle(.power(hold: false), from: source)
             default: if let direction = Self.direction(key) { tv.handle(.move(direction), from: source) }
             }
         case .hold:
@@ -52,10 +55,13 @@ final class PhonePresses {
     private func begin(_ key: Key, tv: TVController, source: Feedback.Source) {
         switch key {
         case .back:
-            tv.handle(.home, from: source)                      // 按住返回 = 回主屏，应用留在后台（见 AppQuit）
+            tv.handle(.goHome, from: source)                    // the Home Screen from anywhere, with the app kept
             holding[key] = .done
         case .home:
-            tv.handle(.controlCenter, from: source)             // 按住主屏 = 控制中心（开着时再按住收起）
+            tv.handle(.controlCenter, from: source)             // Control Center; held again, it closes
+            holding[key] = .done
+        case .power:
+            tv.handle(.power(hold: true), from: source)         // TV standby (in standby, it wakes)
             holding[key] = .done
         case .select:
             if tv.holdSelect(from: source) {                    // 菜单开着时再按住是收起（TVController.toggle）
@@ -79,8 +85,7 @@ final class PhonePresses {
             }
             // 别的地方：和按住键盘方向键一样，按 Mac 设置里的按键重复速度一直走
             tv.handle(.move(direction), from: source)
-            let interval = min(0.2, max(0.04, NSEvent.keyRepeatInterval))
-            let timer = Timer(timeInterval: interval, repeats: true) { [weak self, weak tv] _ in
+            let timer = Timer(timeInterval: InputTiming.directionRepeat, repeats: true) { [weak self, weak tv] _ in
                 MainActor.assumeIsolated {
                     guard let self, let tv, case .repeating? = self.holding[key] else { return }
                     tv.handle(.move(direction), from: source)
@@ -96,7 +101,7 @@ final class PhonePresses {
         guard let state = holding.removeValue(forKey: key), let tv else { return }
         switch state {
         case .repeating(let timer): timer.invalidate()
-        case .scrubbing: if tv.dedaoOpen { tv.dedaoStore.endHold() } else { tv.neteaseStore.endScrub() }
+        case .scrubbing: tv.endHoldSeek()
         case .selectOnRelease(let source): tv.handle(.select, from: source)
         case .menu, .done: break
         }
@@ -120,5 +125,66 @@ final class PhonePresses {
         case .right: .right
         default: nil
         }
+    }
+}
+
+/// The keyboard's and a game controller's buttons, pressed and let go: timed by PressTiming (the same rule as the
+/// Siri Remote's), then meant by PhonePresses (the same meaning as the phone's). One timer, only while something
+/// is held. `reset` lets go of a device's buttons at once: a controller disconnecting, Mac TV losing focus.
+@MainActor
+final class InputPresses {
+    private weak var tv: TVController?
+    private var timing: [Feedback.Source: PressTiming] = [:]
+    private var timer: Timer?
+    /// The clock; tests pass their own times instead.
+    var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+
+    init(tv: TVController) { self.tv = tv }
+
+    /// A button went down. False for one that was already down (a key repeat), which does nothing.
+    @discardableResult
+    func down(_ key: PhonePresses.Key, from source: Feedback.Source, at time: TimeInterval? = nil) -> Bool {
+        guard timing[source, default: PressTiming()].press(key, at: time ?? now()) else { return false }
+        schedule()
+        return true
+    }
+
+    /// A button came up. False when it wasn't down here (so the key isn't this one's).
+    @discardableResult
+    func up(_ key: PhonePresses.Key, from source: Feedback.Source) -> Bool {
+        guard let phase = timing[source]?.release(key) else { return false }
+        tv?.handle(.press(key, phase), from: source)
+        schedule()
+        return true
+    }
+
+    /// Holds and "still held" that are due by `time`.
+    func advance(to time: TimeInterval) {
+        for source in Array(timing.keys) {
+            guard let due = timing[source]?.advance(to: time) else { continue }
+            for (key, phase) in due { tv?.handle(.press(key, phase), from: source) }
+        }
+        schedule()
+    }
+
+    /// Lets go of a device's buttons (all devices' with nil): a hold ends, a press not yet a tap does nothing.
+    func reset(_ source: Feedback.Source? = nil) {
+        for each in Array(timing.keys) where source == nil || each == source {
+            let released = timing[each]?.reset() ?? []
+            timing[each] = nil
+            for (key, phase) in released { tv?.handle(.press(key, phase), from: each) }
+        }
+        schedule()
+    }
+
+    private func schedule() {
+        timer?.invalidate()
+        timer = nil
+        guard let next = timing.values.compactMap(\.nextDeadline).min() else { return }
+        let timer = Timer(timeInterval: max(0, next - now()), repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { guard let self else { return }; self.advance(to: self.now()) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 }

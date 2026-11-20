@@ -12,7 +12,8 @@ enum DisplayPower {
     @discardableResult
     static func wake(
         declare: Declare = { assertion in
-            IOPMAssertionDeclareUserActivity("Mac TV remote display wake" as CFString, kIOPMUserActiveLocal, &assertion)
+            guard SystemGuard.allows("wake the display") else { return kIOReturnNotPermitted }
+            return IOPMAssertionDeclareUserActivity("Mac TV remote display wake" as CFString, kIOPMUserActiveLocal, &assertion)
         },
         release: @escaping Release = { _ = IOPMAssertionRelease($0) },
         schedule: Schedule = { action in DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: action) }

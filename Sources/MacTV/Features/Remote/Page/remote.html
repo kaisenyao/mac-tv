@@ -26,7 +26,7 @@
     <div class="rounds">
       <button class="drawn round" id="open-apps" aria-label="Apps"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-apps" data-state="normal"/><use href="#art-apps-pressed" data-state="pressed" display="none"/></svg></button>
       <button class="drawn round" id="open-settings" aria-label="Settings"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-settings" data-state="normal"/><use href="#art-settings-pressed" data-state="pressed" display="none"/></svg></button>
-      <button class="drawn round" id="power" aria-label="Turn Off Display"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-power" data-state="normal"/><use href="#art-power-pressed" data-state="pressed" display="none"/></svg></button>
+      <button class="drawn round" id="power" data-press="power" aria-label="Power (hold for TV Standby)"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-power" data-state="normal"/><use href="#art-power-pressed" data-state="pressed" display="none"/></svg></button>
     </div>
   </header>
 
@@ -91,8 +91,8 @@
       <button class="drawn chip empty" tabindex="-1"><svg class="art" viewBox="0 0 132 57" aria-hidden="true"><use href="#art-chip" data-state="normal"/><use href="#art-chip-pressed" data-state="pressed" display="none"/></svg><svg class="icon" viewBox="0 0 44 44" aria-hidden="true"><use/></svg><span class="text"><span class="run"><span class="copy"><b></b> <span class="value"></span></span></span></span></button>
     </div>
     <div class="keys">
-      <button class="drawn key" data-press="back" aria-label="Back (hold for Home)"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-back" data-state="normal"/><use href="#art-back-pressed" data-state="pressed" display="none"/></svg></button>
-      <button class="drawn key" data-press="home" aria-label="TV: Home (hold for Control Center)"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-tv" data-state="normal"/><use href="#art-tv-pressed" data-state="pressed" display="none"/></svg></button>
+      <button class="drawn key" data-press="back" aria-label="Back (hold for Home Screen)"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-back" data-state="normal"/><use href="#art-back-pressed" data-state="pressed" display="none"/></svg></button>
+      <button class="drawn key" data-press="home" aria-label="TV (hold for Control Center)"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-tv" data-state="normal"/><use href="#art-tv-pressed" data-state="pressed" display="none"/></svg></button>
       <button class="drawn key" data-a="playpause" aria-label="Play or pause"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-play" data-state="normal"/><use href="#art-play-pressed" data-state="pressed" display="none"/></svg></button>
       <div class="volume" role="group" aria-label="Volume">
         <button class="drawn" data-a="volup" data-repeat aria-label="Volume up"><svg class="art" viewBox="-99 -225.5 198 225.5" preserveAspectRatio="xMidYMax meet" aria-hidden="true"><use href="#art-volup" data-state="normal"/><use href="#art-volup-pressed" data-state="pressed" display="none"/></svg></button>
@@ -248,8 +248,7 @@
         <button class="row nav" data-page="page-devices"><span>Paired devices</span><span class="value" id="devices-count"></span></button>
       </div>
 
-      <button class="action danger" id="sleep">Sleep Now</button>
-      <p class="footnote">Tap twice. Wake it again with its keyboard or lid.</p>
+      <button class="action" id="sleep">Sleep Now</button>
     </section>
 
     <section class="page" id="page-start" data-title="Start in" hidden>

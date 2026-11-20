@@ -160,7 +160,8 @@ final class AVServiceDDC: DisplayDDC, @unchecked Sendable {
 
     @discardableResult
     func write(_ code: UInt8, value: Int) async -> Bool {
-        await DDCQueue.run { self.writeNow(code, value: value) }
+        guard SystemGuard.allows("write DDC \(code) = \(value)") else { return false }
+        return await DDCQueue.run { self.writeNow(code, value: value) }
     }
 
     /// 时间和 MonitorControl 一样：发之前等 10 毫秒，发完等 50 毫秒再读；不对就隔 20 毫秒再来，最多 4 次

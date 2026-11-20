@@ -34,7 +34,7 @@ import Testing
             window.contentView = host
             defer { window.contentView = nil; window.close() }
             _ = await Self.frames(host, seconds: 1)            // settle: first layout, images
-            let rest = await Self.frames(host, seconds: 2)
+            let rest = await Self.frames(host, seconds: Double(Self.env["MACTV_BENCH_REST"] ?? "") ?? 2)
             var turns: [Double] = []
             // MACTV_BENCH_TURNS=30 turns more times, long enough to `sample` the test while it runs
             for _ in 0..<(Int(Self.env["MACTV_BENCH_TURNS"] ?? "") ?? 3) {
@@ -53,11 +53,11 @@ import Testing
     @Test(.enabled(if: env["MACTV_BENCH_SCREEN"] == "1")) func onScreen() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
-        // (no finishLaunching: it stops the run loop the test runner drains)
-        atexit { print("ShelfTurnBenchmark: exit\n" + Thread.callStackSymbols.joined(separator: "\n")); fflush(stdout) }
+        NSApp.finishLaunching()
         let (tv, root, covers) = try await Self.home()
         defer { try? FileManager.default.removeItem(at: root) }
-        let (_, pages) = Self.layouts(covers)[0]           // Dedao, what the TV shows now
+        // Dedao (what the TV shows now) unless MACTV_BENCH_LAYOUT says 1 (video) or 2 (playlist)
+        let (_, pages) = Self.layouts(covers)[Int(Self.env["MACTV_BENCH_LAYOUT"] ?? "") ?? 0]
         guard Self.focus(tv, on: pages.id, pages: pages.items) else { return }
         let screen = NSScreen.main ?? NSScreen.screens[0]
         // A panel that never activates: it shows over Mac TV's full-screen space without taking focus from it
@@ -74,39 +74,45 @@ import Testing
         // macOS only counts a window as visible (and SwiftUI only animates it) once its app has been active
         NSApp.activate(ignoringOtherApps: true)
         defer { window.orderOut(nil); window.contentView = nil; window.close(); NSApp.hide(nil) }
+        // The turn's second step normally runs as the next main-actor task; this loop holds the main actor, so it runs it
+        var pending: [@MainActor () -> Void] = []
+        tv.appShelf.afterThisFrame = { pending.append($0) }
+        var timed: [(due: Double, work: @MainActor () -> Void)] = []
+        ShelfPageSchedule.later = { delay, work in timed.append((CACurrentMediaTime() + delay, work)) }
         let clock = FrameClock(host)
         defer { clock.stop() }
 
         func run(_ seconds: Double) async {
             let end = Date().addingTimeInterval(seconds)
             while Date() < end {   // what NSApplication.run does: events as they come, the display cycle between them
-                if let event = NSApp.nextEvent(matching: .any, until: min(end, Date().addingTimeInterval(0.004)), inMode: .default, dequeue: true) {
+                if let event = NSApp.nextEvent(matching: .any, until: min(end, Date().addingTimeInterval(0.002)), inMode: .default, dequeue: true) {
                     NSApp.sendEvent(event)
                 }
+                let now = CACurrentMediaTime()   // and what the app would have queued on the main queue for later
+                let due = timed.filter { $0.due <= now }
+                timed.removeAll { $0.due <= now }
+                due.forEach { $0.work() }
             }
         }
-        func measure(_ seconds: Double, _ body: () -> Void = {}) async -> (cpu: Double, gpu: Double, frames: [Double]) {
+        func measure(_ seconds: Double, _ body: () -> Void = {}) async -> (cpu: Double, gpu: Double, frames: [Double], work: [Double]) {
             let gpu = GPUMeter()
             clock.ticks = []
+            clock.work = []
             let start = Self.mainThreadCPU()
             body()
-            await Task.yield()   // the turn itself is a task on the main actor: let it run
+            await run(1.0 / 60)                              // the turn's first frame (the new direction)
+            pending.forEach { $0() }                        // then its second step, as the app's next task would
+            pending = []
             await run(seconds)
-            return (Self.mainThreadCPU() - start, gpu.stop(), clock.ticks)
+            return (Self.mainThreadCPU() - start, gpu.stop(), clock.ticks, clock.work)
         }
 
         await run(2)                                               // settle: first layout, images, window on screen
-        if let out = Self.env["MACTV_BENCH_SHOT"],
-           let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming]) {
-            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
-        }
-        print("ShelfTurnBenchmark after settling: index \(tv.appShelf.index), setup \(tv.setup != nil), picker \(tv.profilePicker != nil), sheet \(String(describing: tv.activeSheet))")
-        print("ShelfTurnBenchmark window: visible \(window.isVisible), on screen \(window.isOnActiveSpace), occlusion \(window.occlusionState.rawValue)")
         let idle = await measure(3)
         var report = ["visible \(window.occlusionState.contains(.visible)), \(Int(screen.frame.width))×\(Int(screen.frame.height)) pt, "
                       + "max \(screen.maximumFramesPerSecond) fps"]
         report.append("rest: main thread \(Self.percent(idle.cpu / 3)) of a core, GPU \(Int(idle.gpu))% busy (whole Mac)")
-        for turn in 1...3 {
+        for turn in 1...(Int(Self.env["MACTV_BENCH_SCREEN_TURNS"] ?? "") ?? 3) {
             let result = await measure(3) { tv.appShelf.step(pages.id, by: 1) }
             let gaps = zip(result.frames.dropFirst(), result.frames).map { $0 - $1 }
             let dropped60 = gaps.filter { $0 > 1.5 / 60 }.count
@@ -114,9 +120,9 @@ import Testing
             let busy = result.frames.isEmpty ? 0 : Double(result.frames.count) / 3
             report.append("turn \(turn): main thread \(Int((result.cpu - idle.cpu) * 1000)) ms more than resting, "
                           + "display link \(Int(busy)) fps, \(dropped60) frames over 25 ms (60 fps drops), longest \(Int(worstGap)) ms, "
-                          + "GPU \(Int(result.gpu))% busy")
+                          + "GPU \(Int(result.gpu))% busy; costliest frames (ms): "
+                          + result.work.sorted(by: >).prefix(5).map { String(format: "%.1f", $0) }.joined(separator: ", "))
         }
-        print("ShelfTurnBenchmark after turns: index \(tv.appShelf.index)")
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
         _ = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) } }
@@ -129,13 +135,21 @@ import Testing
     /// Each display-link tick, the time it came (the main thread drew a frame).
     @MainActor final class FrameClock: NSObject {
         var ticks: [Double] = []
+        /// main-thread CPU (ms) between one tick and the next
+        var work: [Double] = []
+        private var lastCPU = ShelfTurnBenchmark.mainThreadCPU()
         private var link: CADisplayLink?
         init(_ view: NSView) {
             super.init()
             link = view.displayLink(target: self, selector: #selector(tick(_:)))
             link?.add(to: .main, forMode: .common)
         }
-        @objc func tick(_ link: CADisplayLink) { ticks.append(CACurrentMediaTime()) }
+        @objc func tick(_ link: CADisplayLink) {
+            ticks.append(CACurrentMediaTime())
+            let cpu = ShelfTurnBenchmark.mainThreadCPU()
+            work.append((cpu - lastCPU) * 1000)
+            lastCPU = cpu
+        }
         func stop() { link?.invalidate() }
     }
 
@@ -169,7 +183,7 @@ import Testing
         }
     }
 
-    private static func mainThreadCPU() -> Double { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1e9 }
+    static func mainThreadCPU() -> Double { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1e9 }
     private static func percent(_ fraction: Double) -> String { String(format: "%.1f%%", fraction * 100) }
 
     /// This test's child processes (WebKit's would be here if Home used a web view)

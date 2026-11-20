@@ -56,7 +56,7 @@ private final class IPCMock: @unchecked Sendable {
     enum MockError: Error { case setup, timeout }
 }
 
-@Suite @MainActor struct IINAPlaybackSessionTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct IINAPlaybackSessionTests {
     @Test func seekIsSentAsJSONAndAcknowledged() throws {
         let server = try IPCMock(reply: "{\"event\":\"start-file\"}\n{\"error\":\"success\"}\n")
         let command = try #require(IINAPlaybackSession.action(for: .seek(forward: true)))

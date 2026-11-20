@@ -239,10 +239,8 @@
   .action { margin-top:26px; height:50px; border:0; border-radius:14px; background:#fff; color:var(--blue-text); font-size:16px; font-weight:600; }
   .action.primary { margin-top:16px; background:var(--label); color:#fff; }
   .action.danger { color:var(--danger); }
-  .action.armed { background:#fde6e8; }
   .action.pressed { transform:none; background:#e9e9ee; }
   .action.primary.pressed { background:#3a3a3c; }
-  .action.armed.pressed { background:#f8d5d9; }
   .action[hidden] { display:none; }
 
   /* 应用：四列，72 的图标；电视上正开着的那个一圈蓝、字是 "On TV"；在放声音的右下角一个小黑块 */

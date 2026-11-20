@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite struct PairingTests {
+@Suite(.timeLimit(.minutes(1))) struct PairingTests {
     private func withFolder(_ body: (URL) throws -> Void) throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)", isDirectory: true)
@@ -49,7 +49,7 @@ import Testing
     }
 }
 
-@Suite @MainActor struct PairingServerTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct PairingServerTests {
     @Test func legacyCodeCannotReenrollAfterRevokeAll() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)", isDirectory: true)

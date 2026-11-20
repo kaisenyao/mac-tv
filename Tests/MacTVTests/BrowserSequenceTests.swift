@@ -12,6 +12,7 @@ import Testing
 /// - 只剩一个空白标签页时没有 ×，菜单里也没有 Close Tab
 /// 全在开始页上（空白标签页，不联网、不开网页视图）。开着网站的最后一个标签另有一条测试
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserSequenceTests {
     /// 每次都一样的随机数（种子定了，失败的那一串能原样再跑一次）
     struct Random: RandomNumberGenerator {

@@ -2,7 +2,7 @@ import Testing
 @testable import MacTV
 
 /// The Movies app's focus: the posters, and the Settings button above them that opens the Folders sheet.
-@Suite @MainActor struct MoviesBrowserTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct MoviesBrowserTests {
     @Test func upFromTheTopRowReachesSettingsAndDownComesBack() {
         var browser = MoviesBrowser()
         let lengths = [3, 7, 2]

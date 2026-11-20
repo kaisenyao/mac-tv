@@ -5,7 +5,7 @@ import Testing
 
 /// Each profile's own Mac TV settings, Top Shelf choices and remote shortcuts, with this Mac's settings
 /// shared. The first profile keeps reading and writing where it always has.
-@Suite(.serialized) @MainActor struct ProfileSettingsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor struct ProfileSettingsTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }

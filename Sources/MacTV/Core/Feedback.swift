@@ -152,7 +152,7 @@ final class Feedback: ObservableObject {
     static let moveBacklog: TimeInterval = 0.06
 
     func play(_ cue: Cue, from source: Source) {
-        guard enabled else { return }
+        guard enabled, !SystemGuard.fake else { return }   // a test run stays silent: no clicks, no haptics
         // 走一格：两声之间至少隔 45 毫秒，像拨滚轮，不糊成一片。一下来了好几格（按住方向键、双指一甩，
         // 或者 App 正忙、几次按键挤在一起才处理）时不是只响第一声，而是一格一声往后排开；
         // 排得太远（按得比 45 毫秒还密）的那一格才不响，免得手停了声音还在响

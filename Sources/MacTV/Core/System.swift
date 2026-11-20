@@ -49,6 +49,7 @@ enum SystemControl {
 
     /// Sends a key to whichever app is in front. Needs Accessibility permission, asked for once.
     static func postKeyToFrontApp(_ code: CGKeyCode) {
+        guard SystemGuard.allows("post key \(code)") else { return }
         let prompt = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         guard AXIsProcessTrustedWithOptions(prompt) else { return }
         let source = CGEventSource(stateID: .hidSystemState)
@@ -57,6 +58,7 @@ enum SystemControl {
     }
 
     private static func pmset(_ argument: String) {
+        guard SystemGuard.allows("pmset \(argument)") else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
         process.arguments = [argument]
@@ -90,6 +92,7 @@ private enum OutputVolume {
     }
 
     static func setLevel(_ device: AudioObjectID, _ level: Int) {
+        guard SystemGuard.allows("set the output volume to \(level)") else { return }
         var address = output(kAudioHardwareServiceDeviceProperty_VirtualMainVolume)
         var value = Float32(max(0, min(100, level))) / 100
         let status = AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<Float32>.size), &value)
@@ -106,6 +109,7 @@ private enum OutputVolume {
     }
 
     static func setMuted(_ device: AudioObjectID, _ muted: Bool) {
+        guard SystemGuard.allows(muted ? "mute the output" : "unmute the output") else { return }
         var address = output(kAudioDevicePropertyMute)
         guard AudioObjectHasProperty(device, &address), self.muted(device) != muted else { return }
         var value = UInt32(muted ? 1 : 0)
@@ -137,7 +141,7 @@ final class KeepAwake {
     deinit { release() }
 
     func hold(reason: String) {
-        guard !held else { return }
+        guard !held, SystemGuard.allows("keep awake: \(reason)") else { return }
         held = IOPMAssertionCreateWithName(
             type as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), reason as CFString, &assertion) == kIOReturnSuccess
     }
@@ -206,6 +210,7 @@ enum LidSleep {
 
     @discardableResult
     static func setPrevented(_ prevented: Bool) -> Bool {
+        guard SystemGuard.allows(prevented ? "keep the Mac awake with the lid closed" : "let the lid sleep the Mac") else { return false }
         let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
         guard root != 0 else { return false }
         defer { IOObjectRelease(root) }
@@ -224,6 +229,7 @@ enum LidSleep {
 
     /// Starts a guard that restores lid sleep once this process exits, however it exits.
     static func startGuard() -> Process? {
+        guard SystemGuard.allows("start the lid guard") else { return nil }
         let process = Process()
         process.executableURL = Bundle.main.executableURL
         process.arguments = ["--lid-guard", String(getpid())]

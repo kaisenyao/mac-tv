@@ -4,7 +4,7 @@ import Network
 import Testing
 @testable import MacTV
 
-@Suite @MainActor struct RemoteServerHardeningTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct RemoteServerHardeningTests {
     @Test func rejectsMalformedAndOversizedRequests() {
         let malformed = [
             "POST /pair HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\n",
@@ -38,8 +38,14 @@ import Testing
             return server.respond(to: HTTPRequest(method: "POST", path: path, query: [:], headers: ["x-couch-key": token], body: body))
         }
         #expect(request("/cmd", token: guest, action: "playpause").status == "200 OK")
-        for action in ["sleep", "screenoff", "launch", "setting", "controlcenter"] {
+        for action in ["sleep", "launch", "setting", "controlcenter"] {
             #expect(request("/cmd", token: guest, action: action).status != "200 OK")
+        }
+        // Power, pressed or held: a guest can't put the TV in standby
+        for phase in ["tap", "hold"] {
+            let body = try JSONSerialization.data(withJSONObject: ["a": "press", "k": "power", "p": phase])
+            let response = server.respond(to: HTTPRequest(method: "POST", path: "/cmd", query: [:], headers: ["x-couch-key": guest], body: body))
+            #expect(response.status == "403 Forbidden", "Power \(phase)")
         }
         #expect(request("/apps/restore", token: guest).status == "403 Forbidden")
         #expect(request("/apps/restore", token: owner).status == "200 OK")
@@ -61,9 +67,10 @@ import Testing
         let store = PairingStore(folder: folder)
         let owner = try store.issue(name: "Owner", guest: false)
         let guest = try store.issue(name: "Guest", guest: true)
-        var focus = "dock(0)"
+        final class Focus: @unchecked Sendable { var value = "dock(0)" }   // what the state says, changed below
+        let focus = Focus()
         let server = RemoteServer(token: "", onCommand: { _ in },
-                                  state: { ["focus": focus, "apps": [["id": "a", "name": "A", "icon": true]], "volume": 3, "mode": "launcher"] },
+                                  state: { ["focus": focus.value, "apps": [["id": "a", "name": "A", "icon": true]], "volume": 3, "mode": "launcher"] },
                                   icon: { _ in nil }, routes: { _ in nil }, pairing: store)
         defer { server.stop() }
         func state(_ token: String, tag: String? = nil) -> HTTPResponse {
@@ -81,7 +88,7 @@ import Testing
         #expect(String(decoding: same.serialized(keepAlive: true), as: UTF8.self).contains("Content-Length: 0\r\n"))
         // A guest's state differs (it says guest), so the owner's tag isn't theirs.
         #expect(state(guest, tag: etag).status == "200 OK")
-        focus = "dock(1)"
+        focus.value = "dock(1)"
         let changed = state(owner, tag: etag)
         #expect(changed.status == "200 OK" && tag(changed) != etag)
         #expect((try JSONSerialization.jsonObject(with: changed.body) as? [String: Any])?["focus"] as? String == "dock(1)")

@@ -4,7 +4,7 @@ import Testing
 @testable import MacTV
 
 /// 网易云音乐里不用联网、不用播放器就能测的那几块：平衡音量、听歌记录、记住进度、推荐歌单换一批
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct NeteaseTests {
     // MARK: 推荐歌单换一批
 

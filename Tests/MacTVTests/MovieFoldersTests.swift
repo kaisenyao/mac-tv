@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct MovieFoldersTests {
     private let movies = URL(fileURLWithPath: "/test-home/Movies", isDirectory: true)
     private let downloads = URL(fileURLWithPath: "/test-home/Downloads", isDirectory: true)

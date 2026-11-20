@@ -4,6 +4,7 @@ import Testing
 @testable import MacTV
 
 /// 直播间弹幕的协议：包头、一帧里好几个包、压缩过的帧、DANMU_MSG 读成弹幕。内容都是手写的
+@Suite(.timeLimit(.minutes(1)))
 struct BiliLiveDanmakuTests {
     private typealias Wire = BiliLiveDanmakuProtocol
 

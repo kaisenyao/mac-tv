@@ -20,6 +20,18 @@ enum ScreenImages {
     /// The picture on screen, the one fading out, and a couple of thumbnails: no more.
     private static let limit = 3
 
+    /// When a photo was taken, from its EXIF, if it says (the screen saver's information on a tap).
+    static func taken(_ url: URL) -> Date? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
+              let text = exif[kCGImagePropertyExifDateTimeOriginal] as? String else { return nil }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return format.date(from: text)
+    }
+
     /// `maxPixels` is the longest side to decode to: a thumbnail asks for a few hundred, not the full picture.
     static func image(_ url: URL, maxPixels: Int = 1920) -> NSImage? {
         let key = Key(url: url, maxPixels: maxPixels)
@@ -131,6 +143,9 @@ struct DriftingPicture: NSViewRepresentable {
 /// pictures every few seconds; everything in between is Core Animation.
 struct Slideshow: NSViewRepresentable {
     let files: [URL]
+    /// The photo showing; after `hold`, `next` moves on (so does a swipe, through the same index)
+    var index = 0
+    var next: @MainActor () -> Void = {}
     private static let hold: TimeInterval = 9
     private static let fade: TimeInterval = 1.8
 
@@ -138,11 +153,15 @@ struct Slideshow: NSViewRepresentable {
 
     func makeNSView(context: Context) -> DriftingPicture.LayerView {
         let view = DriftingPicture.LayerView()
-        context.coordinator.start(in: view)
+        context.coordinator.next = next
+        context.coordinator.start(in: view, at: index)
         return view
     }
 
-    func updateNSView(_ view: DriftingPicture.LayerView, context: Context) {}
+    func updateNSView(_ view: DriftingPicture.LayerView, context: Context) {
+        context.coordinator.next = next
+        context.coordinator.show(index)
+    }
 
     static func dismantleNSView(_ view: DriftingPicture.LayerView, coordinator: Coordinator) {
         coordinator.stop()
@@ -151,26 +170,30 @@ struct Slideshow: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         let files: [URL]
-        private var index = 0
+        var next: @MainActor () -> Void = {}
+        private var index = -1
         private var timer: Timer?
         private weak var view: NSView?
 
         init(files: [URL]) { self.files = files }
 
-        func start(in view: NSView) {
+        func start(in view: NSView, at index: Int) {
             self.view = view
-            show(animated: false)
-            timer = Timer.scheduledTimer(withTimeInterval: Slideshow.hold, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.show(animated: true) }
-            }
+            show(index, animated: false)
         }
 
         func stop() { timer?.invalidate() }
 
-        private func show(animated: Bool) {
+        /// The photo at `index`, faded in; its time starts again, then the next one.
+        func show(_ index: Int, animated: Bool = true) {
+            guard index != self.index else { return }
+            self.index = index
+            timer?.invalidate()
+            timer = Timer.scheduledTimer(withTimeInterval: Slideshow.hold, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.next() }
+            }
             guard let host = view?.layer, !files.isEmpty,
-                  let image = ScreenImages.image(files[index % files.count]) else { index += 1; return }
-            index += 1
+                  let image = ScreenImages.image(files[index % files.count]) else { return }
             let slide = CALayer()
             slide.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
             slide.contentsGravity = .resizeAspectFill

@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor struct V09IntegrationTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct V09IntegrationTests {
     private func withFolder(_ body: (URL) throws -> Void) throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)")

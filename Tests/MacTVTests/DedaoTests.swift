@@ -3,6 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 得到：读书架、分类、书单、最近学习、音频，从哪接着听
+@Suite(.timeLimit(.minutes(1)))
 struct DedaoTests {
     /// 得到回的 {"h":…,"c":{…}} 里的 c
     private func body(_ json: String) throws -> [String: Any] {

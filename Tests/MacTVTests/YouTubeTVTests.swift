@@ -4,7 +4,7 @@ import Testing
 @testable import MacTV
 
 /// YouTube 电视版的打开地址和页面脚本
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct YouTubeTVTests {
     @Test
     func addressesSkipTheStartupPicker() throws {

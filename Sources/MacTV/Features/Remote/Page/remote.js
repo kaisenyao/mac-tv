@@ -234,7 +234,7 @@ function pumpCommands() {
 // repeat：按住时的连发，Mac 忙着的时候丢掉。震动由按键自己给（见上面），送的时候不震
 function send(a, extra = {}, repeat = false) {
   return new Promise(resolve => {
-    const urgent = a === 'home' || a === 'screenoff';
+    const urgent = a === 'home';
     if (urgent) {
       wheelPending = 0;   // 转盘攒着还没送的格数作废，不会跑到主屏上去
       while (commandQueue.length) commandQueue.shift().done();
@@ -281,7 +281,7 @@ function sendWheel(step) {
 }
 
 // State: connection, the app list, settings.
-let appsShown = '', apps = [], canRestore = false, currentLocalMovie = null, iinaInstalled = false, onTV = '', screenAsleep = false;
+let appsShown = '', apps = [], canRestore = false, currentLocalMovie = null, iinaInstalled = false, onTV = '';
 let stateGeneration = 0, appMutationPending = false, displayChanging = false, availableDisplays = [];
 let stateInFlight = null;
 async function refresh(duringMutation = false) {
@@ -305,9 +305,6 @@ async function readState() {
     unanswered = 0;
     if (Array.isArray(s.addresses) && s.addresses.length) addresses.set(s.addresses);
     online(true, s.displaysSleeping === true);
-    // 电源键：屏幕睡着时点一下是叫醒它，醒着时是关掉
-    screenAsleep = s.displaysSleeping === true;
-    $('#power').setAttribute('aria-label', screenAsleep ? 'Wake Display' : 'Turn Off Display');
     document.body.classList.toggle('guest', s.guest === true);
     if (s.guest === true) $$('.scrim.show').forEach(sheet => sheet.classList.remove('show'));
     renderChips(chipItems(s));
@@ -1241,11 +1238,6 @@ document.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', e
   if (b.hasAttribute('data-repeat') && e.detail) return;   // 音量：手指按下时已经送了（见下面）；这里只接键盘 / 辅助功能
   send(b.dataset.a);
 }));
-// 电源：屏幕睡着时叫醒它，醒着时关掉
-$('#power').addEventListener('click', () => {
-  send(screenAsleep ? 'screenon' : 'screenoff');
-  screenAsleep = !screenAsleep;
-});
 
 // 按住连发：音量的上下两半（和按住键盘上的键、Siri Remote 的音量键一样）：按下去就调一格，按住 0.45 秒起
 // 每 0.16 秒再调一格。连发的每一下和转盘走一格一样轻轻震一下
@@ -1286,7 +1278,7 @@ const press = {
     if (tell) send('press', { k, p: 'release' });
   },
 };
-// 返回（按住 = 回主屏）、主屏（按住 = 控制中心）
+// 返回（按住 = 主屏幕）、TV（按住 = 控制中心）、电源（按一下 = 叫醒，按住 = TV 待机）：和 Siri Remote 一样
 document.querySelectorAll('[data-press]').forEach(b => {
   const k = b.dataset.press;
   let timer = null, held = false;
@@ -1542,7 +1534,6 @@ document.addEventListener('visibilitychange', () => {
 let pageStack = [];
 const onPage = { 'page-start': renderStart, 'page-shortcuts': renderShortcutsPage, 'page-picker': renderPicker, 'page-apple': loadApple };
 function openSettings(first = 'settings-main') {
-  resetSleep();
   refresh(); loadDevices(); loadShares(); loadJellyfin(); loadShortcuts();
   pageStack = [];
   showPage(first);
@@ -1668,12 +1659,8 @@ $$('[data-setting]').forEach(row => row.onclick = () => {
   send('setting', { k: row.dataset.setting, v });
 });
 
-let sleepArmed = false;
-function resetSleep() { sleepArmed = false; $('#sleep').classList.remove('armed'); $('#sleep').textContent = 'Sleep Now'; }
-$('#sleep').onclick = () => {
-  if (!sleepArmed) { sleepArmed = true; $('#sleep').classList.add('armed'); $('#sleep').textContent = 'Tap Again to Sleep'; return; }
-  closeSheets(); send('sleep');
-};
+// Sleep Now: TV standby, as Control Center's on the TV (the Mac keeps running; Power, Back, TV or Select wakes it)
+$('#sleep').onclick = () => { closeSheets(); send('sleep'); };
 
 // 打开遥控器时先是哪一个：点按、触控，或上次用的那个（这台手机自己记着）
 const START = [['click', 'Clickpad'], ['touch', 'Touchpad'], ['last', 'Last used']];

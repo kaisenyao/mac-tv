@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct DiagnosticReportTests {
     init() { AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) } }
 
@@ -31,7 +31,7 @@ struct DiagnosticReportTests {
     }
 }
 
-@Suite struct LogAttemptTests {
+@Suite(.timeLimit(.minutes(1))) struct LogAttemptTests {
     struct Failure: Error {}
 
     @Test func attemptReturnsTheValueOrNilAndKeepsGoing() {

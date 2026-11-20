@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct PerformanceTests {
     init() { AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) } }
 

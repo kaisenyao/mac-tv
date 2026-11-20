@@ -8,7 +8,7 @@ import WebKit
 /// opened at one address finds the Mac at its .local name and moves there, still paired.
 /// It needs a working network and Bonjour, which build machines may lack, so it runs only with
 /// MACTV_LIVE_REMOTE_TEST=1. It uses its own server, port and pairings; Mac TV isn't touched.
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["MACTV_LIVE_REMOTE_TEST"] == "1")) @MainActor
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["MACTV_LIVE_REMOTE_TEST"] == "1"), .timeLimit(.minutes(1))) @MainActor
 struct RemoteReconnectLiveTests {
     @Test func aRemoteMovesToTheMacsNameStillPaired() async throws {
         _ = NSApplication.shared

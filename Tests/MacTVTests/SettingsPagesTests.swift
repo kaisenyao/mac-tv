@@ -4,7 +4,7 @@ import Testing
 @testable import MacTV
 
 /// Settings' pages and the pages below them: Remotes and Devices, Profiles, Screen Saver's cards, Movies.
-@Suite @MainActor struct SettingsPagesTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct SettingsPagesTests {
     init() {
         _ = NSApplication.shared
         AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }

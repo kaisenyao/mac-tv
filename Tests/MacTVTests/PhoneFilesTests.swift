@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct PhoneFilesTests {
     @Test func listsOnlyVisibleFoldersVideosAndSubtitles() throws {
         let fm = FileManager.default

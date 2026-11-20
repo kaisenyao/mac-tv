@@ -97,20 +97,15 @@ final class BiliImageCache {
     static let shared = BiliImageCache()
     private let cache = NSCache<NSURL, NSImage>()
     private var loading: [URL: Task<NSImage?, Never>] = [:]
-    private var pressure: DispatchSourceMemoryPressure?
 
     /// 解码好的图很占内存（一张大封面两三兆）：按实际大小算，总共最多 64 MB，超了先丢最久没用的。
     /// 这台 Mac 内存紧张时（系统发警告）整个清掉，看到的图再取就是了
     private init() {
         cache.countLimit = 200
         cache.totalCostLimit = 64 * 1024 * 1024
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
-        source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.trim() } }
-        source.resume()
-        pressure = source
     }
 
-    /// 放掉所有解码好的图（内存紧张、长时间不用时）
+    /// 放掉所有解码好的图（内存紧张时，见 TVController.memoryPressure；长时间不用时）
     func trim() { cache.removeAllObjects() }
 
     func image(for url: URL) -> NSImage? { cache.object(forKey: url as NSURL) }

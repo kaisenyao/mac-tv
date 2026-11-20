@@ -3,6 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 手机"发到电视"：粘贴的链接、App 分享出来的一整段文字，都要认对
+@Suite(.timeLimit(.minutes(1)))
 struct PhoneLinkTests {
     private func ready(_ text: String) -> PhoneLink? {
         if case .ready(let link)? = PhoneLink.read(text) { return link }

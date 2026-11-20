@@ -4,10 +4,14 @@ import Foundation
 enum RemoteCommand {
     enum Direction: String { case up, down, left, right }
 
-    case move(Direction), select, back, home
-    /// 按住确认（键盘上按住回车，手机遥控器上按住中间的 OK）：卡片菜单 / 看视频时右边的面板
+    /// home: a press of the TV button (the Home Screen; twice, the App Switcher). goHome: Back held, the Home Screen
+    /// from anywhere, which isn't a TV press (it doesn't count toward a double press)
+    case move(Direction), select, back, home, goHome
+    /// The Power button: pressed, it wakes from TV standby (awake, nothing); held, TV standby
+    case power(hold: Bool)
+    /// 按住确认（旧版手机页的 okhold）：卡片菜单 / 看视频时右边的面板
     case longSelect
-    /// 手机遥控器上的一个键：点了一下 / 按住了 / 还按着 / 松开了（规矩和键盘一样，见 PhonePresses）
+    /// 一个键：点了一下 / 按住了 / 还按着 / 松开了（手机、Siri Remote、键盘、手柄都一样，见 PhonePresses）
     case press(PhonePresses.Key, PhonePresses.Phase)
     case playPause, seek(forward: Bool)
     /// 手机遥控器的转盘转了一格：+1 顺时针，-1 逆时针
@@ -15,13 +19,17 @@ enum RemoteCommand {
     case volume(Int), mute
     case text(String), deleteBackward
     case pointer(dx: Double, dy: Double), click, scroll(dy: Double)
+    /// A light tap on the Siri Remote's clickpad, without pressing it (the screen saver's information)
+    case touchTap
     /// 手机触控板上一根手指按住不动：和鼠标按住一样（长按出菜单）
     case pointerHold
     /// 手机触控板上的双指滑动：和 Mac 触控板上滑一样（见 TrackpadGestures）。
     /// focusFollowsFinger：遥控器式的滑动（手机的点按区、Siri Remote），焦点跟着手指走；触控板式的是 false
     case swipe(dx: Double, dy: Double, phase: String, focusFollowsFinger: Bool = false)
     case launch(String), openInBrowser
-    case screenOff, screenOn, sleepMac
+    /// sleepNow: TV standby (the phone's Settings › Sleep Now, as Control Center's). sleepMac: the whole Mac sleeps,
+    /// from the TV's Settings › System › Sleep Mac only
+    case sleepNow, sleepMac
     case sleepTimer(minutes: Int)
     case controlCenter
     case nextControl, previousControl, activateBrowser, browserFullscreen, retryBrowser
@@ -68,9 +76,7 @@ enum RemoteCommand {
             guard let id = json["id"] as? String else { return nil }
             self = .launch(id)
         case "browser": self = .openInBrowser
-        case "screenoff": self = .screenOff
-        case "screenon": self = .screenOn
-        case "sleep": self = .sleepMac
+        case "sleep": self = .sleepNow
         case "sleeptimer": self = .sleepTimer(minutes: json["m"] as? Int ?? 0)
         case "controlcenter": self = .controlCenter
         case "nextcontrol": self = .nextControl

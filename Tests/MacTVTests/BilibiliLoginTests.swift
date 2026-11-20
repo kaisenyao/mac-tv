@@ -3,6 +3,7 @@ import Testing
 @testable import MacTV
 
 /// 哔哩哔哩的登录：没登录和问不到要分开；只认哔哩哔哩自己的 cookie
+@Suite(.timeLimit(.minutes(1)))
 struct BilibiliLoginTests {
     /// 哔哩哔哩明说没登录（-101、isLogin 是 false）才算没登录；看不懂的回答（接口出错、被风控）不能当成没登录
     @Test

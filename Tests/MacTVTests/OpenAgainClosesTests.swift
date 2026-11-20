@@ -5,7 +5,7 @@ import Testing
 
 /// 打开它的键再按一次就收起（TVController.toggle）：手机上的快捷键、按住确认、按住 TV 键都一样。
 /// 收起和按返回一样；开着的是别的菜单时，按下去换成它自己的
-@Suite @MainActor
+@Suite(.timeLimit(.minutes(1))) @MainActor
 struct OpenAgainClosesTests {
     init() {
         _ = NSApplication.shared

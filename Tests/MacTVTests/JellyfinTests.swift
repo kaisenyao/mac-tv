@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct JellyfinTests {
     private let server = JellyfinServers.Server(id: "srv1", name: "Family Movies", address: "http://192.168.1.5:8096",
                                                 userID: "u1", user: "amma", on: true)

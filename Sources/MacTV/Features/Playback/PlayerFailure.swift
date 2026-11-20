@@ -42,7 +42,9 @@ extension TVController {
             guard let url, let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") else {
                 showToast("Safari Isn’t Available"); return
             }
-            NSWorkspace.shared.open([url], withApplicationAt: safari, configuration: NSWorkspace.OpenConfiguration())
+            if SystemGuard.allows("open Safari") {
+                NSWorkspace.shared.open([url], withApplicationAt: safari, configuration: NSWorkspace.OpenConfiguration())
+            }
             goHome()
         default: goHome()
         }

@@ -203,6 +203,7 @@ final class AudioCoordinator: ObservableObject {
     }
 
     func selectDevice(_ device: AudioOutputDevice) {
+        guard SystemGuard.allows("switch the audio output to \(device.id)") else { return }
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,

@@ -6,6 +6,7 @@ import Testing
 @testable import MacTV
 
 /// 浏览器：地址栏里打的字是网址还是搜索词、Safari 历史里网站的名字、在 Mac TV 里看过的页面
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserTests {
     @Test
     func addressBarTellsAddressesFromSearches() {
@@ -278,9 +279,12 @@ struct BrowserTests {
         #expect(store.hasPrivateSession)          // 还有一个无痕的：数据留着
         store.closeTab(privateIDs[1])
         #expect(!store.hasPrivateSession)         // 最后一个也关了：那份数据扔掉
-        // 离开浏览器时还开着的无痕标签页也一起关掉
+        // Web in the background keeps its private tabs; quitting it (or a profile switch, or Mac TV quitting) closes
+        // them and drops their data
         store.newTab(try #require(URL(string: "https://secret3.example/")), isPrivate: true)
         store.leave()
+        #expect(store.tabs.filter(\.isPrivate).count == 1 && store.hasPrivateSession)
+        store.closePrivateTabs()
         #expect(store.tabs.filter(\.isPrivate).isEmpty)
         #expect(!store.hasPrivateSession)
     }
@@ -602,12 +606,12 @@ struct BrowserTests {
             tv.handle(.press(.back, .hold), from: .remote)
             tv.handle(.press(.back, .release), from: .remote)
             #expect(!tv.browserOpen && tv.backgroundApps.first?.id == BrowserStore.appID, "hold Back from \(name)")
-            // 主屏键：一样（两次之间隔开，免得算成连按两下）
+            // TV 键：一样（两次之间隔开，免得算成连按两下）
             open(arrange)
-            tv.lastHomePress = nil
+            tv.lastTVPress = nil
             tv.handle(.home)
             #expect(!tv.browserOpen, "Home from \(name)")
-            tv.lastHomePress = nil
+            tv.lastTVPress = nil
         }
         // 按一下返回还是原来那样：改地址时是不改了（回地址栏），不离开浏览器
         open { store.focusBar(); store.handle(.select) }

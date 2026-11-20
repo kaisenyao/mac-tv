@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import MacTV
 
+@Suite(.timeLimit(.minutes(1)))
 struct BilibiliPanelTests {
     /// 字幕：每一刻找到正在说的那一句；两句之间的空当不显示；最后一句之后也不显示
     @Test
