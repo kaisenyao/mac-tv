@@ -230,10 +230,6 @@ extension SettingsPanel.Row {
 /// Whether this Mac's macOS can use a Siri Remote at all.
 @MainActor
 enum SiriRemoteSupport {
-    /// The first macOS a Siri Remote connects to a Mac on.
-    static let minimum = "27.2.1"
-    static var available = ProcessInfo.processInfo.isOperatingSystemAtLeast(
-        OperatingSystemVersion(majorVersion: 27, minorVersion: 2, patchVersion: 1))
     /// macOS's own question, "“Mac TV” would like to receive keystrokes from any application". A test puts in its own.
     static var requestAccess: () -> Void = {
         guard SystemGuard.allows("ask for Input Monitoring") else { return }
@@ -245,13 +241,13 @@ extension TVController {
     /// A Siri Remote is here, but Mac TV may not read its buttons (Input Monitoring): its Status says so, and
     /// selecting it opens the pane where it's allowed. The only time the permission shows in Settings.
     var remoteBlocked: Bool {
-        SiriRemoteSupport.available && SiriRemoteStatus.shared.connected && !remoteCoordinator.inputMonitoringAllowed
+        SiriRemoteStatus.shared.connected && !remoteCoordinator.inputMonitoringAllowed
     }
 
     /// Asks for Input Monitoring in context, the way macOS asks: when a Siri Remote first connects, or when it's chosen
     /// in setup. macOS asks once; after that Status points to System Settings.
     func askForInputMonitoring() {
-        guard SiriRemoteSupport.available, IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeUnknown else { return }
+        guard IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeUnknown else { return }
         SiriRemoteSupport.requestAccess()
     }
 }
@@ -327,8 +323,6 @@ extension TVController {
                 } + (panel.inSetup ? [.setupDone] : [])
             }
         case .siriRemote:
-            // On a macOS too old for the Siri Remote there's nothing to do here: just its status, which says so.
-            guard SiriRemoteSupport.available else { return [.remoteStatus] }
             let battery = SiriRemoteStatus.shared.connected && remoteCoordinator.siriRemoteBattery != nil
             // A remote whose buttons Mac TV may not read says so on its Status row (see `remoteBlocked`).
             return [.remoteStatus] + (battery ? [.remoteBattery] : []) + [.bluetooth]
@@ -366,7 +360,7 @@ extension TVController {
     func settingsFootnote(_ panel: SettingsPanel) -> String? {
         switch panel.page {
         case .siriRemote:
-            SiriRemoteSupport.available && !SiriRemoteStatus.shared.connected
+            !SiriRemoteStatus.shared.connected
                 ? "To pair, hold Back and Volume Up on the remote for 5 seconds." : nil
         case .addNetworkShare, .addJellyfinServer: panel.form.message
         default: nil
@@ -470,8 +464,7 @@ extension TVController {
         case .saverPreview: return Content(title: "Preview", accessory: .chevron)
         case .siriRemote:
             let connected = SiriRemoteStatus.shared.connected
-            let value = !SiriRemoteSupport.available ? "Not Supported"
-                : connected ? withBattery("Connected", remoteCoordinator.siriRemoteBattery) : "Not Connected"
+            let value = connected ? withBattery("Connected", remoteCoordinator.siriRemoteBattery) : "Not Connected"
             return Content(title: "Siri Remote", value: value, accessory: .chevron, symbol: "appletvremote.gen4.fill")
         case .iPhone:
             let connected = remoteCoordinator.pairingStore.connectedCount(), paired = pairedDevices.count
@@ -482,8 +475,7 @@ extension TVController {
             return Content(title: "Game Controller", value: value, accessory: .chevron, symbol: "gamecontroller.fill")
         case .remoteStatus:
             if remoteBlocked { return Content(title: "Status", value: "Needs Input Monitoring", accessory: .chevron) }
-            let value = !SiriRemoteSupport.available ? "Requires macOS \(SiriRemoteSupport.minimum)"
-                : SiriRemoteStatus.shared.connected ? "Connected" : "Not Connected"
+            let value = SiriRemoteStatus.shared.connected ? "Connected" : "Not Connected"
             return Content(title: "Status", value: value)
         case .remoteBattery:
             let level = remoteCoordinator.siriRemoteBattery

@@ -259,19 +259,15 @@ import Testing
     // MARK: Siri Remote
 
     @Test func theSiriRemotePageAsksOnlyWhatMatters() throws {
-        let supported = SiriRemoteSupport.available, wasConnected = SiriRemoteStatus.shared.connected
-        defer { SiriRemoteSupport.available = supported; SiriRemoteStatus.shared.connected = wasConnected }
+        let wasConnected = SiriRemoteStatus.shared.connected
+        defer { SiriRemoteStatus.shared.connected = wasConnected }
         try withTV { tv, _ in
             let page = SettingsPanel(section: .remotes, open: true, path: [.init(page: .siriRemote, from: 0)])
-            // A macOS too old for the Siri Remote: just its status, which says so.
-            SiriRemoteSupport.available = false
+            // On any macOS, never "Not Supported": none here, it's Not Connected, with how to pair, and no Input
+            // Monitoring to ask about. The day a Siri Remote connects to this Mac, it works.
             SiriRemoteStatus.shared.connected = false
-            #expect(tv.settingsRows(page) == [.remoteStatus])
-            #expect(tv.settingsContent(.remoteStatus, panel: page, focused: false).value == "Requires macOS 27.2.1")
-            #expect(tv.settingsContent(.siriRemote, panel: SettingsPanel.connect, focused: false).value == "Not Supported")
-            #expect(tv.settingsFootnote(page) == nil)
-            // Supported, none here: no Input Monitoring to ask about.
-            SiriRemoteSupport.available = true
+            #expect(tv.settingsContent(.siriRemote, panel: SettingsPanel.connect, focused: false).value == "Not Connected")
+            #expect(tv.settingsContent(.remoteStatus, panel: page, focused: false).value == "Not Connected")
             #expect(tv.settingsRows(page) == [.remoteStatus, .bluetooth])
             #expect(tv.settingsFootnote(page) != nil)
             // A remote that's here: no row of its own for Input Monitoring. While it isn't allowed, Status says so and
@@ -286,8 +282,8 @@ import Testing
     // MARK: First-run setup
 
     @Test func setupOffersAChoiceOfRemotes() throws {
-        let supported = SiriRemoteSupport.available, request = SiriRemoteSupport.requestAccess
-        defer { SiriRemoteSupport.available = supported; SiriRemoteSupport.requestAccess = request }
+        let request = SiriRemoteSupport.requestAccess
+        defer { SiriRemoteSupport.requestAccess = request }
         SiriRemoteSupport.requestAccess = {}   // never macOS's own prompt in a test
         try withTV { tv, _ in
             tv.setup = SetupFlow(step: .remote)
@@ -306,8 +302,7 @@ import Testing
             tv.handle(.select)
             #expect(tv.setup?.connect.page == .otherControllers)
             tv.handle(.back)
-            // Siri Remote: where it's supported, choosing it is when Mac TV asks for Input Monitoring.
-            SiriRemoteSupport.available = true
+            // Siri Remote: choosing it is when Mac TV asks for Input Monitoring.
             tv.setup?.connect.row = 0
             tv.handle(.select)
             #expect(tv.setup?.connect.page == .siriRemote)

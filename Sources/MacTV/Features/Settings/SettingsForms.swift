@@ -218,7 +218,9 @@ extension TVController {
 }
 
 /// Typed text with a caret where the next letter goes, or the placeholder, dimmed, while it's empty. A text too
-/// long for its field keeps the caret in view: what's before it gives way at its start.
+/// long for its field keeps the caret in view: what's before it gives way at its start. Typing and moving the
+/// caret never animate, as in any text field: the text on either side of the caret changes with each move, and
+/// a cross-fade there shows as ghosting.
 struct CaretText: View {
     let text: String
     var placeholder = ""
@@ -237,6 +239,7 @@ struct CaretText: View {
                 Text(text[split...]).lineLimit(1)
             }
         }
+        .transaction { $0.animation = nil }
     }
 
     /// As tall as a line of the text around it.

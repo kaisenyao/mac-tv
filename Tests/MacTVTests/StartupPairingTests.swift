@@ -92,9 +92,6 @@ import Testing
     }
 
     @Test func pairingSheetOffersTheRemotesAndBluetoothSettings() throws {
-        let supported = SiriRemoteSupport.available
-        defer { SiriRemoteSupport.available = supported }
-        SiriRemoteSupport.available = true   // on a macOS too old for the Siri Remote its page is just Status
         try withController { tv in
             tv.pairing = true
             #expect(tv.settingsRows(tv.connectRemote) == [.siriRemote, .iPhone, .otherControllers])

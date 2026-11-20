@@ -56,10 +56,9 @@ import Testing
     }
 
     @Test func siriRemoteAndGameControllerPages() throws {
-        let wasConnected = SiriRemoteStatus.shared.connected, supported = SiriRemoteSupport.available
-        defer { SiriRemoteStatus.shared.connected = wasConnected; SiriRemoteSupport.available = supported }
+        let wasConnected = SiriRemoteStatus.shared.connected
+        defer { SiriRemoteStatus.shared.connected = wasConnected }
         try withTV { tv, _ in
-            SiriRemoteSupport.available = true
             SiriRemoteStatus.shared.connected = false
             tv.settings = SettingsPanel(section: .remotes, open: true)
             tv.handleSettings(.select)
