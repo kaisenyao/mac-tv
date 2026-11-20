@@ -2,11 +2,15 @@ import AppKit
 import SwiftUI
 import WebKit
 
-/// 浏览器（电视上的 Safari）。开始页最上面是地址栏（搜索或输入网址），下面一排排是 Safari 的个人收藏、
-/// 常去的网站、最近看过的页面、阅读列表。选一个就开成一个标签页。
+/// 浏览器（电视上的 Safari）。开始页最上面是和网页上一样的标签栏，下面是地址栏（搜索或输入网址），
+/// 再下面一排排是 Safari 的个人收藏、常去的网站、最近看过的页面、阅读列表。选一个就开成一个标签页。
+/// 开始页在标签栏上也是一个标签（"Start Page"，还没打开网站的新标签页）。焦点下到那几排里时标签栏收上去、
+/// 下面的跟着上移；回到地址栏再按上，标签栏回来；再按上进标签栏。
 ///
 /// 开着网页时，最上面一条标签栏（像 Safari 的紧凑标签栏，见 BrowserTopBar）：后退、前进、一个个标签页、"+"、"⋯"，
 /// 网页在它下面。网页里按返回，或者在页面最上面再按上，焦点进标签栏；在标签栏里按下回到网页。
+/// 选中的那个标签，网站图标换成关闭按钮（×）：从标签往左一格就是它，往右回到标签。关掉正在看的，换到右边那个，
+/// 没有就左边那个，都没有回开始页（和 Safari 一样）。
 /// 视频铺满时标签栏收起，按上或返回才盖在视频上面出来。
 ///
 /// 只有正在看的那个标签页有网页视图（一个网页的进程要一两百兆，多的近一个 G），别的只留地址、标题、
@@ -34,14 +38,19 @@ final class BrowserStore: ObservableObject {
     /// 开始页的焦点：地址栏，或者某一排的某一个
     enum Focus: Equatable { case field, item(row: Int, column: Int) }
 
-    /// 标签栏上的焦点（nil：焦点在网页里）
-    enum BarFocus: Hashable { case back, forward, tab(String), newTab, more }
+    /// 标签栏上的焦点（nil：焦点在网页里，或者开始页的地址栏、那几排里）。close：那个标签的关闭按钮（×）
+    enum BarFocus: Hashable { case back, forward, tab(String), close(String), newTab, more }
+
+    /// 开始页自己在标签栏上的那个标签（还没打开网站的新标签页，Safari 叫它 Start Page）
+    nonisolated static let startTabID = "start-page"
 
     /// "⋯"菜单里的一项。缩小、原始大小、放大在同一行
     enum MenuItem: CaseIterable {
         case newPrivateTab, reload, zoomOut, zoomReset, zoomIn, closeTab, startPage
 
         static let rows: [[MenuItem]] = [[.newPrivateTab], [.reload], [.zoomOut, .zoomReset, .zoomIn], [.closeTab], [.startPage]]
+        /// 开始页上没有网页：不能重新载入、缩放，已经在开始页了
+        static let startPageRows: [[MenuItem]] = [[.newPrivateTab], [.closeTab]]
 
         var name: String {
             switch self {
@@ -88,6 +97,12 @@ final class BrowserStore: ObservableObject {
     weak var tv: TVController?
 
     // 开始页
+    /// 开始页开着（不是网页）
+    @Published private(set) var onStartPage = false
+    /// 开始页上的标签栏露着：一开始是；焦点下到那几排里收上去，回到地址栏再按上又出来
+    @Published private(set) var startBarShown = true
+    /// 开始页的标签栏露着、停稳了：这时才跟踪鼠标悬停（它滑的时候也跟踪的话，SwiftUI 每一帧都要重算光标底下是谁）
+    @Published private(set) var startBarSettled = true
     @Published private(set) var rows: [Row] = []
     @Published private(set) var focus: Focus = .field
     @Published private(set) var editing = false
@@ -146,16 +161,40 @@ final class BrowserStore: ObservableObject {
     /// 标签栏露着：平时一直在；视频铺满时只有焦点在它上面才出来（盖在视频上）
     var barShown: Bool { !videoMode || barFocus != nil }
 
-    /// 给按键音用：焦点变了才出声
-    var focusKey: String { "\(focus)-\(editing)-\(rows.count)" }
+    /// 给按键音用：焦点变了才出声（开始页上的标签栏收起、出来也算）
+    var focusKey: String { "\(focus)-\(editing)-\(rows.count)-\(startBarShown)-" + chromeKey }
     /// 标签栏、菜单里的焦点
     var chromeKey: String { "\(String(describing: barFocus))-\(String(describing: menu))-\(tabs.count)-\(activeID ?? "")" }
 
+    // MARK: 标签栏上有什么（网页上、开始页上是同一条）
+
+    /// 开始页是在改这个标签页的地址（点了标签栏上正在看的那个）
+    var addressTabID: String? {
+        guard case .address(let id) = origin, tabs.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    /// 标签栏上的标签：开着的标签页；开始页上（不是在改哪个标签页的地址时）最后多一个它自己
+    var barTabs: [BrowserTab] {
+        guard onStartPage, addressTabID == nil else { return tabs }
+        return tabs + [BrowserTab(id: Self.startTabID, url: URL(string: "about:blank")!, title: "Start Page", isPrivate: startsPrivate)]
+    }
+
+    /// 标签栏上"正在看的"那个（宽一点、亮一点，选它就是改地址）
+    var barCurrentID: String? { onStartPage ? addressTabID ?? Self.startTabID : activeID }
+    var barIsPrivate: Bool { barTabs.first { $0.id == barCurrentID }?.isPrivate ?? false }
+    /// 开始页上没有网页：后退、前进不能用
+    var barCanGoBack: Bool { !onStartPage && page.canGoBack }
+    var barCanGoForward: Bool { !onStartPage && page.canGoForward }
+    var menuRows: [[MenuItem]] { onStartPage ? MenuItem.startPageRows : MenuItem.rows }
+
     func opened(origin: Origin = .home) {
         self.origin = origin
+        onStartPage = true
         editing = false
         replaceQuery = false
         rebuildRows()
+        placeStartBar(focus == .field)
         if Date().timeIntervalSince(loadedAt) > 60 { reload() }
     }
 
@@ -188,7 +227,7 @@ final class BrowserStore: ObservableObject {
         if !recent.isEmpty { built.append(Row(id: "recent", title: "Recently Visited", style: .cards, pages: Array(recent.prefix(40)))) }
         if !safari.readingList.isEmpty { built.append(Row(id: "reading", title: "Reading List", style: .cards, pages: safari.readingList)) }
         rows = built
-        if case .item(let row, _) = focus, !rows.indices.contains(row) { focus = .field }
+        if case .item(let row, _) = focus, !rows.indices.contains(row) { focus = .field; placeStartBar(true) }
     }
 
     // MARK: 开始页的按键
@@ -221,6 +260,7 @@ final class BrowserStore: ObservableObject {
             }
             return
         }
+        if barFocus != nil { _ = handleBar(command); return }   // 焦点在上面的标签栏里
         switch command {
         case .move(.down):
             switch focus {
@@ -228,7 +268,11 @@ final class BrowserStore: ObservableObject {
             case .item(let row, _): if row + 1 < rows.count { setFocus(.item(row: row + 1, column: column(of: row + 1))) }
             }
         case .move(.up):
-            if case .item(let row, _) = focus { setFocus(row == 0 ? .field : .item(row: row - 1, column: column(of: row - 1))) }
+            switch focus {
+            case .item(let row, _): setFocus(row == 0 ? .field : .item(row: row - 1, column: column(of: row - 1)))
+            // 地址栏上：标签栏收着就先放出来（回到一进来的样子），露着再按上才进标签栏
+            case .field: if startBarShown { focusBar() } else { showStartBar() }
+            }
         case .move(let direction) where direction == .left || direction == .right:
             guard case .item(let row, _) = focus, rows.indices.contains(row) else { return }
             let count = rows[row].style == .notice ? 1 : rows[row].pages.count
@@ -243,8 +287,8 @@ final class BrowserStore: ObservableObject {
                 else if let page = focusedPage { open(page.url) }
             }
         case .back:
-            // 在下面几排里：先回到地址栏；在地址栏上：回主屏，或者回到进来之前看的那一页
-            if case .item = focus { setFocus(.field); return }
+            // 在下面几排里：先回到地址栏（标签栏也回来）；在地址栏上：回主屏，或者回到进来之前看的那一页
+            if case .item = focus { setFocus(.field); showStartBar(); return }
             switch origin {
             case .home, .newTab(nil, _): tv?.goHome()
             case .newTab(let id?, _), .address(let id): resume(id)
@@ -255,7 +299,10 @@ final class BrowserStore: ObservableObject {
 
     /// 转盘、双指滑动：在一排里走，到头就停
     func canMove(_ direction: RemoteCommand.Direction) -> Bool {
-        guard case .item(let row, let column) = focus, rows.indices.contains(row) else { return direction == .down && !rows.isEmpty }
+        if barFocus != nil { return chromeCanMove(direction) }
+        guard case .item(let row, let column) = focus, rows.indices.contains(row) else {
+            return direction == .up || (direction == .down && !rows.isEmpty)   // 地址栏上：往上是标签栏
+        }
         switch direction {
         case .left: return column > 0
         case .right: return column < rows[row].pages.count - 1
@@ -267,17 +314,45 @@ final class BrowserStore: ObservableObject {
     func focus(row: Int, column: Int) {
         guard rows.indices.contains(row) else { return }
         stopEditing()   // 打着字时点了下面的一个：先收起地址栏，这一下打开的是点的那个
-        withAnimation(Motion.focus) { columns[rows[row].id] = column; focus = .item(row: row, column: column) }
+        withAnimation(Motion.focus) {
+            columns[rows[row].id] = column
+            focus = .item(row: row, column: column)
+            barFocus = nil
+            menu = nil
+        }
+        slideStartBar(false)
     }
 
+    /// 焦点下到那几排里，标签栏跟着收上去（一个位移动画，下面的跟着上移）；回到地址栏时不动，再按上才出来
     private func setFocus(_ value: Focus) {
         withAnimation(Motion.navigate) { focus = value }
+        if case .item = value { slideStartBar(false) }
+    }
+
+    private func showStartBar() { slideStartBar(true) }
+
+    /// 标签栏收上去 / 放下来：一个位移动画，下面的跟着挪。放下来停稳了才再跟踪鼠标悬停
+    private func slideStartBar(_ shown: Bool) {
+        guard shown != startBarShown else { return }
+        startBarSettled = false
+        withAnimation(Motion.navigate, completionCriteria: .logicallyComplete) {
+            startBarShown = shown
+        } completion: { [weak self] in
+            guard let self, self.startBarShown == shown else { return }
+            self.startBarSettled = shown
+        }
+    }
+
+    /// 不做动画地放好（刚打开开始页、焦点直接进标签栏）
+    private func placeStartBar(_ shown: Bool) {
+        startBarShown = shown
+        startBarSettled = shown
     }
 
     // MARK: 地址栏
 
     func startEditing() {
-        withAnimation(Motion.focus) { focus = .field; editing = true }
+        withAnimation(Motion.focus) { focus = .field; editing = true; barFocus = nil; menu = nil }
     }
 
     func stopEditing() {
@@ -369,6 +444,7 @@ final class BrowserStore: ObservableObject {
             tv.playbackCoordinator.closeWebPlayback()
         }
         stopEditing()
+        onStartPage = false
         barFocus = nil
         menu = nil
         videoMode = false
@@ -417,6 +493,7 @@ final class BrowserStore: ObservableObject {
     /// 离开浏览器（回主屏、开别的应用）。无痕标签页这时就关掉、数据扔掉（电视家里人都会用，别留给下一个人）
     func leave() {
         if pageWebView != nil { suspendPage() }
+        onStartPage = false
         barFocus = nil
         menu = nil
         videoMode = false
@@ -448,6 +525,7 @@ final class BrowserStore: ObservableObject {
         tv.browserOpen = true
         opened(origin: origin)
         if origin != .home { focus = .field }
+        placeStartBar(focus == .field)
         if editing {
             query = address
             startEditing()
@@ -456,22 +534,45 @@ final class BrowserStore: ObservableObject {
         tv.bringToFront()
     }
 
-    /// 关掉一个标签页。关的是正在看的：换到后面那个（没有就是前面那个）；最后一个也关了就回开始页
+    /// 关掉一个标签以后谁是正在看的（和 Safari 一样）：关的不是正在看的，还是原来那个；
+    /// 是正在看的，换到它右边那个，没有就左边那个；一个都不剩是 nil（回开始页）。order 是标签栏上从左到右的顺序
+    nonisolated static func currentAfterClosing(_ closing: String, in order: [String], current: String) -> String? {
+        guard closing == current, let index = order.firstIndex(of: closing) else { return current }
+        if index + 1 < order.count { return order[index + 1] }
+        return index > 0 ? order[index - 1] : nil
+    }
+
+    /// 关掉标签栏上的一个标签（× 、"⋯"里的 Close Tab）。正在看的关了按 Safari 的规矩换一个；
+    /// 焦点在标签栏上的，留在现在正在看的那个标签上。开始页自己那个也能关：回到左边那个标签页，一个都没有就回主屏
     func closeTab(_ id: String) {
+        guard barTabs.contains(where: { $0.id == id }) else { return }
+        let current = barCurrentID, wasInBar = barFocus != nil
+        let next = current.flatMap { Self.currentAfterClosing(id, in: barTabs.map(\.id), current: $0) }
+        if id == Self.startTabID {
+            if let tab = tabs.first(where: { $0.id == next }) {
+                show(tab)
+                if wasInBar { barFocus = .tab(tab.id) }
+            } else {
+                barFocus = nil
+                menu = nil
+                tv?.goHome()
+            }
+            return
+        }
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        let wasInBar = barFocus != nil
         let closed = tabs.remove(at: index)
         forget(closed)
-        if barFocus == .tab(id) { barFocus = nil }
-        if closed.id == activeID {
-            activeID = nil
-            if tabs.isEmpty {
-                openStartPage(origin: .home)
-            } else {
-                let next = tabs[min(index, tabs.count - 1)]
-                show(next)
-                if wasInBar { barFocus = .tab(next.id) }
-            }
+        if closed.id == activeID { activeID = nil }
+        if closed.id == lastNormalID { lastNormalID = nil }
+        if id != current {
+            if wasInBar, let current { withAnimation(Motion.focus) { barFocus = .tab(current) } }
+        } else if let tab = tabs.first(where: { $0.id == next }) {
+            show(tab)
+            if wasInBar { barFocus = .tab(tab.id) }
+        } else {
+            // 一个都不剩：开始页（它自己是正在看的那个标签）
+            openStartPage(origin: .home)
+            if wasInBar { focus = .field; placeStartBar(true); barFocus = .tab(Self.startTabID) }
         }
         dropPrivateSessionIfUnused()
         save()
@@ -652,23 +753,36 @@ final class BrowserStore: ObservableObject {
 
     // MARK: 标签栏
 
-    private var currentTabFocus: BarFocus? { activeID.map(BarFocus.tab) }
+    private var currentTabFocus: BarFocus? { barCurrentID.map(BarFocus.tab) }
 
-    /// 标签栏上能走到的，从左到右（不能用的后退、前进跳过）
+    /// 标签栏上能走到的，从左到右（不能用的后退、前进跳过）。关闭按钮不在这里面，见 barStep
     nonisolated static func barItems(tabs: [String], canGoBack: Bool, canGoForward: Bool) -> [BarFocus] {
         (canGoBack ? [.back] : []) + (canGoForward ? [.forward] : []) + tabs.map(BarFocus.tab) + [.newTab, .more]
     }
 
-    var barItems: [BarFocus] { Self.barItems(tabs: tabs.map(\.id), canGoBack: page.canGoBack, canGoForward: page.canGoForward) }
+    var barItems: [BarFocus] { Self.barItems(tabs: barTabs.map(\.id), canGoBack: barCanGoBack, canGoForward: barCanGoForward) }
 
     nonisolated static func step(in items: [BarFocus], from focus: BarFocus, by delta: Int) -> BarFocus? {
         guard let index = items.firstIndex(of: focus), items.indices.contains(index + delta) else { return nil }
         return items[index + delta]
     }
 
+    /// 标签栏上左右走一格（走不动是 nil）。选中的标签前面是它的 ×（网站图标的位置）：从标签往左先到它的 ×，
+    /// 再往左才到前一个；从 × 往右回到标签。往右走不经过 ×（别的标签的 × 只有选中它时才出来），不碍事
+    nonisolated static func barStep(in items: [BarFocus], from focus: BarFocus, _ direction: RemoteCommand.Direction) -> BarFocus? {
+        switch (focus, direction) {
+        case (.tab(let id), .left): return items.contains(.tab(id)) ? .close(id) : nil
+        case (.close(let id), .right): return items.contains(.tab(id)) ? .tab(id) : nil
+        case (.close(let id), .left): return step(in: items, from: .tab(id), by: -1)
+        case (_, .left): return step(in: items, from: focus, by: -1)
+        case (_, .right): return step(in: items, from: focus, by: 1)
+        default: return nil
+        }
+    }
+
     /// "⋯"菜单里往一个方向走一格（走不动是 nil）。上下换行（进缩放那一行停在"原始大小"），左右只在缩放那一行里
-    nonisolated static func menuStep(from item: MenuItem, _ direction: RemoteCommand.Direction) -> MenuItem? {
-        let rows = MenuItem.rows
+    nonisolated static func menuStep(from item: MenuItem, _ direction: RemoteCommand.Direction,
+                                     rows: [[MenuItem]] = MenuItem.rows) -> MenuItem? {
         guard let row = rows.firstIndex(where: { $0.contains(item) }), let column = rows[row].firstIndex(of: item) else { return nil }
         switch direction {
         case .up, .down:
@@ -681,16 +795,22 @@ final class BrowserStore: ObservableObject {
         }
     }
 
-    /// 焦点进标签栏（默认停在正在看的那个标签页上）
+    /// 焦点进标签栏（默认停在正在看的那个标签上）。网页上、开始页上都是这一条
     func focusBar(on target: BarFocus? = nil) {
-        guard let web = pageWebView else { return }
-        page.canGoBack = web.canGoBack
-        page.canGoForward = web.canGoForward
-        page.zoom = web.pageZoom
-        withAnimation(Motion.focus) { barFocus = target ?? currentTabFocus ?? .newTab }
+        if let web = pageWebView {
+            page.canGoBack = web.canGoBack
+            page.canGoForward = web.canGoForward
+            page.zoom = web.pageZoom
+        } else if !onStartPage {
+            return
+        }
+        withAnimation(Motion.focus) {
+            if onStartPage { placeStartBar(true); focus = .field }
+            barFocus = target ?? currentTabFocus ?? .newTab
+        }
     }
 
-    /// 焦点回网页
+    /// 焦点回网页（开始页上：回地址栏）
     func leaveBar() {
         withAnimation(Motion.focus) { barFocus = nil; menu = nil }
         if let web = pageWebView { tv?.window?.makeFirstResponder(web) }
@@ -698,14 +818,21 @@ final class BrowserStore: ObservableObject {
 
     /// 按住确认：打开"⋯"菜单
     func openMenu() -> Bool {
-        guard pageWebView != nil, menu == nil else { return false }
+        guard pageWebView != nil || onStartPage, menu == nil else { return false }
         if barFocus == nil { focusBar(on: .more) }
-        withAnimation(Motion.appear) { barFocus = .more; menu = .newPrivateTab }
+        withAnimation(Motion.appear) { barFocus = .more; menu = menuRows[0][0] }
         return true
     }
 
     private func closeMenu() {
         withAnimation(Motion.appear) { menu = nil }
+    }
+
+    /// "⋯"菜单开着时再按住确认：收起，焦点留在标签栏的"⋯"上（同返回，规矩见 TVController.toggle）
+    func closeHoldMenu() -> Bool {
+        guard menu != nil else { return false }
+        closeMenu()
+        return true
     }
 
     /// 焦点在网页里时归这里管的两个键：返回（焦点进标签栏）、视频铺满时的上（叫出标签栏）。别的照常给网页
@@ -731,7 +858,7 @@ final class BrowserStore: ObservableObject {
         if let item = menu {
             switch command {
             case .move(let direction):
-                if let next = Self.menuStep(from: item, direction) { withAnimation(Motion.focus) { menu = next } }
+                if let next = Self.menuStep(from: item, direction, rows: menuRows) { withAnimation(Motion.focus) { menu = next } }
                 else if direction == .up { closeMenu() }   // 菜单从"⋯"下面拉出来的：在第一行再往上就收起
             case .select: activateMenu(item)
             case .back: closeMenu()
@@ -743,13 +870,14 @@ final class BrowserStore: ObservableObject {
         }
         switch command {
         case .move(let direction) where direction == .left || direction == .right:
-            if let next = Self.step(in: barItems, from: focus, by: direction == .right ? 1 : -1) {
+            if let next = Self.barStep(in: barItems, from: focus, direction) {
                 withAnimation(Motion.focus) { barFocus = next }
             }
         case .move(.down): leaveBar()
         case .move: break
         case .select: activate(focus)
-        case .back: openStartPage(origin: .home)   // 和以前一样：网页返回到头回开始页，开始页再返回回主屏
+        // 网页上：和以前一样，网页返回到头回开始页，开始页再返回回主屏。开始页上：回地址栏
+        case .back: if onStartPage { leaveBar() } else { openStartPage(origin: .home) }
         case .click: leaveBar(); return false
         case .pointer, .playPause, .seek, .text, .deleteBackward: return false
         default: break
@@ -758,6 +886,8 @@ final class BrowserStore: ObservableObject {
     }
 
     func activate(_ item: BarFocus) {
+        if case .close(let id) = item { closeTab(id); return }
+        if onStartPage { activateOnStartPage(item); return }
         guard let web = pageWebView else { return }
         switch item {
         case .back: if web.canGoBack { web.goBack() }
@@ -771,17 +901,52 @@ final class BrowserStore: ObservableObject {
             }
         case .newTab: openStartPage(origin: .newTab(from: activeID, isPrivate: activeTab?.isPrivate ?? false))
         case .more: _ = openMenu()
+        case .close: break
+        }
+    }
+
+    /// 开始页上的标签栏：正在看的那个（开始页自己，或者正在改地址的那个）就是地址栏，选它直接打字；
+    /// 别的标签换过去；"+" 是一个新标签页的开始页（焦点回地址栏）
+    private func activateOnStartPage(_ item: BarFocus) {
+        switch item {
+        case .tab(let id) where id == barCurrentID:
+            startEditing()
+        case .tab(let id):
+            guard let tab = tabs.first(where: { $0.id == id }) else { return }
+            show(tab)
+            barFocus = .tab(id)
+        case .newTab:
+            let from = addressTabID
+            switchStartPage(to: from.map { id in .newTab(from: id, isPrivate: tabs.first { $0.id == id }?.isPrivate ?? false) } ?? origin)
+        case .more: _ = openMenu()
+        case .back, .forward, .close: break
+        }
+    }
+
+    /// 开始页上换成另一种开始页（"+"、New Private Tab）：标签栏上正在看的那个跟着换，焦点回地址栏
+    private func switchStartPage(to origin: Origin) {
+        stopEditing()
+        if origin != self.origin { query = "" }
+        withAnimation(Motion.focus) {
+            self.origin = origin
+            barFocus = nil
+            menu = nil
+            focus = .field
+            placeStartBar(true)
         }
     }
 
     func activateMenu(_ item: MenuItem) {
         switch item {
-        case .newPrivateTab: closeMenu(); openStartPage(origin: .newTab(from: activeID, isPrivate: true))
+        case .newPrivateTab:
+            closeMenu()
+            if onStartPage { switchStartPage(to: .newTab(from: addressTabID ?? activeID, isPrivate: true)) }
+            else { openStartPage(origin: .newTab(from: activeID, isPrivate: true)) }
         case .reload: closeMenu(); pageWebView?.reload()
         case .zoomOut: setZoom(BrowserZoom.step(from: page.zoom, larger: false))
         case .zoomReset: setZoom(standardZoom)
         case .zoomIn: setZoom(BrowserZoom.step(from: page.zoom, larger: true))
-        case .closeTab: closeMenu(); if let id = activeID { closeTab(id) }
+        case .closeTab: closeMenu(); if let id = barCurrentID { closeTab(id) }
         case .startPage: closeMenu(); openStartPage(origin: .newTab(from: activeID, isPrivate: activeTab?.isPrivate ?? false))
         }
     }
@@ -792,20 +957,28 @@ final class BrowserStore: ObservableObject {
         return horizontal ? .picker : .drawer              // 一排固定的按钮和标签；从上面拉下来的一条
     }
 
+    /// 开始页：焦点在标签栏上和网页上的标签栏一样；在地址栏、那几排里横着是长条
+    func startModule(horizontal: Bool) -> TVController.Module {
+        barFocus != nil ? chromeModule(horizontal: horizontal) : horizontal ? .strip : .drawer
+    }
+
+    /// 开始页上转盘沿着哪个方向走：标签栏横着（"⋯"菜单竖着），那几排横着，地址栏竖着
+    var startWheelRunsHorizontally: Bool { barFocus != nil ? menu == nil : focus != .field }
+
     func chromeCanMove(_ direction: RemoteCommand.Direction) -> Bool {
         guard let focus = barFocus else { return false }
-        if let item = menu { return Self.menuStep(from: item, direction) != nil }
+        if let item = menu { return Self.menuStep(from: item, direction, rows: menuRows) != nil }
         switch direction {
-        case .left: return Self.step(in: barItems, from: focus, by: -1) != nil
-        case .right: return Self.step(in: barItems, from: focus, by: 1) != nil
+        case .left, .right: return Self.barStep(in: barItems, from: focus, direction) != nil
         case .down: return true
         case .up: return false
         }
     }
 
-    /// 鼠标点了标签栏上的一个
+    /// 鼠标点了标签栏上的一个（点 × 直接关掉那个标签）
     func tapBar(_ item: BarFocus) {
-        guard pageWebView != nil else { return }
+        guard pageWebView != nil || onStartPage else { return }
+        if onStartPage { stopEditing() }
         withAnimation(Motion.focus) { barFocus = item; menu = nil }
         activate(item)
     }

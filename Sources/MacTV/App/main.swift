@@ -352,6 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state: { [weak self] in self?.tv.remoteState() ?? [:] },
             icon: { [weak self] in self?.tv.iconPNG(for: $0) },
             routes: { [weak self] in self?.tv.handleAppsRequest($0) },
+            pairing: tv.remoteCoordinator.pairingStore,
             onGuestCommand: { [weak self] in self?.tv.handleGuestCommand($0) ?? false },
             ownOrigins: { [weak self] in self?.tv.remoteCoordinator.origins ?? [] })
         server.start(ports: Array(8765...8775)) { [weak self] port in self?.tv.remotePort = port }
@@ -441,12 +442,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             //   看视频时，按一下 = 暂停 / 继续；按住半秒 = 从右边拉出面板（UP 主、点赞、投币、收藏、倍速、字幕）。
             //   按住不放时系统重发的"确认"一律不当成新的一次——菜单弹出来以后，不管还按着多久都不会自己选中第一项。
             //   不是视频卡片的地方没有菜单，按多久都还是一次普通的确认。
+            //   卡片菜单、面板开着时也一样：按一下（松开时算数）是确认，再按住半秒是收起（TVController.toggle）。
             if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.bilibiliOpen, tv.activeSheet == nil,
                !tv.bilibiliStore.editing {
                 if event.isARepeat { return nil }
                 let store = tv.bilibiliStore, player = store.player
-                let inList = player.current == nil && store.cardMenu == nil && !store.settingsOpen
-                let watching = player.current != nil && !player.panelVisible && !player.qualityMenuVisible && !player.relatedVisible
+                let inList = player.current == nil && !store.settingsOpen
+                let watching = player.current != nil && !player.qualityMenuVisible && !player.relatedVisible
                 if inList || watching {
                     self?.selectDownAt = Date()
                     self?.selectHeld = false
@@ -454,16 +456,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                         MainActor.assumeIsolated {
                             guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            // 和手机遥控器上按住 OK 是同一套（TVController.openHoldMenu）
-                            if self.tv.openHoldMenu() {
-                                self.selectHeld = true
-                                self.tv.feedback.play(.select, from: .keyboard)   // 和手机上按住 OK 一样：响一声、震一下
-                            }
+                            // 和手机遥控器上按住 OK 是同一套，响一声、震一下（TVController.holdSelect）
+                            if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
                         }
                     }
                     return nil
                 }
-                // 菜单、面板、设置已经开着：新按下的这一次立刻生效（走下面的常规处理）
+                // 清晰度栏、下面那一块、设置开着：新按下的这一次立刻生效（走下面的常规处理）
             }
             // 网易云音乐、得到的播放界面：短按左右 = 上一首 / 下一首、上一讲 / 下一讲（松开时算数）；
             // 按住 = 快退 / 快进，松手从那里接着放
@@ -496,9 +495,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return nil
             }
             // 得到的播放界面里的确认键，和网易云一样：按一下（松开时算数）= 放 / 停；按住半秒 = "⋯"菜单
-            //（倍速、定时关闭、讲目列表）。菜单、讲目列表开着时，新按下的这一次立刻生效（走下面的常规处理）
+            //（倍速、定时关闭、讲目列表），菜单开着时按一下是确认、再按住半秒是收起。
+            // 讲目列表、别的菜单开着时，新按下的这一次立刻生效（走下面的常规处理）
             if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.dedaoOpen, tv.activeSheet == nil,
-               tv.dedaoStore.canHoldSeek {
+               tv.dedaoStore.canHoldSeek || tv.dedaoStore.holdMenuOpen {
                 if event.isARepeat { return nil }
                 self?.selectDownAt = Date()
                 self?.selectHeld = false
@@ -506,36 +506,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                     MainActor.assumeIsolated {
                         guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                        if self.tv.openHoldMenu() {
-                            self.selectHeld = true
-                            self.tv.feedback.play(.select, from: .keyboard)   // 和手机上按住 OK 一样：响一声、震一下
-                        }
+                        // 和手机上按住 OK 一样：响一声、震一下（TVController.holdSelect）
+                        if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
                     }
                 }
                 return nil
             }
             // 网易云音乐里的确认键，规矩一样：按一下（松开时算数）= 确认；
-            // 在歌曲、歌单卡片上或播放界面里按住半秒 = 菜单（喜欢、收藏到歌单、播放模式）。
+            // 在歌曲、歌单卡片上或播放界面里按住半秒 = 菜单（喜欢、收藏到歌单、播放模式），菜单开着时再按住半秒是收起。
             if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,
                !tv.neteaseStore.typing, tv.neteaseStore.account != nil {
                 if event.isARepeat { return nil }
-                if tv.neteaseStore.menu == nil {
+                if tv.neteaseStore.menu == nil || tv.neteaseStore.holdMenuOpen {
                     self?.selectDownAt = Date()
                     self?.selectHeld = false
                     self?.selectTimer?.invalidate()
                     self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                         MainActor.assumeIsolated {
                             guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            // 和手机上按住 OK 是同一套：响一声、震一下
-                            if self.tv.openHoldMenu() {
-                                self.selectHeld = true
-                                self.tv.feedback.play(.select, from: .keyboard)
-                            }
+                            // 和手机上按住 OK 是同一套：响一声、震一下（TVController.holdSelect）
+                            if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
                         }
                     }
                     return nil
                 }
-                // 菜单已经开着：新按下的这一次立刻生效
+                // 头像、设置的菜单开着：新按下的这一次立刻生效
             }
             // 哔哩哔哩的搜索框正在输入时，其余按键整个交给输入框（中文输入法要用到方向键、回车）
             if tv.mode == .launcher, tv.bilibiliOpen, tv.bilibiliStore.editing {
@@ -557,9 +552,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 tv.neteaseStore.refocus()
                 return nil
             }
-            // 浏览器的网页：焦点在标签栏上时，方向键、回车、空格归标签栏（"⋯"菜单开着时回车立刻生效）。
+            // 浏览器的网页：焦点在标签栏上时，方向键、回车、空格归标签栏。
             // 焦点在网页里时，视频铺满的时候按上叫出标签栏，别的方向键照常给网页。
-            // 按住回车半秒 = "⋯"菜单（和手机遥控器上按住 OK 一样）；按一下照常是回车（松开时算数，在网页里交给网页）。
+            // 按住回车半秒 = "⋯"菜单（和手机遥控器上按住 OK 一样），菜单开着时再按住是收起；
+            // 按一下照常是回车（松开时算数，在网页里交给网页，菜单里是选这一项）。
             // 网页里正在用输入法打字（有待选的字）时不拦回车
             if tv.browserPageInFront, mods.isEmpty {
                 let inBar = tv.browserChromeUp
@@ -570,11 +566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case 125: tv.handle(.move(.down)); return nil
                     case 126: tv.handle(.move(.up)); return nil
                     case 49: if !event.isARepeat { tv.handle(.select) }; return nil
-                    case 36, 76:
-                        if tv.browserStore.menu != nil {
-                            if !event.isARepeat { tv.handle(.select) }
-                            return nil
-                        }
+                    case 36, 76: break   // 回车：下面按住 / 松开的那一套
                     default: return event
                     }
                 } else if event.keyCode == 126, tv.browserStore.videoMode {
@@ -590,10 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                         MainActor.assumeIsolated {
                             guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            if self.tv.openHoldMenu() {
-                                self.selectHeld = true
-                                self.tv.feedback.play(.select, from: .keyboard)
-                            }
+                            if self.tv.holdSelect(from: .keyboard) { self.selectHeld = true }
                         }
                     }
                     return nil
@@ -602,7 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard tv.mode == .launcher || tv.mode == .movie else { return event }
             // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.
             // So does naming a new profile.
-            if tv.adder != nil || tv.profilePicker?.naming != nil || tv.movies?.shareForm != nil {
+            if tv.adder != nil || tv.profilePicker?.naming != nil || tv.settings?.typing == true || tv.movies?.shareForm != nil {
                 if mods == [.command], event.charactersIgnoringModifiers == "v",
                    let pasted = NSPasteboard.general.string(forType: .string) {
                     tv.handle(.text(pasted))
@@ -626,7 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case 124: tv.handle(.move(.right))
             case 125: tv.handle(.move(.down))
             case 126: tv.handle(.move(.up))
-            case 36, 76, 49: tv.handle(.select)
+            case 36, 76, 49: if !event.isARepeat { tv.handle(.select) }   // 按住回车、空格只算一次
             case 53: tv.handle(.back)
             default: return event
             }

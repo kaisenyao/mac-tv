@@ -228,6 +228,129 @@ struct BrowserTests {
         #expect(BrowserStore.menuStep(from: .startPage, .down) == nil)
         #expect(BrowserStore.menuStep(from: .reload, .right) == nil)
         #expect(Item.allCases.allSatisfy { !$0.name.isEmpty })
+        // 开始页上的菜单只有两行
+        let start = Item.startPageRows
+        #expect(BrowserStore.menuStep(from: .newPrivateTab, .down, rows: start) == .closeTab)
+        #expect(BrowserStore.menuStep(from: .closeTab, .down, rows: start) == nil)
+    }
+
+    @Test
+    func closingATabGoesRightThenLeftThenToTheStartPage() {
+        // 关的不是正在看的：还是原来那个
+        #expect(BrowserStore.currentAfterClosing("a", in: ["a", "b", "c"], current: "b") == "b")
+        // 关正在看的：右边那个；没有右边就左边那个；一个都不剩回开始页（nil）
+        #expect(BrowserStore.currentAfterClosing("b", in: ["a", "b", "c"], current: "b") == "c")
+        #expect(BrowserStore.currentAfterClosing("c", in: ["a", "b", "c"], current: "c") == "b")
+        #expect(BrowserStore.currentAfterClosing("a", in: ["a"], current: "a") == nil)
+        // 开始页自己是最后一个标签：关掉它回到左边那个；关掉别的，开始页还是正在看的
+        let start = BrowserStore.startTabID
+        #expect(BrowserStore.currentAfterClosing(start, in: ["a", "b", start], current: start) == "b")
+        #expect(BrowserStore.currentAfterClosing("a", in: ["a", "b", start], current: start) == start)
+        #expect(BrowserStore.currentAfterClosing(start, in: [start], current: start) == nil)
+    }
+
+    @Test
+    func closeButtonIsOneStepLeftOfTheFocusedTabAndNeverInTheWayGoingRight() {
+        let items = BrowserStore.barItems(tabs: ["a", "b"], canGoBack: true, canGoForward: false)
+        #expect(BrowserStore.barStep(in: items, from: .tab("b"), .left) == .close("b"))   // 往左先到它的 ×
+        #expect(BrowserStore.barStep(in: items, from: .close("b"), .right) == .tab("b"))  // 往右回到标签
+        #expect(BrowserStore.barStep(in: items, from: .close("b"), .left) == .tab("a"))   // 再往左是前一个标签
+        #expect(BrowserStore.barStep(in: items, from: .tab("a"), .right) == .tab("b"))    // 往右不经过 ×
+        #expect(BrowserStore.barStep(in: items, from: .close("a"), .left) == .back)
+        #expect(BrowserStore.barStep(in: items, from: .back, .left) == nil)
+        #expect(BrowserStore.barStep(in: items, from: .tab("b"), .right) == .newTab)
+        #expect(BrowserStore.barStep(in: items, from: .newTab, .left) == .tab("b"))
+        #expect(BrowserStore.barStep(in: items, from: .more, .right) == nil)
+        #expect(BrowserStore.barStep(in: items, from: .tab("a"), .up) == nil)
+        #expect(BrowserStore.barStep(in: items, from: .tab("gone"), .left) == nil)        // 已经关掉的
+    }
+
+    @Test
+    func tabsShareTheBarAndOnlyScrollWhenTheyCannotFit() {
+        let available: CGFloat = 1584, gap: CGFloat = 12
+        func total(_ widths: [CGFloat]) -> CGFloat { widths.reduce(0, +) + gap * CGFloat(max(0, widths.count - 1)) }
+        for count in [1, 3, 4, 8] {
+            let widths = BrowserTopBar.tabWidths(count: count, current: count - 1, available: available, gap: gap)
+            #expect(widths.count == count)
+            #expect(abs(total(widths) - available) < 0.5)                     // 放得下：占满这一条，不滚
+            #expect(widths[count - 1] == widths.max())                        // 正在看的最宽
+            #expect(Set(widths.dropLast()).count <= 1)                        // 别的一样宽
+            #expect(widths.allSatisfy { $0 >= 150 })
+        }
+        #expect(BrowserTopBar.tabWidths(count: 1, current: 0, available: available, gap: gap) == [available])   // 一个：一整条地址栏
+        // 十二个放不下：别的窄到 150 为止，横着滚
+        let many = BrowserTopBar.tabWidths(count: 12, current: 5, available: available, gap: gap)
+        #expect(total(many) > available)
+        #expect(many.min() == 150)
+        #expect(many[5] == 420)
+    }
+
+    @Test @MainActor
+    func startPageShowsTheTabBarAndTucksItAwayInTheRows() throws {
+        let defaults = UserDefaults.standard
+        let saved = defaults.data(forKey: "browserHistory")
+        defer { defaults.set(saved, forKey: "browserHistory") }
+        defaults.removeObject(forKey: "browserHistory")
+        BrowserHistory.add(try #require(URL(string: "https://a.example/")), title: "A")   // 一排"最近浏览"
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let store = BrowserStore(storage: storage)
+        store.opened()
+        let start = BrowserStore.startTabID
+        // 一进来：标签栏露着，焦点在地址栏；开始页自己是标签栏上正在看的那个
+        #expect(store.onStartPage && store.startBarShown && store.focus == .field && store.barFocus == nil)
+        #expect(store.barTabs.map(\.id) == [start])
+        #expect(store.barCurrentID == start)
+        #expect(store.barItems == [.tab(start), .newTab, .more])          // 没有网页：没有后退、前进
+        // 下到那几排里：标签栏收上去；回到地址栏还收着
+        store.handle(.move(.down))
+        #expect(store.focus == .item(row: 0, column: 0) && !store.startBarShown)
+        store.handle(.move(.up))
+        #expect(store.focus == .field && !store.startBarShown && store.barFocus == nil)
+        // 再按上：回到一进来的样子；再按上进标签栏，停在开始页自己那个标签上
+        #expect(store.canMove(.up))
+        store.handle(.move(.up))
+        #expect(store.focus == .field && store.startBarShown && store.barFocus == nil)
+        store.handle(.move(.up))
+        #expect(store.barFocus == .tab(start))
+        #expect(store.startWheelRunsHorizontally)
+        // 往左是它的 ×，往右回来；按下回到地址栏
+        store.handle(.move(.left))
+        #expect(store.barFocus == .close(start))
+        store.handle(.move(.right))
+        #expect(store.barFocus == .tab(start))
+        store.handle(.move(.down))
+        #expect(store.barFocus == nil && store.focus == .field && store.startBarShown)
+        // 在那几排里按返回：回到地址栏，标签栏也回来
+        store.handle(.move(.down))
+        store.handle(.back)
+        #expect(store.focus == .field && store.startBarShown)
+        // 在标签栏里选开始页自己那个标签：它就是地址栏，直接打字
+        store.handle(.move(.up))
+        store.handle(.select)
+        #expect(store.editing && store.barFocus == nil)
+    }
+
+    @Test @MainActor
+    func closingATabOnTheStartPageKeepsFocusOnTheCurrentTab() throws {
+        let (storage, cleanup) = Self.storage()
+        defer { cleanup() }
+        let store = BrowserStore(storage: storage)
+        store.opened()
+        store.newTab(try #require(URL(string: "https://a.example/")))
+        store.newTab(try #require(URL(string: "https://b.example/")))
+        let start = BrowserStore.startTabID
+        let ids = store.tabs.map(\.id)
+        #expect(store.barTabs.map(\.id) == ids + [start])                  // 开始页自己在最后
+        store.focusBar(on: .close(ids[0]))
+        store.handle(.select)
+        #expect(store.tabs.map(\.id) == [ids[1]])
+        #expect(store.barFocus == .tab(start))                             // 关的不是正在看的：焦点回正在看的那个
+        // "⋯"菜单：开始页上只有 New Private Tab、Close Tab
+        #expect(store.openMenu())
+        #expect(store.menu == .newPrivateTab)
+        store.handle(.select)                                              // New Private Tab：开始页换成无痕的
+        #expect(store.startsPrivate && store.barIsPrivate && store.barFocus == nil && store.menu == nil)
     }
 
     @Test

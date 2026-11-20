@@ -9,9 +9,9 @@ import AppKit
 /// | 键 | 点一下 | 按住 |
 /// |---|---|---|
 /// | 上下左右 | 走一格 | 按 Mac 的按键重复速度一直走；网易云播放界面里左右是快退 / 快进，松手从那里接着放 |
-/// | OK（确认） | 确认 | 卡片菜单、看视频时右边的面板；没有菜单的地方松手时是一次确认 |
+/// | OK（确认） | 确认 | 卡片菜单、看视频时右边的面板，开着时再按住收起；没有菜单的地方松手时是一次确认 |
 /// | 返回 | 返回 | 回主屏（和按住 Esc 一样） |
-/// | 主屏 | 回主屏 | 控制中心（和 Siri Remote 上按住电视键一样） |
+/// | 主屏 | 回主屏 | 控制中心，开着时再按住收起（和 Siri Remote 上按住电视键一样） |
 ///
 /// 按住时手机每隔一会儿发一次 alive；万一"松开"在网络上丢了，Mac 一秒多收不到就当松开了，不会一直走下去
 @MainActor
@@ -55,11 +55,10 @@ final class PhonePresses {
             tv.handle(.home, from: source)                      // 按住返回 = 回主屏
             holding[key] = .done
         case .home:
-            tv.handle(.controlCenter, from: source)             // 按住主屏 = 控制中心
+            tv.handle(.controlCenter, from: source)             // 按住主屏 = 控制中心（开着时再按住收起）
             holding[key] = .done
         case .select:
-            if tv.openHoldMenu() {
-                tv.feedback.play(.select, from: source)
+            if tv.holdSelect(from: source) {                    // 菜单开着时再按住是收起（TVController.toggle）
                 holding[key] = .menu
             } else {
                 holding[key] = .selectOnRelease(source)                 // 没有菜单的地方：松手时是一次普通的确认（和回车一样）

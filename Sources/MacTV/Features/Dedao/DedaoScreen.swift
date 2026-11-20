@@ -219,12 +219,14 @@ private struct DedaoBrowse: View {
                 rows
                     .frame(width: canvas.width, height: canvas.height - DedaoStyle.rowsTop, alignment: .topLeading)
                     .clipped()
-                    // 卡片往左滑的途中，越靠近左边那列图标越淡（同哔哩哔哩）
+                    // 卡片往左滑的途中，越靠近左边那列图标越淡（同哔哩哔哩）；
+                    // 右边露出一截的那张封面淡出屏幕（同一个遮罩，见 EdgeFade）
                     .mask {
                         HStack(spacing: 0) {
                             Color.clear.frame(width: 84)
                             LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 74)
-                            Color.black
+                            EdgeFadeMask(trailing: EdgeFadeMask.width(screen: canvas.width, inset: DedaoStyle.margin,
+                                                                      card: DedaoStyle.cover.width, gap: DedaoStyle.gap))
                         }
                     }
                     .offset(y: DedaoStyle.rowsTop)

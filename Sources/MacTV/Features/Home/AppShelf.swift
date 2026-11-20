@@ -116,10 +116,9 @@ enum NeteaseShelfSource: String, CaseIterable {
         get { UserDefaults.standard.object(forKey: "neteaseShelfNowPlaying") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "neteaseShelfNowPlaying") }
     }
-    /// 设置那一行右边写的："每日推荐"、"正在播放 等 4 项"
+    /// 设置那一行右边写的："每日推荐"、"正在播放、每日推荐"、"正在播放等 4 项"
     static var summary: String {
-        let chosen = (showsNowPlaying ? ["正在播放"] : []) + selected.map(\.title)
-        return chosen.count == 1 ? chosen[0] : "\(chosen[0]) 等 \(chosen.count) 项"
+        ListSummary.chinese((showsNowPlaying ? ["正在播放"] : []) + selected.map(\.title), none: "关闭")
     }
 }
 
@@ -163,10 +162,9 @@ enum DedaoShelfSource {
         set { store.set(Array(newValue).sorted(), forKey: "dedaoShelfHiddenCategories") }
     }
 
-    /// 设置那一行右边写的："正在听的书、新书推荐"、"新书推荐"
+    /// 设置那一行右边写的："正在播放、新书推荐"、"新书推荐"
     static var summary: String {
-        let chosen = (showsListening ? ["正在播放"] : []) + (showsNewBooks ? ["新书推荐"] : [])
-        return chosen.isEmpty ? "关闭" : chosen.joined(separator: "、")
+        ListSummary.chinese((showsListening ? ["正在播放"] : []) + (showsNewBooks ? ["新书推荐"] : []), none: "关闭")
     }
 
     /// 新书推荐那一行右边写的："全部分类""5 个分类"

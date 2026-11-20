@@ -47,7 +47,7 @@ enum DiagnosticReport {
             add(kind, "\(Int(size.width))×\(Int(size.height)) pt @\(Int(screen.backingScaleFactor))x, \(hz) Hz"
                 + (screen == tv.window?.screen ? ", Mac TV is here" : ""))
         }
-        add("Dedicated TV mode", tv.dedicatedTVMode ? "on" : "off")
+        add("Full Screen", tv.dedicatedTVMode ? "on" : "off")
 
         lines += ["", "## Sound", ""]
         add("Output", tv.currentAudioDevice.map { transportName($0.transport) } ?? "none")

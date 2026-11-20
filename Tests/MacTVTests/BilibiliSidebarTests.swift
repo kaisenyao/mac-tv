@@ -11,8 +11,8 @@ struct BilibiliSidebarTests {
     @Test
     func summaryCountsTheShownTabs() {
         #expect(BiliSidebar.choices == [.search, .following, .live, .mine])
-        #expect(BiliSidebar.summary(hidden: []) == "搜索 等 4 项")
-        #expect(BiliSidebar.summary(hidden: [.search, .following]) == "直播 等 2 项")
+        #expect(BiliSidebar.summary(hidden: []) == "搜索等 4 项")
+        #expect(BiliSidebar.summary(hidden: [.search, .following]) == "直播、我的")
         #expect(BiliSidebar.summary(hidden: [.search, .following, .mine]) == "直播")
         #expect(BiliSidebar.summary(hidden: Set(BiliSidebar.choices)) == "仅首页")
     }

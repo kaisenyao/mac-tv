@@ -5,9 +5,13 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { script: source } = require('./page.cjs');
-const start = source.indexOf('// 触控板：');
-const end = source.indexOf('// Old installations stored', start);
-assert.ok(start >= 0 && end > start, 'touchpad section is in remote.js');
+const section = (from, to) => {
+  const start = source.indexOf(from), end = source.indexOf(to, start);
+  assert.ok(start >= 0 && end > start, `${from} … ${to} is in remote.js`);
+  return source.slice(start, end);
+};
+// The touchpad, with the swipe sender it shares with the clickpad.
+const code = section('// 滑动：', '// Clickpad：') + section('// 触控板：', '// Old installations stored');
 const listeners = {};
 const pad = { addEventListener: (name, fn) => { listeners[name] = fn; }, setPointerCapture() {} };
 const requests = [], pending = [], sent = [], haptics = [], timers = [];
@@ -23,7 +27,7 @@ const api = (_path, body) => {
   });
 };
 const answer = (fail = false) => { const p = pending.shift(); fail ? p.reject() : p.resolve(); };
-vm.runInNewContext(source.slice(start, end), {
+const context = {
   $: () => pad, api, Math, Map, Promise, Date: { now: () => now },
   send: action => { sent.push(action); return Promise.resolve(); },
   haptic: kind => haptics.push(kind),
@@ -32,8 +36,9 @@ vm.runInNewContext(source.slice(start, end), {
   cancelAnimationFrame: () => { frames = []; },
   setTimeout: (fn, ms) => { const id = nextId++; timers.push({ id, fn, at: now + ms }); return id; },
   clearTimeout: id => { const t = timers.find(x => x.id === id); if (t) t.fn = null; },
-});
-const event = (type, id, x, y) => listeners[type]({ type, pointerId: id, clientX: x, clientY: y });
+};
+vm.runInNewContext(code, context);
+const event =(type, id, x, y) => listeners[type]({ type, pointerId: id, clientX: x, clientY: y });
 const settle = () => new Promise(resolve => setImmediate(resolve));
 // One screen frame: time moves 16 ms, due timers and the frame callbacks run.
 const frame = async () => {
@@ -116,8 +121,16 @@ const gain = d => d * (1.6 + Math.min(Math.abs(d) / 6, 3));
   assert.equal(phases.at(-1), 'momentumEnd', 'momentum ends');
   assert.equal(requests.filter(r => r.a === 'pointer').length, 0, 'no pointer movement during or after a swipe');
   assert.equal(mostSwipes, 1, 'one swipe request at a time');
+  assert.ok(requests.every(r => !('focus' in r)), 'a touchpad swipe moves content with the finger: no focus field');
   event('pointerup', 1, 100, 120);
   assert.deepEqual(sent, [], 'a swipe is not a click');
+
+  // The clickpad shares this sender and marks its swipes focus: true (on the Mac, focus follows the finger);
+  // a touchpad swipe straight after one doesn't say it.
+  requests.length = 0;
+  vm.runInContext('swipe.began(true); swipe.moved(40, 0); swipe.ended(false);', context);
+  while (pending.length) { answer(); await settle(); }
+  assert.deepEqual(requests.map(r => `${r.p}:${r.focus}`), ['began:true', 'changed:true', 'ended:true', 'momentumEnd:true']);
 
   // A finger landing during momentum stops it.
   requests.length = 0;
@@ -131,6 +144,7 @@ const gain = d => d * (1.6 + Math.min(Math.abs(d) / 6, 3));
   event('pointerdown', 3, 10, 10);
   while (pending.length) { answer(); await settle(); }
   assert.equal(requests.at(-1).p, 'momentumEnd', 'touching the pad stops the momentum');
+  assert.ok(requests.every(r => !('focus' in r)), 'the touchpad swipe after a clickpad one has no focus field');
   assert.equal(frames.length, 0);
   event('pointerup', 3, 10, 10);
   console.log('Touchpad pointer packets, tap ordering, hold and two-finger swipes passed');

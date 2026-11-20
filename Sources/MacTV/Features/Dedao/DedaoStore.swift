@@ -391,11 +391,9 @@ final class DedaoStore: ObservableObject {
         all.filter { $0.id == Section.home.id || !hidden.contains($0.id) }
     }
 
-    /// 设置那一行右边写的："职场发展 等 12 项"，全勾掉了是"只有首页"
+    /// 设置那一行右边写的："职场发展等 12 项"，全勾掉了是"仅首页"
     var sidebarSummary: String {
-        let shown = sections.filter { $0.id != Section.home.id }.map(\.title)
-        if shown.isEmpty { return "仅首页" }
-        return shown.count == 1 ? shown[0] : "\(shown[0]) 等 \(shown.count) 项"
+        ListSummary.chinese(sections.filter { $0.id != Section.home.id }.map(\.title), none: "仅首页")
     }
 
     /// "左边栏显示"那一列：每个分类一项，显示着的打勾
@@ -1146,21 +1144,21 @@ final class DedaoStore: ObservableObject {
         tv?.appShelf.sourceChangedSoon(Self.appID)
     }
 
-    /// 正在听的书、新书推荐至少留一个（全关了主屏顶部就空了）
-    private func toggleListening() {
+    /// 正在听的书、新书推荐至少留一个（全关了主屏顶部就空了）。这三个开关 设置 › Apps › Top Shelf 里也用
+    func toggleListening() {
         guard !DedaoShelfSource.showsListening || DedaoShelfSource.showsNewBooks else { tv?.showToast("至少选择一项"); return }
         DedaoShelfSource.showsListening.toggle()
         shelfSettingsChanged(listening: true)
     }
 
-    private func toggleNewBooks() {
+    func toggleNewBooks() {
         guard !DedaoShelfSource.showsNewBooks || DedaoShelfSource.showsListening else { tv?.showToast("至少选择一项"); return }
         DedaoShelfSource.showsNewBooks.toggle()
         shelfSettingsChanged()
     }
 
     /// 勾上 / 勾掉一个分类：至少留一个
-    private func toggleCategory(_ name: String) {
+    func toggleCategory(_ name: String) {
         var hidden = DedaoShelfSource.hiddenCategories
         let all = Self.shelfCategories(DedaoAPI.savedTopics() ?? []).map(\.name)
         if hidden.contains(name) {
@@ -1907,6 +1905,22 @@ extension DedaoStore {
         if playerOpen { dismissMenu(); dismissLectures() } else { openPlayer() }
         guard openPlayerMenu() else { return false }
         run(.sleepMenu)
+        return true
+    }
+
+    /// "定时关闭"那一层开着：再按一次定时关闭，整个"⋯"菜单收起（规矩见 TVController.toggle），播放界面留着
+    func closeSleepMenu() -> Bool {
+        guard menu?.items.contains(where: { if case .sleep = $0.action { true } else { false } }) == true else { return false }
+        return closePlayerMenu()
+    }
+
+    /// 按住确认弹出的"⋯"菜单（连同倍速、定时关闭那一层）开着
+    var holdMenuOpen: Bool { menu?.anchor == .nowPlaying }
+
+    /// 再按住确认：整个收起（同返回到底、同点"⋯"）
+    func closePlayerMenu() -> Bool {
+        guard holdMenuOpen else { return false }
+        dismissMenu()
         return true
     }
 

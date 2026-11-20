@@ -248,6 +248,8 @@ struct DedaoPlayerScreen: View {
             .padding(.top, 70)
             .padding(.bottom, 54)
             .frame(width: canvas.width, alignment: .leading)
+            // 右边露出一截的那一讲淡出屏幕（见 EdgeFade）；底下的暗色不跟着淡
+            .edgeFade(trailing: true, width: EdgeFadeMask.width(screen: canvas.width, inset: 120, card: size.width, gap: gap))
             .background {
                 // 后面已经模糊了，这里只需要淡淡一层暗色托住文字
                 LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.3), location: 0.2),

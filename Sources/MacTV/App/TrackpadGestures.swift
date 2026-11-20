@@ -2,9 +2,10 @@ import AppKit
 
 /// 双指滑动（规则见 TVController.Module）：一次滑动从手指放上去到惯性停下。
 ///
-/// Mac 的触控板、鼠标滚轮，和手机遥控器触控板上的双指滑动，都走这一处——同样的门槛、同样的惯性、
-/// 同样的声音和震动。触控板来的是系统的滚动事件（main.swift 把它换成 Sample），
-/// 手机来的是它自己量出来的手指移动和惯性（RemoteCommand.swipe）。
+/// Mac 的触控板、鼠标滚轮，手机遥控器触控板上的双指滑动、点按区上的滑动，和 Siri Remote 上的滑动，都走这一处——
+/// 同样的门槛、同样的惯性、同样的声音和震动。触控板来的是系统的滚动事件（main.swift 把它换成 Sample），
+/// 手机和 Siri Remote 来的是它们自己量出来的手指移动和惯性（RemoteCommand.swipe）。
+/// 只有方向分两种（见 towardsNext）：遥控器上焦点跟着手指走，触控板上内容跟着手指走。
 @MainActor
 final class TrackpadGestures {
     /// 一下滚动：移动了多少（点；往左 / 往上为负，和 Mac 的"自然滚动"一样），手指在哪个阶段、惯性在哪个阶段
@@ -17,6 +18,18 @@ final class TrackpadGestures {
         var momentum: Momentum
         /// 触控板（有阶段、有精确的移动量）；滚轮是 false
         var precise: Bool
+        /// 遥控器（Siri Remote、手机的点按区）：焦点跟着手指走，像 Apple TV 的 Siri Remote（见 towardsNext）
+        var focusFollowsFinger = false
+    }
+
+    /// 方向只在这里定：这一段移动（往右 / 往下为正）算不算往"下一个"（往右 / 往下）走。
+    /// - 遥控器（focusFollowsFinger）：焦点跟着手指走，像 Apple TV 的 Siri Remote——往右 / 往下滑是下一个，
+    ///   长条、区域之间、挑选、面板里都一样，手指离开后的惯性也接着往这边走
+    /// - Mac 的触控板、滚轮、手机触控板上的双指滑动：长条和区域之间是内容跟着手走，往左 / 往上滑（为负）是下一个；
+    ///   挑选是光标跟着手走，往右 / 往下滑（为正）是下一个
+    /// 拖进度不走这里：谁来的都是手指往右往前
+    static func towardsNext(_ moved: CGFloat, in module: TVController.Module, focusFollowsFinger: Bool) -> Bool {
+        focusFollowsFinger || module == .picker ? moved > 0 : moved < 0
     }
 
     private weak var tv: TVController?
@@ -33,13 +46,13 @@ final class TrackpadGestures {
 
     init(tv: TVController) { self.tv = tv }
 
-    /// 这一下归不归这里管：应用里（主屏、哔哩哔哩、网易云……）归这里；网页播放器、弹出的设置这些不归，
-    /// 交给原来的处理（比如网页里滚动页面）
+    /// 这一下归不归这里管：应用里（主屏、哔哩哔哩、网易云……）和弹出的面板归这里；网页播放器这些不归，
+    /// 交给原来的处理（比如网页里滚动页面）。
+    /// 弹出的面板（控制中心、设置、添加应用、配对、设置向导、"谁在看"……）是"挑选"（见 module(horizontal:)）：
+    /// 一次滑动走一格，方向跟着手指，惯性不走。Mac 的触控板、手机、Siri Remote 都一样，滑动不会漏到面板下面去
     func feed(_ s: Sample, from source: Feedback.Source) -> Bool {
         // 网页里的滑动是滚动网页；浏览器的工具栏、总览开着时归这里（在里面挑、换卡片）
-        guard let tv, tv.mode == .launcher || tv.browserChromeUp, !tv.pairing, tv.settings == nil, tv.adder == nil,
-              tv.organizer == nil, tv.playbackCheck == nil, tv.topShelfPreferences == nil,
-              tv.setup == nil, tv.profilePicker == nil, tv.controlCenter == nil else { return false }
+        guard let tv, tv.mode == .launcher || tv.browserChromeUp else { return false }
 
         tv.suppressHover = true
         PointerActivity.shared.set(false)
@@ -79,9 +92,11 @@ final class TrackpadGestures {
         let delta = horizontal ? dx : dy
         let next: RemoteCommand.Direction = horizontal ? .right : .down
         let previous: RemoteCommand.Direction = horizontal ? .left : .up
-        // 长条和区域之间：内容跟着手走，往左 / 往上滑（delta 为负）是下一个。
-        // 光标：光标跟着手走，往右 / 往下滑（delta 为正）是下一个
-        let followsCursor = swipeModule == .picker
+        // 往哪走（遥控器焦点跟着手指，触控板内容跟着手指；见 towardsNext）
+        let module = swipeModule
+        let toward = { (moved: CGFloat) -> RemoteCommand.Direction in
+            Self.towardsNext(moved, in: module, focusFollowsFinger: s.focusFollowsFinger) ? next : previous
+        }
 
         if s.precise, swipeModule == .scrub {
             // 拖进度：手指滑多远，进度就跟着走多远（往右滑往前），手指抬起才跳过去
@@ -91,7 +106,7 @@ final class TrackpadGestures {
             scrollTotal += delta
             if abs(scrollTotal) >= 1.0 {
                 // 拖进度的地方（视频、音乐、听书播放中），滚轮左右一格是快进 / 快退（多少秒各应用自己定）；别的地方是走一格
-                tv.handle(swipeModule == .scrub ? .seek(forward: scrollTotal > 0) : .move(scrollTotal < 0 ? next : previous), from: source)
+                tv.handle(swipeModule == .scrub ? .seek(forward: scrollTotal > 0) : .move(toward(scrollTotal)), from: source)
                 scrollTotal = 0
                 scrollReadyAt = Date().addingTimeInterval(0.32)
             }
@@ -102,7 +117,7 @@ final class TrackpadGestures {
             let threshold: CGFloat = !swipedInGesture ? 30
                 : (s.momentum == .none ? 150 : 170 + 35 * CGFloat(flungSteps))
             if abs(scrollTotal) >= threshold {
-                let direction = scrollTotal < 0 ? next : previous
+                let direction = toward(scrollTotal)
                 scrollTotal += scrollTotal < 0 ? threshold : -threshold
                 // 第一格照常（可以走到别的区域，比如在第一张上往左拨进左边栏）；
                 // 接着走的只在这一条里，到头就停
@@ -115,8 +130,7 @@ final class TrackpadGestures {
             guard !swipedInGesture else { return true }
             scrollTotal += delta
             if abs(scrollTotal) >= 28 {
-                let toNext = followsCursor ? scrollTotal > 0 : scrollTotal < 0
-                tv.handle(.move(toNext ? next : previous), from: source)
+                tv.handle(.move(toward(scrollTotal)), from: source)
                 scrollTotal = 0
                 swipedInGesture = true
             }

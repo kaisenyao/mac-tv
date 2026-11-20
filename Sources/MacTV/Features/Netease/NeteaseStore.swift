@@ -101,6 +101,8 @@ final class NeteaseStore: ObservableObject {
             MenuItem(symbol: chosen.contains($0) ? "checkmark" : "", title: $0.title, action: .toggleShelf($0.rawValue))
         }
     }
+    /// 设置 › Apps › Top Shelf 里勾一项：和这里的菜单走同一条（同样的规则、提示、重新取）
+    func toggleShelf(_ raw: String) { run(.toggleShelf(raw)) }
     @Published private(set) var menu: Menu?
     /// 菜单是一层一层进去的（比如"收藏到歌单"里面是一列歌单）：这里记着上一层，Esc 一次只退一层
     private var menuParents: [Menu] = []
@@ -2456,6 +2458,25 @@ extension NeteaseStore {
         guard page?.list.kind != .daily else { return true }
         pageHistory.removeAll()
         openPlaylist(NeteasePlaylist(id: 0, name: "每日推荐", cover: dailySongs.first?.cover, count: dailySongs.count, kind: .daily))
+        return true
+    }
+
+    /// 每日推荐那一页就在最上面（上面没有菜单、播放界面、设置、顶栏）：再按一次每日推荐 = 返回（规矩见 TVController.toggle）
+    func closeDaily() -> Bool {
+        guard remoteReady, menu == nil, !nowPlayingVisible, !typing, topFocus == nil, !settingsOpen,
+              page?.list.kind == .daily else { return false }
+        leavePage()
+        return true
+    }
+
+    /// 按住确认弹出的菜单（卡片、歌单里的歌、播放界面的"⋯"，连同里面的几层）开着
+    var holdMenuOpen: Bool { menu.map { [.card, .song, .nowPlaying].contains($0.anchor) } ?? false }
+
+    /// 再按住确认：把它整个收起（同返回到底、同点"⋯"）。正在给歌单起名字时不算（确认是起好了）
+    func closeHoldMenu() -> Bool {
+        guard holdMenuOpen, !typing else { return false }
+        menuParents = []
+        withAnimation(Motion.focus) { menu = nil }
         return true
     }
 }

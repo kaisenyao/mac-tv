@@ -1464,6 +1464,14 @@ final class BilibiliStore: ObservableObject {
         return true
     }
 
+    /// 卡片菜单开着时再长按确认：收起，回到那张卡片上（同返回）
+    func closeCardMenu() -> Bool {
+        guard focus == .cardMenu else { return false }
+        withAnimation(Motion.focus) { focus = .rows }
+        warmFocused()
+        return true
+    }
+
     func tapCardMenu(_ index: Int) {
         guard focus == .cardMenu, cardMenuActions.indices.contains(index) else { return }
         cardMenuIndex = index
@@ -1630,14 +1638,9 @@ enum BiliSidebar {
         set { UserDefaults.standard.set(choices.filter(newValue.contains).map(\.rawValue), forKey: key) }
     }
 
-    /// 设置那一行右边写的："搜索 等 4 项"、"直播"、"只有首页"
+    /// 设置那一行右边写的："搜索等 4 项"、"直播、搜索"、"直播"、"仅首页"
     static func summary(hidden: Set<BilibiliStore.Tab>) -> String {
-        let shown = choices.filter { !hidden.contains($0) }.map(\.title)
-        switch shown.count {
-        case 0: return "仅首页"
-        case 1: return shown[0]
-        default: return "\(shown[0]) 等 \(shown.count) 项"
-        }
+        ListSummary.chinese(choices.filter { !hidden.contains($0) }.map(\.title), none: "仅首页")
     }
 }
 

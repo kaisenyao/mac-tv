@@ -17,8 +17,9 @@ enum RemoteCommand {
     case pointer(dx: Double, dy: Double), click, scroll(dy: Double)
     /// 手机触控板上一根手指按住不动：和鼠标按住一样（长按出菜单）
     case pointerHold
-    /// 手机触控板上的双指滑动：和 Mac 触控板上滑一样（见 TrackpadGestures）
-    case swipe(dx: Double, dy: Double, phase: String)
+    /// 手机触控板上的双指滑动：和 Mac 触控板上滑一样（见 TrackpadGestures）。
+    /// focusFollowsFinger：遥控器式的滑动（手机的点按区、Siri Remote），焦点跟着手指走；触控板式的是 false
+    case swipe(dx: Double, dy: Double, phase: String, focusFollowsFinger: Bool = false)
     case launch(String), openInBrowser
     case screenOff, screenOn, sleepMac
     case sleepTimer(minutes: Int)
@@ -60,7 +61,9 @@ enum RemoteCommand {
         case "swipe":
             guard let phase = json["p"] as? String, ["began", "changed", "ended", "momentum", "momentumEnd"].contains(phase) else { return nil }
             let clamp = { (v: Double) in max(-2000, min(2000, v.isFinite ? v : 0)) }
-            self = .swipe(dx: clamp(json["dx"] as? Double ?? 0), dy: clamp(json["dy"] as? Double ?? 0), phase: phase)
+            // 点按区上的滑动带着 "focus": true（焦点跟着手指走），触控板上的双指滑动不带
+            self = .swipe(dx: clamp(json["dx"] as? Double ?? 0), dy: clamp(json["dy"] as? Double ?? 0), phase: phase,
+                          focusFollowsFinger: json["focus"] as? Bool ?? false)
         case "launch":
             guard let id = json["id"] as? String else { return nil }
             self = .launch(id)

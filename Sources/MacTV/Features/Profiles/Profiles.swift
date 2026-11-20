@@ -58,13 +58,32 @@ final class ProfileStore {
         save()
     }
 
-    func add(named name: String) -> Profile {
+    /// The colour a new profile gets: the first one nobody has yet.
+    var nextColor: String {
         let used = Set(saved.profiles.map(\.color))
-        let color = Self.colors.first { !used.contains($0) } ?? Self.colors[saved.profiles.count % Self.colors.count]
-        let profile = Profile(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, color: color, store: UUID())
+        return Self.colors.first { !used.contains($0) } ?? Self.colors[saved.profiles.count % Self.colors.count]
+    }
+
+    func add(named name: String) -> Profile {
+        let profile = Profile(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, color: nextColor, store: UUID())
         saved.profiles.append(profile)
         save()
         return profile
+    }
+
+    /// Renames a profile; a blank name keeps the old one.
+    func rename(_ id: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let index = saved.profiles.firstIndex(where: { $0.id == id }) else { return }
+        saved.profiles[index].name = String(trimmed.prefix(ProfileName.maxLength))
+        save()
+    }
+
+    /// Gives a profile one of the six colours.
+    func setColor(_ color: String, for id: String) {
+        guard Self.colors.contains(color), let index = saved.profiles.firstIndex(where: { $0.id == id }) else { return }
+        saved.profiles[index].color = color
+        save()
     }
 
     /// Removes a profile, its app list and its sign-ins. The first profile stays.
@@ -98,6 +117,27 @@ struct ProfilePicker: Equatable {
     var naming: String?
 }
 
+/// Typing a profile's name, on "Who's Watching?" and in Settings: the keyboard, or the phone's Type on TV.
+enum ProfileName {
+    static let maxLength = 20
+
+    /// Applies one command to the name being typed. True when it finishes the name: Return, or Select.
+    static func apply(_ command: RemoteCommand, to name: inout String) -> Bool {
+        switch command {
+        case .text(let text):
+            name = String((name + text.replacingOccurrences(of: "\n", with: "")).prefix(maxLength))
+            return text.hasSuffix("\n")
+        case .deleteBackward:
+            if !name.isEmpty { name.removeLast() }
+            return false
+        case .select:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 extension TVController {
     func openProfiles() {
         let index = profiles.all.firstIndex { $0.id == profile.id } ?? 0
@@ -110,13 +150,40 @@ extension TVController {
         guard id != profile.id else { return }
         goHome()
         profiles.select(id)
+        loadCurrentProfile()
+        setFocus(.app(0))
+    }
+
+    /// Removes a profile, its apps and its sign-ins. When it was the one watching, the first profile takes over.
+    func removeProfile(_ id: String) {
+        let wasWatching = id == profile.id
+        profiles.remove(id)
+        if wasWatching { loadCurrentProfile() } else { objectWillChange.send() }
+    }
+
+    func renameProfile(_ id: String, to name: String) {
+        profiles.rename(id, to: name)
+        profileEdited()
+    }
+
+    func setProfileColor(_ color: String, for id: String) {
+        profiles.setColor(color, for: id)
+        profileEdited()
+    }
+
+    /// The store isn't observed, so a changed name or colour is published here.
+    private func profileEdited() {
+        if profiles.current != profile { profile = profiles.current } else { objectWillChange.send() }
+    }
+
+    /// Takes on the store's current profile: their apps, and the apps that keep a sign-in start over.
+    private func loadCurrentProfile() {
         profile = profiles.current
         library = AppLibrary(profileID: profile.id, folder: library.storageFolder)
         reloadServices()
         // 哔哩哔哩、主屏顶部按这个人的账号重新来（不留上一个人的登录、关注、观看记录）
         bilibiliStore.profileChanged()
         appShelf.reset()
-        setFocus(.app(0))
     }
 
     func handleProfiles(_ command: RemoteCommand) {
@@ -126,24 +193,15 @@ extension TVController {
         if case .select = command {} else { picker.confirmingRemove = false }
 
         if var name = picker.naming {
-            switch command {
-            case .text(let text):
-                name += text.replacingOccurrences(of: "\n", with: "")
-                picker.naming = String(name.prefix(20))
-                if text.hasSuffix("\n") { profilePicker = picker; createProfile(); return }
-            case .deleteBackward:
-                if !name.isEmpty { name.removeLast() }
-                picker.naming = name
-            case .select:
-                profilePicker = picker
-                createProfile()
-                return
-            case .back:
+            if case .back = command {
                 picker.naming = nil
-            default:
-                break
+                profilePicker = picker
+                return
             }
+            let done = ProfileName.apply(command, to: &name)
+            picker.naming = name
             profilePicker = picker
+            if done { createProfile() }
             return
         }
 
@@ -182,9 +240,7 @@ extension TVController {
             picker.onRemove = false
         } else if remove {
             if picker.confirmingRemove {
-                let removed = all[index]
-                profiles.remove(removed.id)
-                if removed.id == profile.id { profile = profiles.current; library = AppLibrary(profileID: profile.id, folder: library.storageFolder); reloadServices() }
+                removeProfile(all[index].id)
                 picker = ProfilePicker(index: max(0, index - 1))
             } else {
                 picker.confirmingRemove = true
@@ -293,17 +349,25 @@ struct ProfilesScreen: View {
 
     private func naming(_ name: String) -> some View {
         VStack(spacing: 30) {
-            ProfileAvatar(profile: Profile(id: "new", name: name.isEmpty ? "?" : name,
-                                           color: ProfileStore.colors[tv.profiles.all.count % ProfileStore.colors.count]))
-            HStack(spacing: 0) {
-                Text(name.isEmpty ? "Name" : name).opacity(name.isEmpty ? 0.4 : 1)
-                Rectangle().frame(width: 3, height: 40).opacity(0.8).padding(.leading, 4)
-            }
-            .font(.system(size: 40, weight: .semibold))
-            .padding(.horizontal, 36)
-            .frame(minWidth: 520, minHeight: 84)
-            .tvPanel(in: Capsule())
+            ProfileAvatar(profile: Profile(id: "new", name: name.isEmpty ? "?" : name, color: tv.profiles.nextColor))
+            ProfileNameField(name: name)
             ShelfButton(title: "Create Profile", focused: !name.isEmpty, glass: false) { tv.handle(.select) }
         }
+    }
+}
+
+/// The name being typed, with a caret: "Who's Watching?" and Settings › Profiles.
+struct ProfileNameField: View {
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(name.isEmpty ? "Name" : name).opacity(name.isEmpty ? 0.4 : 1)
+            Rectangle().frame(width: 3, height: 40).opacity(0.8).padding(.leading, 4)
+        }
+        .font(.system(size: 40, weight: .semibold))
+        .padding(.horizontal, 36)
+        .frame(minWidth: 520, minHeight: 84)
+        .tvPanel(in: Capsule())
     }
 }

@@ -1501,6 +1501,49 @@ extension BilibiliNativePlayer {
         showShelf(.episodes)
         return true
     }
+
+    // 再按一次同一个快捷键：它拉出来的那一样正开着就收起，和按返回一样（规矩见 TVController.toggle）
+
+    /// 清晰度栏开着：收起（同返回、往上推回去）
+    func closeQualityMenu() -> Bool {
+        guard qualityMenuVisible else { return false }
+        qualityMenuVisible = false
+        return true
+    }
+
+    /// 快捷键拉出来的面板正停在这一行上、开着它的小列表（投满了的投币没有小列表，停在这一行上就是）
+    func panelShows(_ row: PanelRow) -> Bool {
+        guard panelVisible, panelRow == row else { return false }
+        switch row {
+        case .speed: return panelList == .speed
+        case .subtitles: return panelList == .subtitles
+        case .favorite: return panelList == .unfavorite
+        case .coin: return panelList == .coins || (panelList == nil && coinChoices.isEmpty)
+        case .up, .like, .episodes, .danmaku: return false
+        }
+    }
+
+    /// 面板正开着这一行（见 panelShows）：整个推回去（小列表连同面板，快捷键拉出来的是整个）。取消收藏的确认就这样作罢
+    func closePanel(showing row: PanelRow) -> Bool {
+        guard panelShows(row) else { return false }
+        closePanel()
+        return true
+    }
+
+    /// 下面那一块开着、焦点在选集那一排：收起（同返回；从面板进来的也不回面板，按的是选集）
+    func closeEpisodes() -> Bool {
+        guard relatedVisible, shelf == .episodes else { return false }
+        relatedVisible = false
+        shelfFromPanel = false
+        return true
+    }
+
+    /// 测试用：当作这个视频已经开着、停在开头（不取流、不联网），有这几档清晰度
+    func pretendOpen(_ video: BiliVideo, qualities: [Int]) {
+        show(video, paused: true)
+        self.qualities = qualities
+        qualityID = qualities.first ?? 0
+    }
 }
 
 /// 系统播放器的画面
@@ -1650,6 +1693,9 @@ struct BilibiliPlayerScreen: View {
             // 走一格的动画由按键那里给（BiliMotion.step：连着走时短一些），和列表页的卡片排一样
             .offset(x: -CGFloat(max(0, focus - 1)) * (cardWidth + gap))
         }
+        // 右边露出半张的那张卡片淡出屏幕（见 EdgeFade）；上下多留一点，选中卡片往下让的标题不被切掉
+        .frame(width: w, alignment: .leading)
+        .edgeFade(trailing: true, width: EdgeFadeMask.width(screen: w, inset: w * 0.05, card: cardWidth, gap: gap), overflow: 24)
     }
 
     /// 底下的标题和进度条现在露着（字幕要往上让开）

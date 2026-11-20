@@ -717,46 +717,9 @@ extension TVController {
         case .mute: handle(.mute, from: .siriRemote)
         case .power: handle(displaysSleeping ? .screenOn : .screenOff, from: .siriRemote)
         case .wheel(let step): handle(.wheel(step), from: .siriRemote)
+        // 和手机点按区上的滑动一样交给 TrackpadGestures：焦点跟着手指走（像 Apple TV），弹出的面板里也是那里管（一次滑动走一格）
         case .swipe(let dx, let dy, let phase):
-            // 控制中心、设置这些弹出的面板不归 TrackpadGestures 管（滑了没反应）：在这里滑一下走一格
-            if mode == .launcher, sheets.top != nil {
-                if let direction = SiriRemoteInput.sheetSwipe.feed(dx: dx, dy: dy, phase: phase) {
-                    handle(.move(direction), from: .siriRemote)
-                }
-                return
-            }
-            handle(.swipe(dx: dx, dy: dy, phase: phase), from: .siriRemote)
-        }
-    }
-}
-
-extension SiriRemoteInput {
-    static var sheetSwipe = SiriRemoteSheetSwipe()
-}
-
-/// A swipe on a sheet (Control Center, Settings…): one step of focus per swipe, the way the
-/// finger went, like Apple TV. The glide afterwards doesn't move anything.
-struct SiriRemoteSheetSwipe {
-    /// 滑过这么多点（触控面宽度的 12%）走一格
-    static let threshold = 60.0
-    private var dx = 0.0, dy = 0.0
-    private var moved = false
-
-    mutating func feed(dx: Double, dy: Double, phase: String) -> RemoteCommand.Direction? {
-        switch phase {
-        case "began":
-            (self.dx, self.dy, moved) = (0, 0, false)
-            return nil
-        case "changed":
-            guard !moved else { return nil }
-            self.dx += dx
-            self.dy += dy
-            guard max(abs(self.dx), abs(self.dy)) >= Self.threshold else { return nil }
-            moved = true
-            if abs(self.dx) > abs(self.dy) { return self.dx > 0 ? .right : .left }
-            return self.dy > 0 ? .down : .up
-        default:
-            return nil
+            handle(.swipe(dx: dx, dy: dy, phase: phase, focusFollowsFinger: true), from: .siriRemote)
         }
     }
 }

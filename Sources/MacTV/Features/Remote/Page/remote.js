@@ -91,6 +91,8 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) letGo
 const ownTouch = b => b.closest('.mode, #clickpad');
 document.addEventListener('pointerdown', e => {
   const b = e.target.closest('button');
+  // 按了一个键（返回、主屏、音量……）：滑完的惯性停下，不会接着甩到按完以后的界面上（和 Siri Remote 一样；swipe 见下面的"滑动"）
+  if (b) swipe.stop();
   if (!b || b.disabled || ownTouch(b)) return;
   const art = b.classList.contains('drawn') ? b.querySelector('.art') : null;
   // 弹出页里能上下滚：等 70 毫秒再亮，手指是来滚动的（系统收走了这一下）就不亮；没等到就点完的，抬手时亮一下再淡掉
@@ -982,8 +984,8 @@ $('#revoke-all').onclick = async () => {
 
 
 // 一按就送的键：播放 / 暂停、静音、音量，Brave / IINA 那一排和打字页里的键
-document.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => {
-  if (b.dataset.held) { delete b.dataset.held; return; }   // 刚才按住连发过了，松手不再多发一次
+document.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', e => {
+  if (b.hasAttribute('data-repeat') && e.detail) return;   // 音量：手指按下时已经送了（见下面）；这里只接键盘 / 辅助功能
   send(b.dataset.a);
 }));
 // 电源：屏幕睡着时叫醒它，醒着时关掉
@@ -992,17 +994,17 @@ $('#power').addEventListener('click', () => {
   screenAsleep = !screenAsleep;
 });
 
-// 按住连发：音量的上下两半（和按住键盘上的键一样，一直按就一直调）。连发的每一下和转盘走一格一样轻轻震一下
+// 按住连发：音量的上下两半（和按住键盘上的键、Siri Remote 的音量键一样）：按下去就调一格，按住 0.45 秒起
+// 每 0.16 秒再调一格。连发的每一下和转盘走一格一样轻轻震一下
 document.querySelectorAll('[data-repeat]').forEach(b => {
   let timer = null;
   const stop = () => { clearTimeout(timer); clearInterval(timer); timer = null; };
   b.addEventListener('pointerdown', () => {
     stop();
-    delete b.dataset.held;   // 上一次按住后没有等到松手的 click（iPhone 上长按有时没有）：别把这一下吞掉
+    send(b.dataset.a);
     timer = setTimeout(() => {
-      b.dataset.held = '1';
       haptic('tick');
-      send(b.dataset.a);
+      send(b.dataset.a, {}, true);
       timer = setInterval(() => { haptic('tick'); send(b.dataset.a, {}, true); }, 160);
     }, 450);
   });
@@ -1747,8 +1749,74 @@ function tab(which, animate = true) {
   tab(first, false);
 })();
 
-// Clickpad：点外圈的四边走一格（按住一直走），在上面任何地方滑一下也走一格，绕着外圈转是转盘，
-// 点中间是确认（按住是菜单）；点在外圈外面什么都不做。
+// 滑动：触控板上的双指滑动和点按区上的滑动都这样送（和 Siri Remote 一样，交给 Mac 上同一套滑动规则，
+// 见 TrackpadGestures）。几个阶段按顺序送；同一阶段里连着的移动合在一起送，一条都不丢。
+// 手指滑着离开：接着送"惯性"，一帧一帧慢下来（像 Mac 的触控板）；手指再放上去就停。
+// 点按区上的滑动每一条都带着 focus: true：Mac 上焦点跟着手指走（像 Siri Remote）；
+// 触控板上的双指滑动不带，内容跟着手指走（像 Mac 的触控板）
+const swipe = (() => {
+  const queue = [];
+  let busy = false, focus = false;
+  const put = (p, dx = 0, dy = 0) => {
+    const last = queue[queue.length - 1];
+    if (last && last.p === p && last.focus === focus && (p === 'changed' || p === 'momentum')) { last.dx += dx; last.dy += dy; }
+    else queue.push({ p, dx, dy, focus });
+    pump();
+  };
+  const pump = async () => {
+    if (busy) return;
+    busy = true;
+    while (queue.length) {
+      const item = queue.shift();
+      const body = { a: 'swipe', p: item.p, dx: Math.round(item.dx * 10) / 10, dy: Math.round(item.dy * 10) / 10 };
+      if (item.focus) body.focus = true;
+      await api('/cmd', body).catch(() => {});
+    }
+    busy = false;
+  };
+  // 惯性：手指离开时的速度（最后 90 毫秒走了多远），一帧一帧慢下来
+  let inertia = 0, samples = [];
+  const glide = () => {
+    const now = performance.now();
+    const recent = samples.filter(s => now - s.t < 90);
+    if (recent.length < 2) { put('momentumEnd'); return; }
+    const dt = Math.max(16, recent[recent.length - 1].t - recent[0].t);
+    const velocity = { x: recent.reduce((a, s) => a + s.dx, 0) / dt, y: recent.reduce((a, s) => a + s.dy, 0) / dt };
+    if (Math.hypot(velocity.x, velocity.y) < 0.25) { put('momentumEnd'); return; }
+    let last = now, acc = { x: 0, y: 0 }, sentAt = now;
+    const frame = t => {
+      const step = Math.min(50, t - last); last = t;
+      const decay = Math.pow(0.9965, step);          // 每毫秒慢一点（像 Mac 的惯性）
+      velocity.x *= decay; velocity.y *= decay;
+      acc.x += velocity.x * step; acc.y += velocity.y * step;
+      if (t - sentAt >= 33) { put('momentum', acc.x, acc.y); acc = { x: 0, y: 0 }; sentAt = t; }
+      if (Math.hypot(velocity.x, velocity.y) < 0.04) { inertia = 0; put('momentumEnd'); return; }
+      inertia = requestAnimationFrame(frame);
+    };
+    inertia = requestAnimationFrame(frame);
+  };
+  return {
+    // followsFinger：点按区（焦点跟着手指走）；触控板不传
+    began(followsFinger = false) { samples = []; focus = followsFinger; put('began'); },
+    // 移动了多少（点；往左 / 往上为负）
+    moved(dx, dy) {
+      samples.push({ t: performance.now(), dx, dy });
+      if (samples.length > 12) samples.shift();
+      put('changed', dx, dy);
+    },
+    // coast：手指是滑着抬起来的，接着是惯性；被系统收走、被一下按键打断的不甩
+    ended(coast) { put('ended'); if (coast) glide(); else put('momentumEnd'); },
+    // 手指放上去：正在甩的惯性停下
+    stop() {
+      if (!inertia) return;
+      cancelAnimationFrame(inertia); inertia = 0;
+      put('momentumEnd');
+    },
+  };
+})();
+
+// Clickpad：点外圈的四边走一格（按住一直走），绕着外圈转是转盘，在上面任何地方滑是滑动（和 Siri Remote 的
+// 触控面一样：焦点跟着手指走，松手接着甩），点中间是确认（按住是菜单）；点在外圈外面什么都不做。
 // 手指按着哪一块，哪一块就是按下的样子：中间一种；外圈按手指的方向分八种（压下去那边暗、对面亮一点），
 // 手指在外圈上挪动、转圈时跟着手指走
 (() => {
@@ -1784,86 +1852,122 @@ function tab(which, animate = true) {
     showArt(centerArt, part === 'ok' ? 'pressed' : 'normal');
   };
 
-  let start = null, timer = null, repeated = false;
-  // 转盘（和 iPod 的点按转盘一个做法）：手指绕着圆心转，累计转过的角度，每转过一小段算一格。
-  // 顺时针 = 往后 / 往下 / 快进，逆时针相反。中间的 OK 区域不算；一旦转起来，这次就不再当成按键或滑动。
-  const WHEEL_UNIT = 0.384;     // 每格的弧度（22 度，一圈 16 格：不会一碰就走好几格）
-  const WHEEL_STARTS = 0.15;    // 转过这么多才算"在转"
-  let wheel = null;
-  const stop = () => { clearTimeout(timer); clearInterval(timer); timer = null; };
+  // 认手势（和 Siri Remote 的触控面一个做法，见 SiriRemote.swift 的 SiriRemoteTouch）：
+  //   手指放在外圈或中间上先是"按"：没挪开就松手是点了一下；按着不动是按住（方向 0.35 秒、OK 0.5 秒，和键盘一样。
+  //   按住以后由 Mac 按那个键的规矩来做：方向一直走，网易云播放界面里快进 / 快退；OK 是卡片菜单 / 右边的面板）。
+  //   按住了就是按键：手指再怎么挪都不转、不滑，直到松开。手指挪开了（SLOP）就不再是按，松手也不算点了一下。
+  //   挪动的这一段先什么都不发，直到看得出是
+  //     转盘：手指一直离圆心够远，0.6 秒里绕了至少 25 度（这一段不算格数）；
+  //     滑动：四分之一秒里走过转盘直径的 22%。跟着手指送（见 swipe），松手接着甩。
+  //   比这慢的（拇指搭着慢慢挪、手指一滚）什么都不是：0.6 秒还没认出来就从这里重新算。
+  //   另一根手指按下来是一下按键，它说了算：前一根手指正在滑的停下（不甩），正在转的停下。
+  // 转盘（和 iPod 的点按转盘一样）：每转过一格送一格，顺时针 = 往后 / 往下 / 快进，逆时针相反。
+  // 离圆心太近（中间的 OK 上）角度乱跳，不算
+  const WHEEL_UNIT = 0.384;          // 每格的弧度（22 度，一圈 16 格：手机上的转盘大，比 Siri Remote 的格子密）
+  const TURN_START = 25 * Math.PI / 180, TURN_SPAN = 600;
+  const SWIPE_WINDOW = 250, SWIPE_DISTANCE = 0.22;
+  // 滑过整个转盘直径算多少点：和 Siri Remote 滑过整个触控面一样（SiriRemoteTouch.swipeScale）
+  const SWIPE_POINTS = 500;
+  const SLOP = 24;                   // 手指挪了这么多（像素）就不算按了
+  // 占转盘直径的比例：离圆心这么近不算角度；转圈时手指一直离圆心至少这么远
+  // （转盘的直径，不是整块点按区：那块比转盘宽，会把界线挤到外圈最边上）
+  const DEAD = 0.19, RING = 0.28;
+  const turnBy = (a, b) => { let d = b - a; if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
+  const keyOf = zone => zone === 'ok' ? 'select' : zone;
+  // 手指的一个位置：在哪、什么时候、离圆心多远、什么角度，和转盘的直径
+  const sample = e => {
+    const { angle, off, radius } = where(e.clientX, e.clientY);
+    return { x: e.clientX, y: e.clientY, t: performance.now(), angle, off, size: radius * 2 };
+  };
+  // 还没认出来的这一段
+  const stroke = p => ({ startedAt: p.t, points: [p], last: p, sweep: 0, minOff: p.off });
+  // 按在点按区上的手指（一次只认一根）
+  let finger = null;
+  const notPress = f => { f.pressing = false; clearTimeout(f.timer); f.timer = 0; };
+  const turnWheel = (f, p) => {
+    show(dir8(p.angle));               // 转盘：按下的那一块跟着手指转
+    if (p.off >= p.size * DEAD && f.last.off >= p.size * DEAD) {
+      f.sum += turnBy(f.last.angle, p.angle);
+      const steps = Math.trunc(f.sum / WHEEL_UNIT);
+      if (steps) {
+        f.sum -= steps * WHEEL_UNIT;
+        for (let i = 0; i < Math.abs(steps); i++) sendWheel(Math.sign(steps));
+      }
+    }
+    f.last = p;
+  };
   pad.addEventListener('pointerdown', e => {
     pad.setPointerCapture(e.pointerId);
-    const { angle } = where(e.clientX, e.clientY);
-    start = { x: e.clientX, y: e.clientY, zone: zoneAt(e.clientX, e.clientY) };
-    repeated = false;
-    wheel = { angle, sum: 0, total: 0, turning: false };
-    if (start.zone) {
-      // 按下的那一刻：按下的样子、震一下
-      show(start.zone === 'ok' ? 'ok' : dir8(angle));
-      haptic('press');
-      // 按住：方向 0.35 秒、OK 0.5 秒（和键盘一样）。按住以后由 Mac 按那个键的规矩来做：
-      // 方向是一直走（网易云播放界面里是快进 / 快退），OK 是卡片菜单 / 右边的面板
-      const k = start.zone === 'ok' ? 'select' : start.zone;
-      timer = setTimeout(() => { repeated = true; timer = null; press.hold(k); }, start.zone === 'ok' ? 500 : 350);
-    }
+    swipe.stop();                      // 手指放上去：滑完的惯性停下
+    end(false);                        // 另一根手指按下来：前一根手指的滑动、转圈、按都停下
+    const p = sample(e), zone = zoneAt(e.clientX, e.clientY);
+    const f = finger = { id: e.pointerId, zone, from: p, pressing: !!zone, held: false, timer: 0, gesture: null,
+                         stroke: stroke(p), last: p, sum: 0 };
+    if (!zone) return;
+    // 按下的那一刻：按下的样子、震一下
+    show(zone === 'ok' ? 'ok' : dir8(p.angle));
+    haptic('press');
+    f.timer = setTimeout(() => { f.timer = 0; f.held = true; press.hold(keyOf(zone)); }, zone === 'ok' ? 500 : 350);
   });
   pad.addEventListener('pointermove', e => {
-    if (!start || !wheel) return;
-    const { angle, off, radius } = where(e.clientX, e.clientY);
-    const size = radius * 2;              // 转盘的直径（不是整块点按区：那块比转盘宽，会把下面的界线挤到外圈最边上）
-    if (off >= size * 0.19) {             // 在中间按钮上划过不算
-      let d = angle - wheel.angle;
-      if (d > Math.PI) d -= Math.PI * 2;
-      if (d < -Math.PI) d += Math.PI * 2;
-      wheel.angle = angle;
-      wheel.sum += d;
-      wheel.total += Math.abs(d);
-      // 直着划过去角度也会变一点：只有离圆心够远、并且确实绕了一段，才认作转盘
-      if (!wheel.turning && wheel.total > WHEEL_STARTS && off > size * 0.28 &&
-          Math.hypot(e.clientX - start.x, e.clientY - start.y) < wheel.total * off * 1.6 + 30) {
-        wheel.turning = true;
-        wheel.sum = 0;
-        stop();
-        if (repeated) { press.release(start.zone === 'ok' ? 'select' : start.zone); repeated = false; }
-      }
-      if (wheel.turning) {
-        show(dir8(angle));              // 转盘：按下的那一块跟着手指转
-        const steps = Math.trunc(wheel.sum / WHEEL_UNIT);
-        if (steps) {
-          wheel.sum -= steps * WHEEL_UNIT;
-          for (let i = 0; i < Math.abs(steps); i++) sendWheel(Math.sign(steps));
-        }
-        return;
-      }
+    const f = finger;
+    if (!f || e.pointerId !== f.id) return;
+    const p = sample(e);
+    if (f.pressing && Math.hypot(p.x - f.from.x, p.y - f.from.y) > SLOP) notPress(f);   // 挪开了：不是按了
+    const follow = () => { if (f.zone && f.zone !== 'ok') show(dir8(p.angle)); };   // 按在外圈上挪动：按下的方向跟着手指
+    if (f.held) { follow(); return; }  // 按住了：是按键，手指怎么挪都不算
+    if (f.gesture === 'turn') { turnWheel(f, p); return; }
+    if (f.gesture === 'swipe') {
+      const scale = SWIPE_POINTS / p.size;
+      swipe.moved((p.x - f.last.x) * scale, (p.y - f.last.y) * scale);
+      f.last = p;
+      follow();
+      return;
     }
-    if (start.zone && start.zone !== 'ok') show(dir8(angle));   // 按在外圈上挪动：按下的方向跟着手指
-    if (!repeated && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 24) stop();
+    // 还没认出来：先看是不是在转，再看是不是在滑
+    const s = f.stroke;
+    if (p.off >= p.size * DEAD && s.last.off >= p.size * DEAD) s.sweep += turnBy(s.last.angle, p.angle);
+    s.points.push(p);
+    s.last = p;
+    s.minOff = Math.min(s.minOff, p.off);
+    if (s.minOff >= p.size * RING && Math.abs(s.sweep) >= TURN_START) {
+      notPress(f);
+      f.gesture = 'turn';
+      f.last = p;
+      show(dir8(p.angle));
+      return;
+    }
+    const from = s.points.find(q => p.t - q.t <= SWIPE_WINDOW);
+    if (Math.hypot(p.x - from.x, p.y - from.y) >= p.size * SWIPE_DISTANCE) {
+      notPress(f);
+      f.gesture = 'swipe';
+      f.last = p;
+      if (!f.zone) haptic('tick');     // 滑起来了：按下时没震过（按在转盘外面）才轻轻震一下，一下不震两次
+      const scale = SWIPE_POINTS / p.size;
+      swipe.began(true);               // 焦点跟着手指走（和 Siri Remote 一样）
+      swipe.moved((p.x - from.x) * scale, (p.y - from.y) * scale);
+      follow();
+      return;
+    }
+    if (p.t - s.startedAt > TURN_SPAN) f.stroke = stroke(p);   // 慢慢挪：从这里重新算
+    follow();
   });
-  pad.addEventListener('pointerup', e => {
-    if (!start) return;
-    stop();
+  // 手指离开（lifted：是抬起来的），或者这一下被打断了（被系统收走、页面切走、另一根手指按下来）
+  function end(lifted) {
+    const f = finger;
+    if (!f) return;
+    finger = null;
+    clearTimeout(f.timer);
     show(null);
-    if (wheel && wheel.turning) { start = null; wheel = null; return; }   // 刚才是在转盘，不是按键也不是滑动
-    wheel = null;
-    const dx = e.clientX - start.x, dy = e.clientY - start.y;
-    let zone = start.zone;
-    const heldZone = repeated ? start.zone : null;
-    start = null;
-    repeated = false;
-    if (heldZone) { press.release(heldZone === 'ok' ? 'select' : heldZone); return; }   // 按住过：松开
-    if (Math.hypot(dx, dy) > 28) {
-      if (!zone) haptic('tick');   // 滑了一下：按下时没震过（按在转盘外面）才轻轻震一下，一下不震两次
-      zone = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
-    } else if (!zone) return;
-    press.tap(zone === 'ok' ? 'select' : zone);
-  });
-  const cancelHold = () => {
-    if (start && repeated) press.release(start.zone === 'ok' ? 'select' : start.zone);
-    stop(); start = null; wheel = null; repeated = false; show(null);
-  };
-  pad.addEventListener('pointercancel', cancelHold);
-  pad.addEventListener('lostpointercapture', cancelHold);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') cancelHold(); });
+    if (f.held) press.release(keyOf(f.zone));                  // 按住过：松开
+    else if (f.gesture === 'swipe') swipe.ended(lifted);       // 滑着抬起来的接着甩；被打断的不甩
+    else if (lifted && f.pressing) press.tap(keyOf(f.zone));   // 没挪开就松手：点了一下
+  }
+  pad.addEventListener('pointerup', e => { if (finger && e.pointerId === finger.id) end(true); });
+  const cancel = e => { if (finger && e.pointerId === finger.id) end(false); };
+  pad.addEventListener('pointercancel', cancel);
+  pad.addEventListener('lostpointercapture', cancel);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') { end(false); swipe.stop(); } });
 })();
 
 // 触控板：和 Mac 的触控板一样。
@@ -1906,52 +2010,7 @@ function tab(which, animate = true) {
     sendPointer();
   });
 
-  // 两根手指：滑动的几个阶段按顺序送；同一阶段里连着的移动合在一起送，一条都不丢
-  const swipeQueue = [];
-  let swipeBusy = false;
-  const queueSwipe = (p, dx = 0, dy = 0) => {
-    const last = swipeQueue[swipeQueue.length - 1];
-    if (last && last.p === p && (p === 'changed' || p === 'momentum')) { last.dx += dx; last.dy += dy; }
-    else swipeQueue.push({ p, dx, dy });
-    pumpSwipe();
-  };
-  const pumpSwipe = async () => {
-    if (swipeBusy) return;
-    swipeBusy = true;
-    while (swipeQueue.length) {
-      const item = swipeQueue.shift();
-      await api('/cmd', { a: 'swipe', p: item.p, dx: Math.round(item.dx * 10) / 10, dy: Math.round(item.dy * 10) / 10 }).catch(() => {});
-    }
-    swipeBusy = false;
-  };
-
-  // 惯性：手指离开时的速度，一帧一帧慢下来
-  let inertia = 0, velocity = { x: 0, y: 0 }, samples = [];
-  const stopInertia = (tell) => {
-    if (!inertia) return;
-    cancelAnimationFrame(inertia); inertia = 0;
-    if (tell) queueSwipe('momentumEnd');
-  };
-  const startInertia = () => {
-    const now = performance.now();
-    const recent = samples.filter(s => now - s.t < 90);
-    if (recent.length < 2) { queueSwipe('momentumEnd'); return; }
-    const dt = Math.max(16, recent[recent.length - 1].t - recent[0].t);
-    velocity = { x: recent.reduce((a, s) => a + s.dx, 0) / dt, y: recent.reduce((a, s) => a + s.dy, 0) / dt };
-    if (Math.hypot(velocity.x, velocity.y) < 0.25) { queueSwipe('momentumEnd'); return; }
-    let last = now, acc = { x: 0, y: 0 }, sentAt = now;
-    const frame = t => {
-      const step = Math.min(50, t - last); last = t;
-      const decay = Math.pow(0.9965, step);          // 每毫秒慢一点（像 Mac 的惯性）
-      velocity.x *= decay; velocity.y *= decay;
-      acc.x += velocity.x * step; acc.y += velocity.y * step;
-      if (t - sentAt >= 33) { queueSwipe('momentum', acc.x, acc.y); acc = { x: 0, y: 0 }; sentAt = t; }
-      if (Math.hypot(velocity.x, velocity.y) < 0.04) { inertia = 0; queueSwipe('momentumEnd'); return; }
-      inertia = requestAnimationFrame(frame);
-    };
-    inertia = requestAnimationFrame(frame);
-  };
-
+  // 两根手指：滑动（怎么送、手指离开后的惯性，见上面的 swipe）
   const centre = () => {
     let x = 0, y = 0;
     for (const f of fingers.values()) { x += f.x; y += f.y; }
@@ -1961,7 +2020,7 @@ function tab(which, animate = true) {
 
   tp.addEventListener('pointerdown', e => {
     tp.setPointerCapture(e.pointerId);
-    stopInertia(true);                               // 手指放上去：正在滑的惯性停下（和触控板一样）
+    swipe.stop();                                    // 手指放上去：正在滑的惯性停下（和触控板一样）
     if (fingers.size === 0) {
       travel = 0; downAt = Date.now(); multi = false; held = false;
       clearTimeout(holdTimer);
@@ -1974,8 +2033,7 @@ function tab(which, animate = true) {
       multi = true;
       clearTimeout(holdTimer);
       swipeFrom = centre();
-      samples = [];
-      queueSwipe('began');
+      swipe.began();
     }
   });
   tp.addEventListener('pointermove', e => {
@@ -1988,11 +2046,7 @@ function tab(which, animate = true) {
       const c = centre();
       const mx = (c.x - swipeFrom.x) * GAIN, my = (c.y - swipeFrom.y) * GAIN;
       swipeFrom = c;
-      if (mx || my) {
-        samples.push({ t: performance.now(), dx: mx, dy: my });
-        if (samples.length > 12) samples.shift();
-        queueSwipe('changed', mx, my);
-      }
+      if (mx || my) swipe.moved(mx, my);
     } else if (fingers.size === 1 && !multi && !held) {
       const gain = 1.6 + Math.min(Math.hypot(dx, dy) / 6, 3);
       pointerAcc.dx += dx * gain; pointerAcc.dy += dy * gain;
@@ -2003,8 +2057,7 @@ function tab(which, animate = true) {
     if (!fingers.delete(e.pointerId)) return;
     if (swipeFrom && fingers.size < 2) {             // 双指离开：这次滑动结束，接着是惯性
       swipeFrom = null;
-      queueSwipe('ended');
-      if (e.type === 'pointerup') startInertia(); else queueSwipe('momentumEnd');
+      swipe.ended(e.type === 'pointerup');
     }
     if (fingers.size === 0) {
       clearTimeout(holdTimer);

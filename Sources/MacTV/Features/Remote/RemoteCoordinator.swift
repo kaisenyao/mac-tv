@@ -61,6 +61,22 @@ final class RemoteCoordinator: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "phonePaired") }
     }
 
+    /// The paired phones. The remote server checks every request against this same store, so a phone
+    /// removed in Settings is refused at once. Tests put in their own before first use.
+    lazy var pairingStore = PairingStore()
+
+    /// Settings › iPhone › Paired Devices: forgets one phone; it has to scan the code again.
+    func removePairedDevice(_ id: String) {
+        do {
+            try pairingStore.revoke(id: id)
+            if pairingStore.activeDevices().isEmpty { phonePaired = false }
+        } catch {
+            Log.remote.failure("Removing a paired phone", error)
+            tv?.showToast("Couldn’t Remove the Device")
+        }
+        objectWillChange.send()
+    }
+
     init(tv: TVController? = nil) {
         self.tv = tv
     }

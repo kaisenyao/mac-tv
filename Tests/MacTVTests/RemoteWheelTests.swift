@@ -38,15 +38,20 @@ struct RemoteWheelTests {
         #expect(RemoteCommand(json: ["a": "press", "k": "up", "p": "wiggle"]) == nil)
     }
 
-    /// 手机触控板的双指滑动：阶段要认得，移动量有上限（防止一条坏数据把焦点甩飞）
+    /// 手机触控板的双指滑动：阶段要认得，移动量有上限（防止一条坏数据把焦点甩飞）。
+    /// 点按区上的滑动带着 "focus": true（焦点跟着手指走），触控板上的不带
     @Test
     func swipesCarryPhaseAndClampedDeltas() {
-        if case .swipe(let dx, let dy, "changed")? = RemoteCommand(json: ["a": "swipe", "p": "changed", "dx": 12.5, "dy": -3.0]) {
+        if case .swipe(let dx, let dy, "changed", let focus)? = RemoteCommand(json: ["a": "swipe", "p": "changed", "dx": 12.5, "dy": -3.0]) {
             #expect(dx == 12.5 && dy == -3)
+            #expect(!focus, "触控板：内容跟着手指走")
         } else { Issue.record("双指滑动") }
-        if case .swipe(let dx, _, "momentum")? = RemoteCommand(json: ["a": "swipe", "p": "momentum", "dx": 99999.0]) {
+        if case .swipe(let dx, _, "momentum", _)? = RemoteCommand(json: ["a": "swipe", "p": "momentum", "dx": 99999.0]) {
             #expect(dx == 2000)
         } else { Issue.record("惯性") }
+        if case .swipe(_, _, "began", let focus)? = RemoteCommand(json: ["a": "swipe", "p": "began", "focus": true]) {
+            #expect(focus, "点按区：焦点跟着手指走")
+        } else { Issue.record("点按区上的滑动") }
         #expect(RemoteCommand(json: ["a": "swipe", "p": "sideways"]) == nil)
         if case .pointerHold? = RemoteCommand(json: ["a": "mousehold"]) {} else { Issue.record("按住不动") }
     }

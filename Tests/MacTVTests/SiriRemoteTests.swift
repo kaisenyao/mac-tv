@@ -327,24 +327,107 @@ struct RemoteActivityTests {
     }
 }
 
-/// 控制中心、设置这些弹出的面板里：滑一下走一格，方向跟着手指
-@Suite
-struct SiriRemoteSheetSwipeTests {
-    @Test
-    func oneStepPerSwipeTheWayTheFingerWent() {
-        var s = SiriRemoteSheetSwipe()
-        var steps: [RemoteCommand.Direction?] = []
-        steps.append(s.feed(dx: 0, dy: 0, phase: "began"))
-        steps.append(s.feed(dx: 30, dy: 5, phase: "changed"))
-        steps.append(s.feed(dx: 40, dy: 5, phase: "changed"))   // 70 点：走一格
-        steps.append(s.feed(dx: 200, dy: 0, phase: "changed"))  // 同一次滑动不再走
-        steps.append(s.feed(dx: 300, dy: 0, phase: "momentum")) // 惯性不走
-        #expect(steps == [nil, nil, .right, nil, nil])
+/// 控制中心、设置这些弹出的面板里：滑一下走一格，方向跟着手指，惯性不走。
+/// 一处管（TrackpadGestures）：手机触控板 / 点按区、Siri Remote、Mac 触控板都一样，滑动不漏到下面的主屏
+@Suite @MainActor
+struct PanelSwipeTests {
+    init() {
+        _ = NSApplication.shared
+        AudioCoordinator.readVolume = { VolumeLevel(level: 50, muted: false) }
+    }
 
-        var next: [RemoteCommand.Direction?] = []
-        next.append(s.feed(dx: 0, dy: 0, phase: "began"))
-        next.append(s.feed(dx: 5, dy: -80, phase: "changed"))   // 手指往上
-        #expect(next == [nil, .up])
+    private func withTV(_ body: (TVController) throws -> Void) throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let folder = root.appendingPathComponent("work/tests/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try body(TVController(library: AppLibrary(folder: folder)))
+    }
+
+    /// One swipe as the phone's touchpad sends it: began, the moves, ended, then the glide
+    /// (the clickpad's also carry "focus": true; panels go the same way for both, see SwipeDirectionTests).
+    private func phoneSwipe(_ tv: TVController, dx: Double, dy: Double) {
+        func send(_ phase: String, _ dx: Double = 0, _ dy: Double = 0) {
+            guard let command = RemoteCommand(json: ["a": "swipe", "p": phase, "dx": dx, "dy": dy]) else { return }
+            tv.handle(command, from: .remote)
+        }
+        send("began")
+        for _ in 0..<6 { send("changed", dx / 6, dy / 6) }
+        send("ended")
+        for _ in 0..<10 { send("momentum", dx / 2, dy / 2) }
+        send("momentumEnd")
+    }
+
+    /// One swipe on the Siri Remote's touch surface (positions 0–1, origin at the bottom left), glide included.
+    private func siriSwipe(_ tv: TVController, from a: SiriRemoteTouch.Point, to b: SiriRemoteTouch.Point, at start: TimeInterval) {
+        var r = SiriRemoteRecognizer()
+        var actions: [SiriRemoteAction] = []
+        for i in 0...12 {
+            let t = Double(i) / 12
+            actions += r.touchFrame(SiriRemoteTouch.Point(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t), at: start + Double(i) * 0.015)
+        }
+        actions += r.touchFrame(nil, at: start + 0.2)
+        while let deadline = r.nextDeadline { actions += r.advance(to: deadline) }
+        #expect(actions.contains { if case .swipe(_, _, "momentum") = $0 { return true }; return false })
+        for action in actions { tv.siriRemote(action) }
+    }
+
+    @Test
+    func phoneSwipesMoveOneStepInControlCenter() throws {
+        try withTV { tv in
+            let home = tv.focus
+            tv.handle(.controlCenter)
+            #expect(tv.controlCenter?.item == .audio)
+            phoneSwipe(tv, dx: 4, dy: 150)               // 手指往下：下一格，甩出去的惯性不再走
+            #expect(tv.controlCenter?.item == .phone)
+            phoneSwipe(tv, dx: 0, dy: -150)              // 往上
+            #expect(tv.controlCenter?.item == .audio)
+            phoneSwipe(tv, dx: -150, dy: 20)             // 往左
+            #expect(tv.controlCenter?.item == .sleepMac)
+            #expect(tv.focus == home)                    // 下面的主屏没动
+        }
+    }
+
+    @Test
+    func siriRemoteSwipesGoTheSameWay() throws {
+        try withTV { tv in
+            let home = tv.focus
+            tv.settings = SettingsPanel()
+            #expect(tv.settings?.section == .profiles)
+            siriSwipe(tv, from: .init(x: 0.5, y: 0.9), to: .init(x: 0.5, y: 0.1), at: 0)   // 手指往下
+            #expect(tv.settings?.section == .remotes)
+            siriSwipe(tv, from: .init(x: 0.5, y: 0.1), to: .init(x: 0.52, y: 0.9), at: 10)  // 往上
+            #expect(tv.settings?.section == .profiles)
+            #expect(tv.focus == home)
+
+            // 控制中心也是
+            tv.settings = nil
+            tv.handle(.controlCenter)
+            siriSwipe(tv, from: .init(x: 0.9, y: 0.5), to: .init(x: 0.1, y: 0.45), at: 20)  // 往左
+            #expect(tv.controlCenter?.item == .sleepMac)
+        }
+    }
+
+    @Test
+    func theMacTrackpadStepsTooAndNothingReachesTheWindow() throws {
+        try withTV { tv in
+            tv.adder = AppAdder()
+            #expect(tv.adder?.row == 1)
+            @MainActor func feed(_ phase: TrackpadGestures.Sample.Phase, _ momentum: TrackpadGestures.Sample.Momentum, dy: Double) -> Bool {
+                tv.trackpadGestures.feed(.init(dx: 0, dy: dy, phase: phase, momentum: momentum, precise: true), from: .trackpad)
+            }
+            // 每一下都归 TrackpadGestures（返回 true：不交给窗口，面板下面的东西不会跟着滚）
+            #expect(feed(.began, .none, dy: 0))
+            #expect(feed(.changed, .none, dy: 15))
+            #expect(tv.adder?.row == 1)                  // 还没到一格
+            #expect(feed(.changed, .none, dy: 15))
+            #expect(tv.adder?.row == 2)
+            #expect(feed(.changed, .none, dy: 200))
+            #expect(feed(.ended, .none, dy: 0))
+            #expect(feed(.none, .changed, dy: 300))
+            #expect(feed(.none, .ended, dy: 0))
+            #expect(tv.adder?.row == 2)                  // 一次滑动一格
+        }
     }
 }
 

@@ -53,12 +53,12 @@ struct AppShelfTests {
         #expect(NeteaseShelfSource.selected == [.daily, .liked, .dailyLists, .playlists])
         // "正在播放"默认开着，排在最前面，也算一项
         #expect(NeteaseShelfSource.showsNowPlaying)
-        #expect(NeteaseShelfSource.summary == "正在播放 等 5 项")
+        #expect(NeteaseShelfSource.summary == "正在播放等 5 项")
         // 多选：存的顺序不重要，轮播按固定的顺序来
         NeteaseShelfSource.selected = [.hot, .daily]
         #expect(NeteaseShelfSource.selected == [.daily, .hot])
         NeteaseShelfSource.selected = [.recent]
-        #expect(NeteaseShelfSource.summary == "正在播放 等 2 项")
+        #expect(NeteaseShelfSource.summary == "正在播放、最近播放")
         NeteaseShelfSource.showsNowPlaying = false
         #expect(NeteaseShelfSource.summary == "最近播放")
 

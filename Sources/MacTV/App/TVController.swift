@@ -74,17 +74,23 @@ final class TVController: NSObject, ObservableObject {
     // 一去一回方向相反：上到顶栏 / 头像是什么手势，回去就是反过来的手势。所以顶栏、头像的上下跟着它下面那一块走——
     // 下面是内容跟着手走的（视频排、首页那几排、歌单里的歌），往下滑上去、往上滑回来；
     // 下面是光标（设置项、歌单页左边的按钮），往上滑上去、往下滑回来。
+    // 上面说的"内容跟着手走"是 Mac 的触控板、滚轮和手机触控板上的双指滑动。遥控器（Siri Remote、手机的点按区）上
+    // 是焦点跟着手指走，像 Apple TV：往右 / 上滑焦点往右 / 上，长条、区域之间、挑选、面板里都一样，甩出去的惯性也接着往这边走；
+    // 门槛、惯性、声音、震动和触控板一样。拖进度谁来的都是手指往右往前（TrackpadGestures.towardsNext）。
     // 鼠标：点一下选中并打开，按住弹出菜单；停在上面只是轻轻浮起、不改选中，一按键或一滑动就收起（PointerActivity）。
-    // 键盘：方向键就是光标方向；回车确认、长按回车菜单；Esc 返回、长按 Esc 回主屏。
+    // 键盘：方向键就是光标方向；回车确认、长按回车菜单（开着时再长按收起，见 toggle）；Esc 返回、长按 Esc 回主屏。
     // 核对用的现象（不是依据）：长条里选中是加框；挑选里选中是变白。
     enum Module { case strip, picker, drawer, scrub, off }
 
     func module(horizontal: Bool) -> Module {
+        // IINA、从主屏打开的 Mac 应用或 Steam 游戏在前面：按键都给它（见 handle(_:)），滑一下就是按一下方向键，
+        // 不去动后面看不见的主屏
+        if playbackCoordinator.iinaOpen || frontAppTakesKeys { return .picker }
         if activeSheet != nil { return .picker }   // 弹出的面板：一列固定的选项
         if browserChromeUp { return browserStore.chromeModule(horizontal: horizontal) }   // 浏览器网页上的标签栏、"⋯"菜单
         if bilibiliOpen { return bilibiliStore.module(horizontal: horizontal) }
         if neteaseOpen { return neteaseStore.module(horizontal: horizontal) }
-        if browserOpen, mode == .launcher { return horizontal ? .strip : .drawer }
+        if browserOpen, mode == .launcher { return browserStore.startModule(horizontal: horizontal) }
         if dedaoOpen { return dedaoStore.module(horizontal: horizontal) }
         if movies != nil { return .drawer }
         // 主屏顶部的轮播（哔哩哔哩、网易云、YouTube）：左右是翻页，内容跟着手走，一次滑动翻一页；上下离开这一栏
@@ -105,6 +111,44 @@ final class TVController: NSObject, ObservableObject {
     func endScrub() {
         if bilibiliOpen { bilibiliStore.player.endScrub() } else if neteaseOpen { neteaseStore.endScrub() }
         else if dedaoOpen { dedaoStore.player.endScrub() }
+    }
+
+    // MARK: 打开它的键再按一次就收起（全局唯一的规矩）
+    //
+    // 打开菜单、面板的键：按住 TV / 主屏键（控制中心）、按住确认（卡片菜单、看视频时右边的面板、浏览器的"⋯"、
+    // 网易云和得到的菜单）、手机上的快捷键（清晰度、倍速、字幕、选集、投币、取消收藏的确认、每日推荐、定时关闭）。
+    // 它打开的那个正在最上面时，同一个键再按一次就是收起：和按返回一样（同样的动画，"返回"的声音），不用去按返回；
+    // 有菜单的好几层时整个收起（它打开的是整个）。最上面是别的菜单时照常打开它自己的（换过去）。
+    // 本来就是开关的（弹幕、歌词、文稿）、再按一次是确认的（菜单里的一项、控制中心的格子）不归这里。
+
+    /// close 收起了这个键打开的那个（它正开着）、不然 open 打开了：返回该响的声音（"返回"、"确认"）；都没做是 nil
+    func toggle(close: () -> Bool, open: () -> Bool) -> Feedback.Cue? {
+        if close() { return .back }
+        return open() ? .select : nil
+    }
+
+    /// 按住确认（手机的 OK、Siri Remote、回车、旧版手机页的 okhold）：按住打开的菜单开着就收起，没开就打开，并响一声。
+    /// 都没做（这里没有菜单）返回 false：照常是一次确认
+    func holdSelect(from source: Feedback.Source) -> Bool {
+        guard let cue = toggle(close: closeHoldMenu, open: openHoldMenu) else { return false }
+        feedback.play(cue, from: source)
+        return true
+    }
+
+    /// 按住确认打开的那个正在最上面：收起它（连同里面的几层），同按返回。条件和 openHoldMenu 一样
+    func closeHoldMenu() -> Bool {
+        if browserPageInFront { return browserStore.closeHoldMenu() }
+        guard mode == .launcher, activeSheet == nil else { return false }
+        if bilibiliOpen, !bilibiliStore.editing {
+            let player = bilibiliStore.player
+            if player.current == nil { return bilibiliStore.closeCardMenu() }
+            guard player.panelVisible else { return false }
+            player.closePanel()
+            return true
+        }
+        if neteaseOpen { return neteaseStore.closeHoldMenu() }
+        if dedaoOpen { return dedaoStore.closePlayerMenu() }
+        return false
     }
 
     /// 按住确认会打开的东西（和 main.swift 里按住回车是同一套条件）。打开了返回 true
@@ -145,7 +189,7 @@ final class TVController: NSObject, ObservableObject {
         if browserChromeUp { return browserStore.menu == nil }   // 浏览器的标签栏横着一排；"⋯"菜单竖着一列
         if bilibiliOpen { return bilibiliStore.wheelRunsHorizontally }
         if neteaseOpen { return neteaseStore.wheelRunsHorizontally }
-        if browserOpen, mode == .launcher { return browserStore.focus != .field }
+        if browserOpen, mode == .launcher { return browserStore.startWheelRunsHorizontally }
         if dedaoOpen { return dedaoStore.wheelRunsHorizontally }
         return true                               // 主屏：一排图标
     }
@@ -309,6 +353,12 @@ final class TVController: NSObject, ObservableObject {
     /// Mac TV opened Steam or a Steam game, so remote presses may go to it.
     var openedSteam = false
     var steamObservers: [NSObjectProtocol] = []
+    /// The Mac app or Steam game opened from Mac TV is in front: remote presses go to it as keys.
+    var frontAppTakesKeys: Bool {
+        guard !NSApp.isActive, let front = NSWorkspace.shared.frontmostApplication else { return false }
+        return front.bundleIdentifier == launchedAppID
+            || (openedSteam && (front.bundleIdentifier == SteamLibrary.bundleID || front.processIdentifier == steamGamePID))
+    }
     var pointer: CGPoint?
     /// 手机触控板的鼠标移动：摊到屏幕的每一帧里走（见 PointerGlide）
     lazy var pointerGlide = PointerGlide(move: { [weak self] dx, dy in self?.applyPointerMove(dx: dx, dy: dy) },
@@ -538,14 +588,15 @@ final class TVController: NSObject, ObservableObject {
             // 控制中心开着时：按一下 TV / 主屏键只把它收起来（按住拉下来、按一下收回去，和 Apple TV 一样）
             if controlCenter != nil { controlCenter = nil; return }
             goHome(); return
-        case .swipe(let dx, let dy, let phase):
+        case .swipe(let dx, let dy, let phase, let focusFollowsFinger):
             // 手机触控板上的双指滑动：和 Mac 触控板上滑一样（同一套门槛、惯性、声音）。
+            // 点按区、Siri Remote 上的滑动也走这里，只是焦点跟着手指走（见 TrackpadGestures）。
             // 不归它管的地方（网页播放器里）就滚动网页，和以前一样
             let sample = TrackpadGestures.Sample(
                 dx: dx, dy: dy,
                 phase: ["began": .began, "changed": .changed, "ended": .ended][phase] ?? .none,
                 momentum: phase == "momentum" ? .changed : (phase == "momentumEnd" ? .ended : .none),
-                precise: true)
+                precise: true, focusFollowsFinger: focusFollowsFinger)
             if !trackpadGestures.feed(sample, from: source), phase == "changed" || phase == "momentum", dy != 0 {
                 handle(.scroll(dy: -dy * 3), from: source)
             }
@@ -555,8 +606,8 @@ final class TVController: NSObject, ObservableObject {
             return
         case .longSelect:
             // 手机遥控器上按住 OK = 键盘上按住回车（同一个键）：在视频卡片、歌上是菜单，看视频时是右边的面板；
-            // 没有菜单可开的地方就是一次普通的确认
-            if openHoldMenu() { feedback.play(.select, from: source); return }
+            // 菜单开着时再按住是收起；没有菜单可开的地方就是一次普通的确认
+            if holdSelect(from: source) { return }
             handle(.select, from: source)
             return
         case .activateBrowser:
@@ -624,9 +675,7 @@ final class TVController: NSObject, ObservableObject {
             return
         }
 
-        if !NSApp.isActive, let front = NSWorkspace.shared.frontmostApplication,
-           front.bundleIdentifier == launchedAppID
-            || (openedSteam && (front.bundleIdentifier == SteamLibrary.bundleID || front.processIdentifier == steamGamePID)) {
+        if frontAppTakesKeys {
             forwardToFrontApp(command)
             return
         }

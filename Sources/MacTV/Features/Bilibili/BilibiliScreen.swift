@@ -55,11 +55,13 @@ struct BilibiliScreen: View {
                     .clipped()
                     // 卡片往左滑的途中，越靠近左边那列图标越淡：淡出是跟着位置走的，所以和滑动严丝合缝。
                     // （滑到头的卡片另外会整张隐去，见 rowView，所以这里不会留残影。）
+                    // 右边：露出半张的那张卡片淡出屏幕（同一个遮罩，见 EdgeFade）。搜索页的热搜两列不淡
                     .mask {
                         HStack(spacing: 0) {
                             Color.clear.frame(width: 84)
                             LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 74)
-                            Color.black
+                            EdgeFadeMask(trailing: store.showingLanding ? 0
+                                         : EdgeFadeMask.width(screen: canvas.width, inset: margin, card: cardWidth, gap: cardGap))
                         }
                     }
                     .offset(y: rowsTop)

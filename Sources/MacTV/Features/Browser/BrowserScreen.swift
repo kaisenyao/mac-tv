@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// 浏览器的开始页（见 BrowserStore）。样子照 Safari 的开始页，放大到电视上：上面一条地址栏，
-/// 下面个人收藏、常去网站是一个个大方块（网站自己的图标），最近浏览、阅读列表是卡片（标题、网站、多久以前）。
-/// 选中的那一个和 tvOS 一样浮起来。开无痕标签页时，地址栏上面写着 Private Browsing，地址栏是深紫色的。
+/// 浏览器的开始页（见 BrowserStore）。样子照 Safari 的开始页，放大到电视上：最上面是和网页上一样的标签栏，
+/// 下面一条地址栏，再下面个人收藏、常去网站是一个个大方块（网站自己的图标），最近浏览、阅读列表是卡片（标题、网站、多久以前）。
+/// 选中的那一个和 tvOS 一样浮起来。焦点下到那几排里时标签栏收上去，地址栏和那几排跟着上移（一整块一起挪，一个位移动画）。
+/// 一排放不下、被屏幕边截掉的那一头淡出去（每排一张静态的渐变遮罩，见 EdgeFade）。
+/// 开无痕标签页时，地址栏上面写着 Private Browsing，地址栏是深紫色的。
 /// 网站图标只向那个网站自己要，不经过别人（不把你去过哪些网站告诉第三方，见 SiteIcons）。
 /// 浏览器是系统的界面，字都是英文（跟系统语言走）
 struct BrowserRoot: View {
@@ -23,29 +25,47 @@ struct BrowserScreen: View {
     private let tile: CGFloat = 220
     private let card = CGSize(width: 500, height: 236)
     private let gap: CGFloat = 44
-    private let rowsTop: CGFloat = 262
+    /// 地址栏：标签栏下面空出一截再开始，一进来不挤
+    private let fieldTop: CGFloat = BrowserTopBar.height + 92
+    private let fieldHeight: CGFloat = 96
+    private var rowsTop: CGFloat { fieldTop + fieldHeight + 96 }
+    /// 焦点在那几排里时整块往上挪多少：标签栏整个藏到屏幕上面，地址栏回到原来没有标签栏时的位置
+    private let collapse: CGFloat = 86
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             background
-            rowsView
-                .frame(width: canvas.width, height: canvas.height - rowsTop, alignment: .topLeading)
-                .clipped()
-                .offset(y: rowsTop)
-            if store.startsPrivate {
-                // 无痕：选的网站开成无痕标签页
-                Label("Private Browsing", systemImage: "hand.raised.fill")
-                    .font(.tv(.caption1, emphasized: true))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Color(hex: "#5B4BA8").opacity(0.6)))
+            ZStack(alignment: .topLeading) {
+                rowsView
+                    .frame(width: canvas.width, height: canvas.height - rowsTop + collapse, alignment: .topLeading)
+                    .clipped()
+                    .offset(y: rowsTop)
+                if store.startsPrivate {
+                    // 无痕：选的网站开成无痕标签页
+                    Label("Private Browsing", systemImage: "hand.raised.fill")
+                        .font(.tv(.caption1, emphasized: true))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color(hex: "#5B4BA8").opacity(0.6)))
+                        .frame(width: canvas.width, height: fieldTop - BrowserTopBar.height)
+                        .offset(y: BrowserTopBar.height)
+                }
+                addressBar
                     .frame(width: canvas.width)
-                    .padding(.top, 30)
+                    .padding(.top, fieldTop)
+                BrowserTopBar(store: store, hoverable: store.startBarSettled)
             }
-            addressBar
-                .frame(width: canvas.width)
-                .padding(.top, 86)
+            .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+            // 标签栏收起、出来：整块一起上下挪（BrowserStore 里那一下是 Motion.navigate）
+            .offset(y: store.startBarShown ? 0 : -collapse)
+            if store.menu != nil {
+                BrowserMenu(store: store)
+                    .padding(.top, BrowserTopBar.height + 12)
+                    .padding(.trailing, 28)
+                    .frame(width: canvas.width, alignment: .trailing)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+            }
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
         .background(Color.black)
@@ -65,7 +85,7 @@ struct BrowserScreen: View {
     // MARK: 地址栏
 
     private var addressBar: some View {
-        let focused = store.focus == .field
+        let focused = store.focus == .field && store.barFocus == nil   // 焦点在上面的标签栏里时它不亮
         let lit = focused || store.editing
         let text = Binding(get: { store.query }, set: { store.typed($0) })
         return HStack(spacing: 22) {
@@ -94,12 +114,13 @@ struct BrowserScreen: View {
         .font(.tv(.callout))
         .foregroundStyle(lit ? .black : .white.opacity(0.85))
         .padding(.horizontal, 40)
-        .frame(width: 1200, height: 96)
+        .frame(width: 1200, height: fieldHeight)
         .background {
+            // 影子只投在胶囊上，不投在字上（字周围不糊一圈）
             Capsule().fill(lit ? Color.white : store.startsPrivate ? Color(hex: "#5B4BA8").opacity(0.35) : .white.opacity(0.1))
+                .shadow(color: .black.opacity(focused ? 0.45 : 0), radius: 24, y: 14)
             Capsule().strokeBorder(.white.opacity(lit ? 0 : 0.14))
         }
-        .shadow(color: .black.opacity(focused ? 0.45 : 0), radius: 24, y: 14)
         .scaleEffect(focused && !store.editing ? 1.04 : 1)
         .environment(\.colorScheme, lit ? .light : .dark)
         .animation(Motion.focus, value: focused)
@@ -126,9 +147,10 @@ struct BrowserScreen: View {
         .animation(Motion.navigate, value: focusedRow)
     }
 
+    /// 一排里一项占多宽：方块下面的名字比方块宽一点（tile + 30），按它算挪多少、哪头被截掉
     private func width(of style: BrowserStore.Row.Style) -> CGFloat {
         switch style {
-        case .tiles: tile
+        case .tiles: tile + 30
         case .cards, .notice: card.width
         }
     }
@@ -137,6 +159,9 @@ struct BrowserScreen: View {
         let column = store.column(of: index)
         let active = focusedRow == index && !store.editing
         let width = width(of: row.style)
+        // 选中的那一个停在第二个位置，前面露出一个；再前面的被左边截掉一截
+        let shift = CGFloat(max(0, column - 1)) * (width + gap)
+        let end = margin + CGFloat(row.pages.count) * (width + gap) - gap - shift
         return VStack(alignment: .leading, spacing: 28) {
             Text(row.title)
                 .font(.tv(.headline, emphasized: true))
@@ -156,8 +181,10 @@ struct BrowserScreen: View {
                     }
                 }
                 .padding(.leading, margin)
-                // 选中的那一个停在第二个位置，前面露出一个
-                .offset(x: -CGFloat(max(0, column - 1)) * (width + gap))
+                .offset(x: -shift)
+                .frame(width: canvas.width, alignment: .leading)
+                // 被屏幕边截掉的那一头淡出去，只在真的截掉了东西的那一边；上下多留出来，选中的放大和影子不被切
+                .edgeFade(leading: column >= 2, trailing: end > canvas.width, width: margin, overflow: 60)
                 .animation(Motion.focus, value: column)
             }
         }
@@ -169,7 +196,6 @@ struct BrowserScreen: View {
                                      @ViewBuilder content: () -> Content) -> some View {
         if abs(position - column) <= 6 {
             content()
-                .opacity(position < column - 1 ? 0 : 1)
                 .contentShape(Rectangle())
                 .onTapGesture { store.focus(row: row, column: position); store.handle(.select) }
         } else {

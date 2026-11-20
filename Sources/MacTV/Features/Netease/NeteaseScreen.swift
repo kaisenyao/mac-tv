@@ -73,6 +73,8 @@ struct NeteaseScreen: View {
                     rows
                         .frame(width: canvas.width, height: canvas.height - rowsTop, alignment: .topLeading)
                         .clipped()
+                        // 右边露出一截的那张卡片淡出屏幕（见 EdgeFade）
+                        .edgeFade(trailing: true, width: EdgeFadeMask.width(screen: canvas.width, inset: margin, card: cardSize, gap: cardGap))
                         .offset(y: rowsTop)
                     details
                 }
@@ -889,6 +891,8 @@ struct NeteaseScreen: View {
             .padding(.top, 70)
             .padding(.bottom, 54)
             .frame(width: canvas.width, alignment: .leading)
+            // 右边露出一截的那张封面淡出屏幕（见 EdgeFade）；底下的暗色不跟着淡
+            .edgeFade(trailing: true, width: EdgeFadeMask.width(screen: canvas.width, inset: margin, card: size, gap: gap))
             .background {
                 // 后面已经模糊了，这里只需要淡淡一层暗色托住文字
                 LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.3), location: 0.2),

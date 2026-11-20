@@ -121,6 +121,8 @@ const drain = async () => { for (let i = 0; i < 50 && run('activeCommand !== nul
   const doc = { visibilityState: 'visible', addEventListener: (type, fn) => { documentListeners[type] = fn; } };
   const padContext = vm.createContext({ document: doc, Math, Map,
     $: selector => selector === '#clickpad' ? pad : {},
+    performance: { now: () => 0 },
+    swipe: { stop() {}, began: () => sends.push('swipe'), moved() {}, ended() {} },   // gestures: clickpad.test.cjs
     showArt() {}, haptic() {}, sendWheel: d => sends.push(`wheel:${d}`),
     send: (a, extra = {}, repeat = false) => { sends.push(a === 'press' ? `${extra.k}:${extra.p}${repeat ? '~' : ''}` : a); return Promise.resolve(); },
     setTimeout: (fn, ms) => { const id = nextId++; timers.push({ id, fn, ms }); return id; },
@@ -149,7 +151,7 @@ const drain = async () => { for (let i = 0; i < 50 && run('activeCommand !== nul
 
   at('pointerdown', ...centre); fire(500);
   assert.deepEqual(sends.splice(0), ['select:hold'], 'holding OK is a hold of select');
-  listeners.lostpointercapture({});
+  listeners.lostpointercapture({ pointerId: 1 });
   assert.deepEqual(sends.splice(0), ['select:release'], 'losing the finger releases it');
   assert.equal(intervals.size, 0);
   at('pointerup', ...centre);
@@ -158,15 +160,40 @@ const drain = async () => { for (let i = 0; i < 50 && run('activeCommand !== nul
   at('pointerdown', ...right); fire(350); at('pointerup', ...right);
   assert.deepEqual(sends.splice(0), ['right:hold', 'right:release'], 'lifting after a hold releases, no extra tap');
 
-  // A swipe anywhere is one step that way; turning around the ring is the wheel, not a press.
-  at('pointerdown', 20, 125); at('pointermove', 60, 125); at('pointerup', 60, 125);
-  assert.deepEqual(sends.splice(0), ['right:tap'], 'a swipe from outside the ring is one step');
+  // Turning around the ring is the wheel, not a press (swipes, resting thumbs and the rest: clickpad.test.cjs).
   const turn = a => [175 + Math.cos(a) * 90, 125 + Math.sin(a) * 90];
   at('pointerdown', ...turn(0));
-  for (let a = 0.1; a <= 1.6; a += 0.1) at('pointermove', ...turn(a));
-  at('pointerup', ...turn(1.6));
+  for (let a = 0.1; a <= 2.5; a += 0.1) at('pointermove', ...turn(a));
+  at('pointerup', ...turn(2.5));
   const turned = sends.splice(0);
   assert.ok(turned.length >= 3 && turned.every(s => s === 'wheel:1'), `clockwise turn is wheel steps: ${turned}`);
   assert.equal(timers.filter(t => t.fn).length, 0, 'no hold left pending');
-  console.log('Remote request deadlines, serialized refresh, bounded commands, clickpad holds and pairing recovery passed');
+
+  // Volume acts on press and repeats while held (after 0.45 s, every 0.16 s), like the Siri Remote's volume keys;
+  // the click after lifting the finger adds nothing, a keyboard / accessibility click still counts.
+  const volume = section('// 一按就送的键', '// 按键的"点一下');
+  const volumeListeners = {}, volumeSends = [], volumeTimers = [];
+  const volup = { dataset: { a: 'volup' }, hasAttribute: name => name === 'data-repeat',
+    addEventListener: (type, fn) => { volumeListeners[type] = fn; } };
+  const volumeContext = vm.createContext({
+    document: { querySelectorAll: selector => selector === '[data-a]' || selector === '[data-repeat]' ? [volup] : [] },
+    $: () => ({ addEventListener() {} }), haptic() {},
+    send: (a, extra = {}, repeat = false) => { volumeSends.push(a + (repeat ? '~' : '')); return Promise.resolve(); },
+    setTimeout: (fn, ms) => { volumeTimers.push({ fn, ms }); return volumeTimers.length; },
+    setInterval: (fn, ms) => { volumeTimers.push({ fn, ms }); return volumeTimers.length; },
+    clearTimeout: id => { if (volumeTimers[id - 1]) volumeTimers[id - 1].fn = null; },
+    clearInterval: id => { if (volumeTimers[id - 1]) volumeTimers[id - 1].fn = null; },
+  });
+  vm.runInContext('let screenAsleep = false;' + volume, volumeContext);
+  const due = ms => volumeTimers.filter(t => t.fn && t.ms === ms).forEach(t => t.fn());
+  volumeListeners.pointerdown({});
+  assert.deepEqual(volumeSends.splice(0), ['volup'], 'one step as the finger goes down');
+  due(450); due(160); due(160);
+  assert.deepEqual(volumeSends.splice(0), ['volup~', 'volup~', 'volup~'], 'then repeats while held');
+  volumeListeners.pointerup({}); volumeListeners.click({ detail: 1 });
+  due(160);
+  assert.deepEqual(volumeSends.splice(0), [], 'lifting stops it; the click adds nothing');
+  volumeListeners.click({ detail: 0 });
+  assert.deepEqual(volumeSends.splice(0), ['volup'], 'a keyboard click is one step');
+  console.log('Remote request deadlines, serialized refresh, bounded commands, clickpad holds, volume repeat and pairing recovery passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

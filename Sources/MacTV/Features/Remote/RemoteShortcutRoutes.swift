@@ -169,15 +169,35 @@ extension TVController {
 
     /// A shortcut chip pressed on the phone. One that isn't for the screen that's up, does nothing right now, or is
     /// the phone's own (the sleep timer, files) is ignored. What it does is what the TV's own key, menu or panel
-    /// does, with the select sound when it did something on Mac TV's screens.
+    /// does, with the select sound when it did something on Mac TV's screens. A shortcut whose menu is the one up
+    /// closes it instead, like Back (TVController.toggle).
     func runShortcut(_ id: String, from source: Feedback.Source) {
         guard let entry = RemoteShortcuts.entry(id), entry.app == nil || entry.app == shortcutContext else { return }
         let status = shortcutStatus(id, appleShortcut: remoteCoordinator.shortcutChoice.appleShortcut)
         guard status.enabled, !status.phone else { return }
         // The app's menus and toasts show in Mac TV's window
         if entry.app != nil || id == "screensaver", !NSApp.isActive { bringToFront() }
-        guard performShortcut(id) else { return }
-        if mode == .launcher { feedback.play(.select, from: source) }
+        guard let cue = toggle(close: { closeShortcutMenu(id) }, open: { performShortcut(id) }) else { return }
+        if mode == .launcher { feedback.play(cue, from: source) }
+    }
+
+    /// The menu, list or page this shortcut opens is the one on top: closes it, as Back does (all of it: a panel the
+    /// shortcut slid out goes back in, not just its list). False when it isn't up, so the press opens it. Shortcuts
+    /// that open nothing (弹幕, 喜欢, 播放模式, 得到's 倍速 and 上一讲 / 下一讲) or already flip (歌词, 文稿) never close.
+    private func closeShortcutMenu(_ id: String) -> Bool {
+        guard activeSheet == nil else { return false }   // under a sheet it isn't the one up: the press brings it back
+        let bili = bilibiliStore.player
+        switch id {
+        case "bilibili.quality": return bili.closeQualityMenu()
+        case "bilibili.speed": return bili.closePanel(showing: .speed)
+        case "bilibili.subtitles": return bili.closePanel(showing: .subtitles)
+        case "bilibili.coin": return bili.closePanel(showing: .coin)
+        case "bilibili.favorite": return bili.closePanel(showing: .favorite)   // 取消收藏？ goes away as 取消 would
+        case "bilibili.episodes": return bili.closeEpisodes()
+        case "netease.daily": return neteaseStore.closeDaily()
+        case "dedao.timer": return dedaoStore.closeSleepMenu()
+        default: return false
+        }
     }
 
     private func performShortcut(_ id: String) -> Bool {
