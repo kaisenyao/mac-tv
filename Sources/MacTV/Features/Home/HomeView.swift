@@ -18,6 +18,20 @@ private struct Layout {
     var dockFrame: CGRect { CGRect(x: (canvas.width - 1728) / 2, y: canvas.height - 320, width: 1728, height: 220) }
     /// How far everything moves up when focus goes below the dock.
     var gridShift: CGFloat { dockFrame.midY - Self.tile.height / 2 - 75 }
+
+    /// The top of a row of apps: the dock's row in the dock, the rest below it.
+    func top(ofRow row: Int) -> CGFloat {
+        let dockRowTop = dockFrame.midY - Self.tile.height / 2
+        guard row > 0 else { return dockRowTop }
+        // The second row peeks just below the dock.
+        return dockFrame.maxY + 60 + CGFloat(row - 1) * (Self.tile.height + Self.rowGap)
+    }
+
+    /// Where the app at a place on Home is, before the grid scrolls.
+    func tileFrame(_ index: Int, columns: Int) -> CGRect {
+        CGRect(x: dockFrame.minX + Self.dockPadding + CGFloat(index % columns) * (Self.tile.width + Self.tileSpacing),
+               y: top(ofRow: index / columns), width: Self.tile.width, height: Self.tile.height)
+    }
 }
 
 struct HomeView: View {
@@ -95,6 +109,15 @@ struct HomeView: View {
                 .padding(.trailing, 80)
                 .padding(.top, 48)
                 .modifier(ClearsCornerForNotices(notices: tv.notices, inGrid: tv.inGrid))
+
+            // Press and hold Select on an app: its menu, grown out of the app, over all of Home (see AppMenuLayer).
+            let panel = tv.organizer
+            let held = panel?.onHome == true ? panel?.selectedID.flatMap { id in tv.services.firstIndex { $0.id == id } } : nil
+            AppMenuLayer(tv: tv, menu: held == nil ? nil : panel?.menu, id: held.map { tv.services[$0].id },
+                         name: held.map { tv.services[$0].name } ?? "",
+                         tile: held.map { layout.tileFrame($0, columns: tv.columns).offsetBy(dx: 0, dy: gridOffset) },
+                         rightOfTile: (held ?? 0) % tv.columns < tv.columns - 2, size: canvas)
+                .zIndex(10)
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
         .clipped()
@@ -181,31 +204,10 @@ struct AppGrid: View {
                 }
                 .offset(x: layout.dockFrame.minX + Layout.dockPadding, y: top(ofRow: rowIndex, in: layout))
             }
-            // Press and hold Select on an app: its menu beside it, on Home, as on Apple TV.
-            if let panel = tv.organizer, panel.onHome, let menu = panel.menu, let id = panel.selectedID,
-               let index = tv.services.firstIndex(where: { $0.id == id }) {
-                let column = index % tv.columns
-                let x = layout.dockFrame.minX + Layout.dockPadding + CGFloat(column) * (Layout.tile.width + Layout.tileSpacing)
-                    + Layout.tile.width / 2
-                let reach = AppMenuCard.reach(from: Layout.tile.width)
-                AppMenuCard(tv: tv, menu: menu, id: id, name: tv.services[index].name)
-                    // Centred on the app's row: a frame with no height keeps the card's middle on its top edge.
-                    .frame(width: AppMenuCard.width, height: 0)
-                    .offset(x: (column < tv.columns - 2 ? x + reach : x - reach) - AppMenuCard.width / 2,
-                            y: top(ofRow: index / tv.columns, in: layout) + Layout.tile.height / 2)
-                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
-                    .zIndex(10)
-            }
         }
-        .animation(Motion.focus, value: tv.organizer)
     }
 
-    private func top(ofRow row: Int, in layout: Layout) -> CGFloat {
-        let dockRowTop = layout.dockFrame.midY - Layout.tile.height / 2
-        guard row > 0 else { return dockRowTop }
-        // The second row peeks just below the dock.
-        return layout.dockFrame.maxY + 60 + CGFloat(row - 1) * (Layout.tile.height + Layout.rowGap)
-    }
+    private func top(ofRow row: Int, in layout: Layout) -> CGFloat { layout.top(ofRow: row) }
 }
 
 /// tvOS 26 dock: frosted Liquid Glass with a lit top edge.

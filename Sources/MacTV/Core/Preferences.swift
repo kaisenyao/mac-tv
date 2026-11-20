@@ -34,6 +34,7 @@ final class Preferences: ObservableObject {
         saverAerialCategory = nil
         saverPhotos = nil
         twentyFourHourTime = FlipClockTime.systemTwentyFour
+        controlCenterControls = nil
         keepMacAwake = defaults.object(forKey: Key.keepMacAwake) as? Bool ?? true
         lidOverride = defaults.bool(forKey: Key.lidOverride)
         automaticUpdates = defaults.object(forKey: Key.automaticUpdates) as? Bool ?? false // 默认不自动装，等你在设置里按
@@ -65,6 +66,7 @@ final class Preferences: ObservableObject {
         saverAerialCategory = personal.string(forKey: Key.saverAerialCategory)
         saverPhotos = personal.string(forKey: Key.saverPhotos)
         twentyFourHourTime = personal.object(forKey: Key.twentyFourHourTime) as? Bool ?? FlipClockTime.systemTwentyFour
+        controlCenterControls = personal.stringArray(forKey: Key.controlCenterControls)
     }
 
     // MARK: Watching
@@ -109,6 +111,11 @@ final class Preferences: ObservableObject {
     /// The display Mac TV moves to; nil picks one automatically.
     @Published var preferredTVDisplay: String? { didSet { save(preferredTVDisplay, Key.preferredTVDisplay) } }
 
+    // MARK: Control Center
+
+    /// The round buttons, in order, by `ControlCenterPanel.Item` raw value; nil for the standard ones.
+    @Published var controlCenterControls: [String]? { didSet { save(controlCenterControls, Key.controlCenterControls) } }
+
     // MARK: Clock
 
     /// Every clock on the TV in 24-hour time; until it's changed, as this Mac shows the time.
@@ -123,7 +130,8 @@ final class Preferences: ObservableObject {
     private enum Key {
         /// Each profile's own; the rest are this Mac's.
         static let personal: Set<String> = [autoSkip, autoNext, navigationSounds, navigationSoundVolume, saverWallpaper,
-                                            saverDelay, saverClock, saverAerialCategory, saverPhotos, twentyFourHourTime]
+                                            saverDelay, saverClock, saverAerialCategory, saverPhotos, twentyFourHourTime,
+                                            controlCenterControls]
 
         static let autoSkip = "autoSkip"
         static let autoNext = "autoNext"
@@ -140,5 +148,6 @@ final class Preferences: ObservableObject {
         static let dedicatedTVMode = "dedicatedTVMode"
         static let preferredTVDisplay = "preferredTVDisplay"
         static let twentyFourHourTime = "twentyFourHourTime"
+        static let controlCenterControls = "controlCenterControls"
     }
 }

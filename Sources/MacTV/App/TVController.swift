@@ -163,6 +163,7 @@ final class TVController: NSObject, ObservableObject {
             return browserStore.historyState != nil ? browserStore.openHistoryRowMenu() : browserStore.openItemMenu()
         }
         if activeSheet == .organizer { return openOrganizerMenu() }    // Arrange Apps: an app's menu (Hide)
+        if activeSheet == .controlCenter { return removeControlCenterControl() }   // editing it: a round button out
         if homeAppFocused { return openHomeAppMenu() }                // Home: an app's menu (Edit Home Screen, Hide)
         guard mode == .launcher, activeSheet == nil else { return false }
         if bilibiliOpen, !bilibiliStore.editing {

@@ -1,12 +1,21 @@
 import SwiftUI
 
 /// Apple TV's Control Center, under the status row at the top right: Sleep Now (TV standby), four tiles that open a
-/// list or a sheet (Remotes, Display, Audio, Sleep Timer) and four round buttons (Screen Saver, Turn Off Display,
-/// Lid Closed on a laptop or Keep Mac Awake on a desktop, and Settings). Opened from the status row's
-/// Control Center button, or by holding the TV button, over whatever is in front.
+/// list or a sheet (Remotes, Display, Audio, Sleep Timer) and round buttons, four to a row: the person's own choice and
+/// order, changed with Edit under them, as an iPhone's Control Center is. Opened from the status row's Control Center
+/// button, or by holding the TV button, over whatever is in front, which dims (see DesignSystem/Layers).
 struct ControlCenterPanel: Equatable {
-    enum Item: CaseIterable {
-        case sleepNow, remotes, display, audio, sleepTimer, screenSaver, screenOff, stayAwake, settings
+    enum Item: String, CaseIterable {
+        case sleepNow, remotes, display, audio, sleepTimer
+        /// The round buttons.
+        case screenSaver, screenOff, stayAwake, search, settings, profiles, arrangeApps, store
+        /// The capsule under the round buttons: Edit, and Done while editing.
+        case edit, done
+
+        /// What can be a round button, and the ones Control Center starts with.
+        static let controls: [Item] = [.screenSaver, .screenOff, .stayAwake, .search, .settings, .profiles, .arrangeApps, .store]
+        static let standardControls: [Item] = [.screenSaver, .screenOff, .stayAwake, .search, .settings]
+        static let perRow = 4
     }
 
     /// A tile's list, shown in place of the tiles until Back: the display choices, or the sleep timer's.
@@ -24,27 +33,57 @@ struct ControlCenterPanel: Equatable {
     var listRow = 0
     /// Select or a click: the focused control dips and settles back each time this goes up.
     var presses = 0
+    /// Edit: the round buttons can be moved, removed and added; the tiles rest.
+    var editing = false
+    /// Editing: the round button picked up, moving with the arrows until Select puts it down.
+    var lifted: Item?
 
-    /// Where each direction goes from each item.
-    static func neighbour(of item: Item, _ direction: RemoteCommand.Direction) -> Item? {
+    /// Where each direction goes from each item. `controls` are the round buttons shown, in order; while editing,
+    /// `available` are the ones that can be added, under them, and the tiles aren't reachable.
+    static func neighbour(of item: Item, _ direction: RemoteCommand.Direction, controls: [Item], available: [Item] = [],
+                          editing: Bool = false) -> Item? {
+        let rows = Item.perRow
+        // A place in a group laid out four to a row: where an arrow goes inside it, nil past its edge.
+        func step(_ index: Int, _ direction: RemoteCommand.Direction, count: Int) -> Int? {
+            switch direction {
+            case .left: return index % rows > 0 ? index - 1 : nil
+            case .right: return index % rows < rows - 1 && index + 1 < count ? index + 1 : nil
+            case .up: return index >= rows ? index - rows : nil
+            case .down:
+                if index + rows < count { return index + rows }
+                return (index / rows + 1) * rows < count ? count - 1 : nil
+            }
+        }
+        if let index = controls.firstIndex(of: item) {
+            if let next = step(index, direction, count: controls.count) { return controls[next] }
+            switch direction {
+            case .up where !editing: return index % rows < 2 ? .audio : .sleepTimer
+            case .down: return editing ? available.first ?? .done : .edit
+            default: return nil
+            }
+        }
+        if editing, let index = available.firstIndex(of: item) {
+            if let next = step(index, direction, count: available.count) { return available[next] }
+            switch direction {
+            case .up: return controls.last
+            case .down: return .done
+            default: return nil
+            }
+        }
         switch (item, direction) {
-        case (.sleepNow, .right): .remotes
-        case (.sleepNow, .down): .audio
-        case (.remotes, .left), (.display, .left), (.audio, .up): .sleepNow
-        case (.remotes, .down): .display
-        case (.display, .up): .remotes
-        case (.display, .down), (.audio, .right): .sleepTimer
-        case (.sleepTimer, .up): .display
-        case (.sleepTimer, .left): .audio
-        case (.audio, .down): .screenSaver
-        case (.sleepTimer, .down): .stayAwake
-        case (.screenSaver, .up), (.screenOff, .up): .audio
-        case (.stayAwake, .up), (.settings, .up): .sleepTimer
-        case (.screenSaver, .right), (.stayAwake, .left): .screenOff
-        case (.screenOff, .left): .screenSaver
-        case (.screenOff, .right), (.settings, .left): .stayAwake
-        case (.stayAwake, .right): .settings
-        default: nil
+        case (.edit, .up): return controls.last ?? .sleepTimer
+        case (.done, .up): return available.last ?? controls.last
+        case (.sleepNow, .right): return .remotes
+        case (.sleepNow, .down): return .audio
+        case (.remotes, .left), (.display, .left), (.audio, .up): return .sleepNow
+        case (.remotes, .down): return .display
+        case (.display, .up): return .remotes
+        case (.display, .down), (.audio, .right): return .sleepTimer
+        case (.sleepTimer, .up): return .display
+        case (.sleepTimer, .left): return .audio
+        case (.audio, .down): return controls.first ?? .edit
+        case (.sleepTimer, .down): return controls.count > 2 ? controls[2] : controls.last ?? .edit
+        default: return nil
         }
     }
 }
@@ -55,8 +94,23 @@ extension TVController {
         remoteCoordinator.refreshRemoteStatus()
     }
 
-    /// This Mac has a lid: the third round button is Lid Closed, otherwise Keep Mac Awake.
+    /// This Mac has a lid: the Lid Closed round button, otherwise Keep Mac Awake.
     var macHasLid: Bool { displayCoordinator.hasLid }
+
+    /// The round buttons this person has, in their order (Edit changes them).
+    var controlCenterControls: [ControlCenterPanel.Item] {
+        get {
+            preferences.controlCenterControls.map { $0.compactMap(ControlCenterPanel.Item.init(rawValue:))
+                .filter(ControlCenterPanel.Item.controls.contains) } ?? ControlCenterPanel.Item.standardControls
+        }
+        set { preferences.controlCenterControls = newValue.map(\.rawValue) }
+    }
+
+    /// The round buttons that could be added, in the order Edit lists them.
+    var controlCenterAvailable: [ControlCenterPanel.Item] {
+        let shown = Set(controlCenterControls)
+        return ControlCenterPanel.Item.controls.filter { !shown.contains($0) }
+    }
 
     func handleControlCenter(_ command: RemoteCommand) {
         guard var panel = controlCenter else { return }
@@ -77,13 +131,14 @@ extension TVController {
             controlCenter = panel
             return
         }
+        if panel.editing { return handleControlCenterEditing(command, panel) }
         switch command {
         case .back:
             controlCenter = nil
             return
         case .move(let direction):
             // 和 Apple TV 一样：走到边上就停住，不会把控制中心关掉（遥控器一滑容易冲过头）。按返回才关
-            if let next = ControlCenterPanel.neighbour(of: panel.item, direction) {
+            if let next = ControlCenterPanel.neighbour(of: panel.item, direction, controls: controlCenterControls) {
                 panel.item = next
             }
         case .select:
@@ -96,8 +151,72 @@ extension TVController {
         controlCenter = panel
     }
 
-    /// Select or a click. Sheets opened from here (Connect a Remote, Audio, Settings) open over Control Center, so
-    /// Back comes back to it, on the control that opened them.
+    /// Edit, as an iPhone's Control Center and as Arrange Apps: Select picks a round button up, the arrows move it and
+    /// Select puts it down; press and hold Select takes it out; Select on one under Add a Control puts it in, last.
+    /// Back (or Done) finishes; with a button picked up, Back puts it down first.
+    private func handleControlCenterEditing(_ command: RemoteCommand, _ start: ControlCenterPanel) {
+        var panel = start
+        var controls = controlCenterControls
+        switch command {
+        case .back:
+            if panel.lifted != nil { panel.lifted = nil } else { finishControlCenterEdit(&panel) }
+        case .move(let direction):
+            if let lifted = panel.lifted, let index = controls.firstIndex(of: lifted) {
+                let rows = ControlCenterPanel.Item.perRow
+                let target: Int? = switch direction {
+                case .left: index % rows > 0 ? index - 1 : nil
+                case .right: index % rows < rows - 1 && index + 1 < controls.count ? index + 1 : nil
+                case .up: index >= rows ? index - rows : nil
+                case .down: index + rows < controls.count ? index + rows : (index / rows + 1) * rows < controls.count ? controls.count - 1 : nil
+                }
+                if let target {
+                    controls.remove(at: index)
+                    controls.insert(lifted, at: target)
+                    controlCenterControls = controls
+                }
+            } else if let next = ControlCenterPanel.neighbour(of: panel.item, direction, controls: controls,
+                                                              available: controlCenterAvailable, editing: true) {
+                panel.item = next
+            }
+        case .select:
+            panel.presses += 1
+            if panel.item == .done {
+                finishControlCenterEdit(&panel)
+            } else if controls.contains(panel.item) {
+                panel.lifted = panel.lifted == panel.item ? nil : panel.item
+            } else if ControlCenterPanel.Item.controls.contains(panel.item) {
+                controls.append(panel.item)   // added last; focus stays on it, now among the buttons
+                controlCenterControls = controls
+            }
+        default:
+            break
+        }
+        controlCenter = panel
+    }
+
+    private func finishControlCenterEdit(_ panel: inout ControlCenterPanel) {
+        panel.editing = false
+        panel.lifted = nil
+        panel.item = .edit
+    }
+
+    /// Press and hold Select while editing Control Center: the focused round button comes out, to Add a Control.
+    func removeControlCenterControl() -> Bool {
+        guard var panel = controlCenter, panel.editing, panel.list == nil else { return false }
+        var controls = controlCenterControls
+        guard let index = controls.firstIndex(of: panel.item) else { return false }
+        controls.remove(at: index)
+        controlCenterControls = controls
+        panel.lifted = nil
+        panel.presses += 1
+        // Focus goes to the button that took its place, or the last one; with none left, to what it became.
+        panel.item = controls.isEmpty ? panel.item : controls[min(index, controls.count - 1)]
+        controlCenter = panel
+        return true
+    }
+
+    /// Select or a click. Sheets opened from here (Connect a Remote, Audio, Settings, Arrange Apps, Store) open over
+    /// Control Center, so Back comes back to it, on the control that opened them.
     func activateControl(_ item: ControlCenterPanel.Item) {
         controlCenter?.item = item
         controlCenter?.presses += 1
@@ -115,6 +234,19 @@ extension TVController {
             showScreensaver()
         case .stayAwake: if macHasLid { lidOverride.toggle() } else { keepMacAwake.toggle() }
         case .settings: openSettings()
+        case .search:
+            controlCenter = nil
+            openSystemSearch()
+        case .profiles:
+            controlCenter = nil
+            openProfiles()
+        case .arrangeApps: openOrganizer()
+        case .store: adder = AppAdder()
+        case .edit:
+            controlCenter?.editing = true
+            controlCenter?.item = controlCenterControls.first ?? controlCenterAvailable.first ?? .done
+        case .done:
+            if var panel = controlCenter { finishControlCenterEdit(&panel); controlCenter = panel }
         }
     }
 
@@ -211,8 +343,12 @@ struct ControlCenterView: View {
                     .foregroundStyle(.white.opacity(0.85))
                     .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
                     .frame(width: Self.width, alignment: .center)
-                    .padding(.top, 60)
+                    .padding(.top, 26)
                     .contentTransition(.opacity)
+                if panel.editing { addSection(panel) }
+                capsule(panel.editing ? .done : .edit, panel)
+                    .frame(width: Self.width)
+                    .padding(.top, 26)
             }
         }
         .foregroundStyle(.white)
@@ -227,7 +363,6 @@ struct ControlCenterView: View {
     private func grid(_ panel: ControlCenterPanel) -> some View {
         let remotes = tv.remotesSummary
         let minutes = tv.sleepMinutesLeft
-        let lid = tv.macHasLid
         return VStack(spacing: Self.gap) {
             HStack(alignment: .top, spacing: Self.gap) {
                 sleepTile(panel)
@@ -243,19 +378,60 @@ struct ControlCenterView: View {
                 tile(.sleepTimer, panel, symbol: "timer", title: "Sleep Timer",
                      detail: minutes > 0 ? "\(minutes) Minute\(minutes == 1 ? "" : "s") Left" : "Off")
             }
-            HStack(spacing: 0) {
-                round(.screenSaver, panel, symbol: "sparkles.tv")
-                Spacer(minLength: 0)
-                round(.screenOff, panel, symbol: "tv.slash")
-                Spacer(minLength: 0)
-                round(.stayAwake, panel, symbol: lid ? "laptopcomputer" : "cup.and.saucer.fill",
-                      on: lid ? tv.lidOverride : tv.keepMacAwake)
-                Spacer(minLength: 0)
-                round(.settings, panel, symbol: "gearshape.fill")
-            }
-            .frame(width: Self.width)
-            .padding(.top, 4)
+            .opacity(panel.editing ? 0.35 : 1)   // editing: the tiles rest, only the round buttons move
+            .allowsHitTesting(!panel.editing)
+            rounds(tv.controlCenterControls, panel, adding: false)
+                .padding(.top, 4)
         }
+        .animation(Motion.focus, value: tv.controlCenterControls)
+    }
+
+    /// Round buttons four to a row, each in its place across the cluster's width.
+    private func rounds(_ items: [ControlCenterPanel.Item], _ panel: ControlCenterPanel, adding: Bool) -> some View {
+        let perRow = ControlCenterPanel.Item.perRow
+        let spacing = (Self.width - CGFloat(perRow) * Self.row) / CGFloat(perRow - 1)
+        let rows = stride(from: 0, to: items.count, by: perRow).map { Array(items[$0..<min($0 + perRow, items.count)]) }
+        return VStack(alignment: .leading, spacing: Self.gap) {
+            ForEach(rows, id: \.self) { row in
+                HStack(spacing: spacing) {
+                    ForEach(row, id: \.self) { item in round(item, panel, adding: adding) }
+                }
+            }
+        }
+        .frame(width: Self.width, alignment: .leading)
+    }
+
+    /// Editing: the round buttons that could be added, under a heading.
+    private func addSection(_ panel: ControlCenterPanel) -> some View {
+        let available = tv.controlCenterAvailable
+        return VStack(alignment: .leading, spacing: 14) {
+            if !available.isEmpty {
+                Text("Add a Control")
+                    .font(.system(size: 21, weight: .semibold))
+                    .opacity(0.6)
+                    .padding(.leading, 6)
+                rounds(available, panel, adding: true)
+            }
+        }
+        .frame(width: Self.width, alignment: .leading)
+        .padding(.top, 30)
+        .transition(.opacity)
+    }
+
+    /// Edit under the round buttons; Done while editing. A small capsule, as on an iPhone's Control Center.
+    private func capsule(_ item: ControlCenterPanel.Item, _ panel: ControlCenterPanel) -> some View {
+        let focused = panel.item == item
+        return Button { tv.activateControl(item) } label: {
+            Text(item == .done ? "Done" : "Edit")
+                .font(.system(size: 21, weight: .semibold))
+                .foregroundStyle(focused ? .black : .white)
+                .padding(.horizontal, 26)
+                .frame(height: 46)
+                .focusPlatter(Capsule(), focused: focused)
+                .contentShape(Capsule())
+                .lifted(focused, in: Capsule())
+        }
+        .buttonStyle(PressDip(presses: panel.presses, focused: focused))
     }
 
     /// What the focused round button does, under the cluster, since those buttons have no label.
@@ -266,7 +442,27 @@ struct ControlCenterView: View {
         case .stayAwake where tv.macHasLid: tv.lidOverride ? "Lid Closed: Stay Awake" : "Lid Closed: Sleep"
         case .stayAwake: tv.keepMacAwake ? "Keep Mac Awake: On" : "Keep Mac Awake: Off"
         case .settings: "Settings"
+        case .search: "Search"
+        case .profiles: "Profiles"
+        case .arrangeApps: "Arrange Apps"
+        case .store: "Store"
         default: " "
+        }
+    }
+
+    /// A round button's symbol, and whether it's switched on.
+    private func look(_ item: ControlCenterPanel.Item) -> (symbol: String, on: Bool) {
+        let lid = tv.macHasLid
+        switch item {
+        case .screenSaver: return ("sparkles.tv", false)
+        case .screenOff: return ("tv.slash", false)
+        case .stayAwake: return (lid ? "laptopcomputer" : "cup.and.saucer.fill", lid ? tv.lidOverride : tv.keepMacAwake)
+        case .settings: return ("gearshape.fill", false)
+        case .search: return ("magnifyingglass", false)
+        case .profiles: return ("person.2.fill", false)
+        case .arrangeApps: return ("square.grid.3x3.fill", false)
+        case .store: return ("bag.fill", false)
+        default: return ("circle", false)
         }
     }
 
@@ -320,11 +516,23 @@ struct ControlCenterView: View {
         .buttonStyle(PressDip(presses: panel.presses, focused: focused))
     }
 
-    /// A round button. One that's switched on is white, as Apple TV's are; focus lifts it.
-    private func round(_ item: ControlCenterPanel.Item, _ panel: ControlCenterPanel, symbol: String, on: Bool = false) -> some View {
+    /// A round button. One that's switched on is white, as Apple TV's are; focus lifts it. Editing, they wiggle and
+    /// wear a badge: "−" on the ones in Control Center (hold Select to take one out), "+" on the ones that can be
+    /// added; the one picked up lifts further.
+    private func round(_ item: ControlCenterPanel.Item, _ panel: ControlCenterPanel, adding: Bool) -> some View {
         let focused = panel.item == item
-        return Button { tv.activateControl(item) } label: {
-            Image(systemName: symbol)
+        let lifted = panel.lifted == item
+        let look = look(item)
+        let on = look.on && !panel.editing
+        return Button {
+            if panel.editing {
+                tv.controlCenter?.item = item
+                tv.handleControlCenter(.select)
+            } else {
+                tv.activateControl(item)
+            }
+        } label: {
+            Image(systemName: look.symbol)
                 .font(.system(size: 36, weight: .medium))
                 .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(focused || on ? .black : .white)
@@ -333,6 +541,19 @@ struct ControlCenterView: View {
                 .focusPlatter(Circle(), focused: focused)
                 .contentShape(Circle())
                 .lifted(focused, in: Circle())
+                .overlay(alignment: .topLeading) {
+                    if panel.editing {
+                        Image(systemName: adding ? "plus" : "minus")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.black)
+                            .frame(width: 28, height: 28)
+                            .background(.white, in: Circle())
+                            .offset(x: -4, y: -4)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .scaleEffect(lifted ? 1.1 : 1)
+                .modifier(Wiggle(active: panel.editing && !adding))
         }
         .buttonStyle(PressDip(presses: panel.presses, focused: focused))
     }

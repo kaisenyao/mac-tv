@@ -23,23 +23,79 @@ import Testing
 
     @Test func everyMoveHasAWayBack() {
         let opposite: [RemoteCommand.Direction: RemoteCommand.Direction] = [.up: .down, .down: .up, .left: .right, .right: .left]
-        for item in ControlCenterPanel.Item.allCases {
+        let controls = ControlCenterPanel.Item.standardControls
+        let shown = ControlCenterPanel.Item.allCases.filter { $0 != .done && (!ControlCenterPanel.Item.controls.contains($0) || controls.contains($0)) }
+        for item in shown {
             for (direction, back) in opposite {
-                guard let next = ControlCenterPanel.neighbour(of: item, direction) else { continue }
-                // Coming back lands on the item, or (from the wide Sleep Now tile) on one beside it.
-                let returned = ControlCenterPanel.neighbour(of: next, back)
+                guard let next = ControlCenterPanel.neighbour(of: item, direction, controls: controls) else { continue }
+                // Coming back lands on the item, or (from the wide Sleep Now tile, or a short row) on one beside it.
+                let returned = ControlCenterPanel.neighbour(of: next, back, controls: controls)
                 #expect(returned != nil, "\(item) → \(direction) → \(next) has no way back")
             }
         }
-        // The grid, in Apple's order: Sleep Now, Remotes, Display, Audio, Sleep Timer, then the round buttons.
-        #expect(ControlCenterPanel.neighbour(of: .sleepNow, .right) == .remotes)
-        #expect(ControlCenterPanel.neighbour(of: .remotes, .down) == .display)
-        #expect(ControlCenterPanel.neighbour(of: .sleepNow, .down) == .audio)
-        #expect(ControlCenterPanel.neighbour(of: .audio, .right) == .sleepTimer)
-        #expect(ControlCenterPanel.neighbour(of: .audio, .down) == .screenSaver)
-        #expect(ControlCenterPanel.neighbour(of: .screenSaver, .right) == .screenOff)
-        #expect(ControlCenterPanel.neighbour(of: .stayAwake, .right) == .settings)
+        // The grid, in Apple's order: Sleep Now, Remotes, Display, Audio, Sleep Timer, then the round buttons, four to
+        // a row, then Edit.
+        func next(_ item: ControlCenterPanel.Item, _ direction: RemoteCommand.Direction) -> ControlCenterPanel.Item? {
+            ControlCenterPanel.neighbour(of: item, direction, controls: controls)
+        }
+        #expect(next(.sleepNow, .right) == .remotes)
+        #expect(next(.remotes, .down) == .display)
+        #expect(next(.sleepNow, .down) == .audio)
+        #expect(next(.audio, .right) == .sleepTimer)
+        #expect(next(.audio, .down) == .screenSaver)
+        #expect(next(.screenSaver, .right) == .screenOff)
+        #expect(next(.stayAwake, .right) == .search)
+        #expect(next(.search, .right) == nil)                 // four to a row
+        #expect(next(.screenSaver, .down) == .settings)       // the second row
+        #expect(next(.screenOff, .down) == .settings)         // a short row: its last
+        #expect(next(.settings, .down) == .edit)
+        #expect(next(.edit, .up) == .settings)
         #expect(!ControlCenterPanel.Item.allCases.contains { "\($0)" == "skipIntros" || "\($0)" == "phone" || "\($0)" == "controller" })
+    }
+
+    /// Edit, as an iPhone's Control Center: pick a round button up and move it, hold to take one out, add one back.
+    /// The order is the person's, kept.
+    @Test func editRearrangesRemovesAndAddsRoundButtons() throws {
+        try withTV { tv in
+            defer { tv.preferences.controlCenterControls = nil }
+            tv.preferences.controlCenterControls = nil
+            tv.openControlCenter()
+            #expect(tv.controlCenterControls == [.screenSaver, .screenOff, .stayAwake, .search, .settings])
+            #expect(tv.controlCenterAvailable == [.profiles, .arrangeApps, .store])
+            tv.controlCenter?.item = .edit
+            tv.handleControlCenter(.select)
+            #expect(tv.controlCenter?.editing == true && tv.controlCenter?.item == .screenSaver)
+            // The tiles rest: up from the first row goes nowhere.
+            tv.handleControlCenter(.move(.up))
+            #expect(tv.controlCenter?.item == .screenSaver)
+
+            // Picked up, moved right twice, put down.
+            tv.handleControlCenter(.select)
+            #expect(tv.controlCenter?.lifted == .screenSaver)
+            tv.handleControlCenter(.move(.right))
+            tv.handleControlCenter(.move(.right))
+            tv.handleControlCenter(.select)
+            #expect(tv.controlCenter?.lifted == nil)
+            #expect(tv.controlCenterControls == [.screenOff, .stayAwake, .screenSaver, .search, .settings])
+
+            // Held: out, to Add a Control; focus on the one that took its place.
+            tv.controlCenter?.item = .search
+            #expect(tv.holdSelect(from: .keyboard))
+            #expect(tv.controlCenterControls == [.screenOff, .stayAwake, .screenSaver, .settings])
+            #expect(tv.controlCenter?.item == .settings)
+            #expect(tv.controlCenterAvailable == [.search, .profiles, .arrangeApps, .store])
+
+            // Down to Add a Control, Select: in again, last.
+            tv.handleControlCenter(.move(.down))
+            #expect(tv.controlCenter?.item == .search)
+            tv.handleControlCenter(.select)
+            #expect(tv.controlCenterControls == [.screenOff, .stayAwake, .screenSaver, .settings, .search])
+
+            // Back finishes, on Edit; the order stays.
+            tv.handleControlCenter(.back)
+            #expect(tv.controlCenter?.editing == false && tv.controlCenter?.item == .edit)
+            #expect(tv.preferences.controlCenterControls == ["screenOff", "stayAwake", "screenSaver", "settings", "search"])
+        }
     }
 
     @Test func sleepTimerOpensItsListAndBackReturnsToTheTiles() throws {

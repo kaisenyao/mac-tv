@@ -330,6 +330,12 @@ struct ArrangeGrid {
     var rows: Int { max((count + AppOrganizer.columns - 1) / AppOrganizer.columns, 1) }
     var height: CGFloat { Self.belowTop + CGFloat(max(rows - 1, 1)) * (Self.tile.height + Self.rowGap) }
 
+    /// The tile at a place in Home's order.
+    static func frame(of index: Int) -> CGRect {
+        let center = center(of: index)
+        return CGRect(x: center.x - tile.width / 2, y: center.y - tile.height / 2, width: tile.width, height: tile.height)
+    }
+
     /// The middle of the tile at a place in Home's order.
     static func center(of index: Int) -> CGPoint {
         let row = index / AppOrganizer.columns, column = index % AppOrganizer.columns
@@ -382,16 +388,19 @@ struct AppOrganizerSheet: View {
                     .position(ArrangeGrid.center(of: order.count + offset))
                     .allowsHitTesting(false)
             }
-            if let menu = panel.menu, let id = panel.selectedID, let index = order.firstIndex(of: id) {
-                menuCard(menu, for: id, name: apps[id]?.name ?? "", at: index)
-                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
-                    .zIndex(10)
-            }
         }
         .frame(width: ArrangeGrid.width, height: grid.height, alignment: .topLeading)
         .coordinateSpace(name: ArrangeGrid.space)
         .offset(x: (canvas.width - ArrangeGrid.width) / 2, y: Self.top - shift)
         .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+        .overlay {
+            // Press and hold's menu over the whole screen, grown out of the app held (see AppMenuLayer).
+            let held = panel.onHome ? nil : panel.selectedID.flatMap { id in order.firstIndex(of: id).map { (id, $0) } }
+            let origin = CGPoint(x: (canvas.width - ArrangeGrid.width) / 2, y: Self.top - shift)
+            AppMenuLayer(tv: tv, menu: held == nil ? nil : panel.menu, id: held?.0, name: held.flatMap { apps[$0.0]?.name } ?? "",
+                         tile: held.map { ArrangeGrid.frame(of: $0.1).offsetBy(dx: origin.x, dy: origin.y) },
+                         rightOfTile: (held?.1 ?? 0) % AppOrganizer.columns < AppOrganizer.columns - 2, size: canvas)
+        }
         .clipped()
         .foregroundStyle(.white)
         .animation(reduceMotion ? nil : Motion.focus, value: order)
@@ -455,13 +464,39 @@ struct AppOrganizerSheet: View {
             }
     }
 
-    /// Press and hold's menu, beside the app: right of it, or left of it in the last two columns.
-    private func menuCard(_ menu: AppOrganizer.Menu, for id: String, name: String, at index: Int) -> some View {
-        let center = ArrangeGrid.center(of: index)
-        let reach = AppMenuCard.reach(from: ArrangeGrid.tile.width)
-        return AppMenuCard(tv: tv, menu: menu, id: id, name: name)
-            .position(x: index % AppOrganizer.columns < AppOrganizer.columns - 2 ? center.x + reach : center.x - reach,
-                      y: center.y)
+}
+
+/// Press and hold's menu (a Menu in DesignSystem/Layers): beside the app held, right of it or left of it in the last
+/// two columns, kept on the screen; the screen behind dims, and the card grows out of the app and shrinks back into it.
+/// `menu` nil puts it away. `tile` and `size` are in the space the layer fills (the whole screen).
+struct AppMenuLayer: View {
+    @ObservedObject var tv: TVController
+    let menu: AppOrganizer.Menu?
+    let id: String?
+    let name: String
+    let tile: CGRect?
+    let rightOfTile: Bool
+    let size: CGSize
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear.allowsHitTesting(false)
+            if menu != nil {
+                DimBackdrop { tv.organizer?.menu = nil; if tv.organizer?.fromHome == true { tv.organizer = nil } }
+                    .transition(.opacity)
+            }
+            if let menu, let id, let tile {
+                let half = AppMenuCard.height(menu, actions: tv.organizerActions(for: id).count) / 2
+                let reach = AppMenuCard.reach(from: tile.width)
+                AppMenuCard(tv: tv, menu: menu, id: id, name: name)
+                    .position(x: rightOfTile ? tile.midX + reach : tile.midX - reach,
+                              y: min(max(tile.midY, half + 40), size.height - half - 40))
+                    // Positioned, the card fills the layer: the scale's anchor is the app's middle in it.
+                    .transition(.growing(from: UnitPoint(x: tile.midX / max(1, size.width), y: tile.midY / max(1, size.height))))
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .animation(Motion.slide, value: menu != nil)
     }
 }
 
@@ -477,6 +512,14 @@ struct AppMenuCard: View {
 
     /// From the middle of the app to the middle of the card beside it.
     static func reach(from tileWidth: CGFloat) -> CGFloat { tileWidth * 0.57 + 32 + width / 2 }
+
+    /// How tall the card is, to keep it on the screen: its rows, or the question and its two answers.
+    static func height(_ menu: AppOrganizer.Menu, actions: Int) -> CGFloat {
+        switch menu {
+        case .actions: return 44 + CGFloat(actions) * 66 + CGFloat(max(0, actions - 1)) * 10
+        case .confirmDelete: return 316   // the question (about 60), Cancel and Delete (66 each), their gaps and padding
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -513,8 +556,8 @@ struct AppMenuCard: View {
         }
         .padding(22)
         .frame(width: Self.width, alignment: .leading)
-        .tvGlass(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
-        .shadow(color: .black.opacity(0.35), radius: 30, y: 16)
+        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvShadow(.float)
         .foregroundStyle(.white)
     }
 
@@ -526,7 +569,7 @@ struct AppMenuCard: View {
             Spacer(minLength: 0)
         }
         .font(.tv(.body, emphasized: true))
-        .foregroundStyle(destructive ? Color(hex: "#FF453A") : (focused ? .black : .white))
+        .foregroundStyle(destructive ? Color.destructive : (focused ? .black : .white))
         .padding(.horizontal, 22)
         .frame(height: 66)
         .focusPlatter(RoundedRectangle(cornerRadius: 18, style: .continuous), focused: focused, glass: false)
@@ -537,7 +580,7 @@ struct AppMenuCard: View {
 
 /// The lifted app's gentle wiggle, as Apple TV's while it moves an app. It runs only while an app is lifted,
 /// a few degrees at 30 frames a second on that one tile.
-private struct Wiggle: ViewModifier {
+struct Wiggle: ViewModifier {
     let active: Bool
 
     func body(content: Content) -> some View {

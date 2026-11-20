@@ -85,6 +85,14 @@ struct ModalSheetRouter: View {
     var body: some View {
         // Arrange Apps isn't drawn while a Home Screen app's menu is open on Home (see AppOrganizer.onHome).
         ForEach(tv.sheets.open.filter { $0 != .organizer || tv.organizer?.onHome != true }, id: \.self) { layer in
+            // Control Center is a panel (DesignSystem/Layers): the screen behind dims, fading while the panel drops
+            // in, and a click on it closes Control Center.
+            if layer == .controlCenter {
+                DimBackdrop { tv.controlCenter = nil }
+                    .allowsHitTesting(tv.isTopSheet(layer))
+                    .transition(.opacity)
+                    .zIndex(0.5 + Double(layer.rawValue))
+            }
             TVCanvas { sheet(layer) }
                 .ignoresSafeArea()
                 .allowsHitTesting(tv.isTopSheet(layer))
