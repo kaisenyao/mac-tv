@@ -12,6 +12,8 @@ enum Motion {
     static let appear = Animation.smooth(duration: 0.35)
     /// A control pressed: quick, settling without a bounce.
     static let press = Animation.smooth(duration: 0.18)
+    /// 从屏幕边上拉出来、收回去的东西（侧边栏、头像菜单、卡片菜单、右边的面板），各个应用里都是这一条，带一点弹性
+    static let slide = Animation.spring(response: 0.42, dampingFraction: 0.84)
     /// Tiles following the pointer.
     static let tilt = Animation.interactiveSpring(response: 0.25, dampingFraction: 0.85)
 

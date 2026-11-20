@@ -36,7 +36,7 @@ import Testing
 
     @Test func waitsForSetupAndProfileSelection() throws {
         try withController { tv in
-            tv.setup = SetupFlow(step: .privacy, onlyPrivacy: true)
+            tv.setup = SetupFlow(step: .remote)
             tv.profilePicker = ProfilePicker()
             tv.offerStartupPairing()
             #expect(!tv.pairing)

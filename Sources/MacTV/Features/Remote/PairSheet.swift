@@ -31,18 +31,18 @@ struct PairSheet: View {
                 }
             }
             VStack(alignment: .leading, spacing: 18) {
-                Text("Use your phone as a remote").font(.tv(.title3, emphasized: true))
-                Text("Scan with your phone's camera. Code \(tv.pairingGuest ? tv.remoteGuestToken : tv.remoteToken)")
+                Text("Use Your Phone as a Remote").font(.tv(.title3, emphasized: true))
+                Text("Pairing Code \(tv.pairingGuest ? tv.remoteGuestToken : tv.remoteToken)")
                     .font(.tv(.caption2)).monospacedDigit().foregroundStyle(.white.opacity(0.7))
                 VStack(spacing: 10) {
-                    pairRow("Phone access", value: tv.pairingGuest ? "Guest, 24 hours" : "Full",
+                    pairRow("Phone Access", value: tv.pairingGuest ? "Guest (24 Hours)" : "Full Access",
                             focused: tv.pairingFocusedRow == .access) { tv.pairingGuest.toggle() }
                     if tv.pairingRows.contains(.display) {
                         let displays = tv.availableTVDisplays
                         pairRow("Display", value: (displays.first(where: \.current) ?? displays.first)?.name,
                                 focused: tv.pairingFocusedRow == .display) { tv.stepPairingDisplay() }
                     }
-                    pairRow("Show this at launch", value: tv.preferences.showPairingAtLaunch ? "On" : "Off",
+                    pairRow("Show at Launch", value: tv.preferences.showPairingAtLaunch ? "On" : "Off",
                             focused: tv.pairingFocusedRow == .showAtLaunch) {
                         tv.preferences.showPairingAtLaunch.toggle()
                     }

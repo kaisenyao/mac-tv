@@ -20,21 +20,20 @@ struct Service: Identifiable, Hashable {
     var icon: String? = nil
     /// …or a file the user's app library saved, for apps they added.
     var iconFile: URL? = nil
+    /// 手机遥控器上用的另一张图标（Icons/ 里的 PNG），电视主屏的图和手机上的应用图标不一样时才有
+    var phoneIcon: String? = nil
     var accent = "#8E8E93"
     var deep = "#16171B"
     var userAgent: String = UserAgent.safari
     /// Inject D-pad focus navigation for sites that were built for a mouse.
     var dpadNavigation = true
-    /// Countries (ISO codes) where a built-in service streams; nil for everywhere. Elsewhere it isn't
-    /// built in, since it would only open on a "not available in your region" page; it can still be added.
-    var regions: Set<String>? = nil
-
-    /// Installed, and streams in this Mac's region.
-    var isAvailable: Bool {
-        guard isInstalled else { return false }
-        guard let regions else { return true }
-        return Locale.current.region.map { regions.contains($0.identifier) } ?? false
+    /// 随便一个网页（手机发来的链接、启动参数里给的）：用网页播放器打开，不算哪个应用
+    static func website(_ url: URL) -> Service {
+        Service(id: "browser-session", name: url.host ?? "Web Page", kind: .web(url))
     }
+
+    /// Can be opened here: a Mac app or Steam has to be installed; websites always can.
+    var isAvailable: Bool { isInstalled }
 
     var isInstalled: Bool {
         switch kind {
@@ -47,11 +46,6 @@ struct Service: Identifiable, Hashable {
     /// Steam games bring a ready-made wide tile (background and logo) instead of a square icon.
     var hasWideArt: Bool {
         if case .steam(let appID) = kind { return appID != SteamLibrary.bigPicture.appID }
-        return false
-    }
-
-    var isWeb: Bool {
-        if case .web = kind { return true }
         return false
     }
 }
@@ -75,26 +69,16 @@ enum Catalog {
                 icon: "bilibili.png", accent: "#FB7299", deep: "#3A0F1E"),
         // 原生页面（Features/Netease）
         Service(id: "netease", name: "网易云音乐", kind: .web(URL(string: "https://music.163.com")!),
-                icon: "netease.png", accent: "#E60026", deep: "#2B0206"),
-        Service(id: "netflix", name: "Netflix", kind: .web(URL(string: "https://www.netflix.com/browse")!),
-                icon: "netflix.png", accent: "#E50914", deep: "#2B0204"),
-        Service(id: "youtube", name: "YouTube", kind: .web(URL(string: "https://www.youtube.com/tv")!),
+                icon: "netease.png", phoneIcon: "netease-app.png", accent: "#E60026", deep: "#2B0206"),
+        // 原生页面（Features/Dedao）：得到的听书和课程
+        Service(id: "dedao", name: "得到", kind: .web(URL(string: "https://www.dedao.cn")!),
+                icon: "dedao.png", accent: "#FF6A00", deep: "#3A1600"),
+        Service(id: "youtube", name: "YouTube", kind: .web(YouTubeTV.home),
                 icon: "youtube.png", accent: "#FF2D2D", deep: "#2B0606",
                 userAgent: UserAgent.smartTV, dpadNavigation: false),
-        Service(id: "prime", name: "Prime Video", kind: .web(URL(string: "https://www.primevideo.com")!),
-                icon: "prime.png", accent: "#1A98FF", deep: "#05213F"),
-        Service(id: "hotstar", name: "JioHotstar", kind: .web(URL(string: "https://www.hotstar.com")!),
-                icon: "hotstar.png", accent: "#2C6BED", deep: "#081538"),
-        Service(id: "appletv", name: "Apple TV", kind: .web(URL(string: "https://tv.apple.com")!),
-                icon: "appletv.png", accent: "#9A9AA2", deep: "#18181B"),
-        Service(id: "spotify", name: "Spotify", kind: .web(URL(string: "https://open.spotify.com")!),
-                icon: "spotify.png", accent: "#1ED760", deep: "#06210F"),
-        Service(id: "ytmusic", name: "YouTube Music", kind: .web(URL(string: "https://music.youtube.com")!),
-                icon: "ytmusic.png", accent: "#FF2D2D", deep: "#2B0606"),
-        Service(id: "itvx", name: "ITVX", kind: .web(URL(string: "https://www.itv.com/watch")!),
-                accent: "#16C6B0", deep: "#06312D", regions: ["GB"]),
-        Service(id: "channel4", name: "Channel 4", kind: .web(URL(string: "https://www.channel4.com/")!),
-                accent: "#ED1664", deep: "#320B1A", regions: ["GB"]),
+        // 原生页面（Features/Browser）：电视上的 Safari，开始页有 Safari 的收藏、常去网站和历史
+        Service(id: "browser", name: "Browser", kind: .web(URL(string: "https://www.google.com")!),
+                icon: "browser.png", accent: "#2A6CF0", deep: "#0A1F45"),
         Service(id: "movies", name: "Movies", kind: .movies, accent: "#5E5CE6", deep: "#14133A"),
         Service(id: "iina", name: "IINA", kind: .app(bundleID: "com.colliderli.iina"),
                 icon: "iina.png"),
@@ -149,8 +133,16 @@ enum Icons {
         return tile
     }
 
+    /// 手机遥控器应用列表里的图标。有专门的手机图标（phoneIcon，官方的正方形图标）就用它，
+    /// 否则和电视主屏用同一张
     static func png(for service: Service) -> Data? {
         if let cached = pngs[service.id] { return cached }
+        if let file = service.phoneIcon,
+           let url = Bundle.main.url(forResource: file, withExtension: nil, subdirectory: "Icons"),
+           let data = try? Data(contentsOf: url) {
+            pngs[service.id] = data
+            return data
+        }
         guard let image = image(for: service), let tiff = image.tiffRepresentation,
               let data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
         else { return nil }

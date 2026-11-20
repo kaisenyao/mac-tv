@@ -168,8 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `--export-home <folder>` renders the home screen in a few focus states, for design checks.
         if let flag = CommandLine.arguments.firstIndex(of: "--export-home"), flag + 1 < CommandLine.arguments.count {
             let folder = URL(fileURLWithPath: CommandLine.arguments[flag + 1])
-            let states: [(String, TVController.Focus)] = [("dock-netflix", .app(0)), ("dock-prime", .app(2)),
-                                                          ("shelf-netflix", .shelf(0)), ("grid", .app(6))]
+            let states: [(String, TVController.Focus)] = [("dock-first", .app(0)), ("dock-third", .app(2)),
+                                                          ("shelf-first", .shelf(0)), ("grid", .app(6))]
             // 16:9 for a TV, 16:10 for a MacBook screen.
             for (shape, canvas) in [("tv", CGSize(width: 1920, height: 1080)), ("mac", CGSize(width: 1920, height: 1200))] {
                 for (name, focus) in states {
@@ -210,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             for (name, flow) in [("setup-welcome", SetupFlow()), ("setup-apps", SetupFlow(step: .apps, index: 1)),
-                                 ("setup-remote", SetupFlow(step: .remote)), ("setup-done", SetupFlow(step: .done))] {
+                                 ("setup-remote", SetupFlow(step: .remote))] {
                 let tv = TVController()
                 tv.setup = flow
                 let renderer = ImageRenderer(content: ZStack { Wallpaper(); HomeView(tv: tv); Color.black.opacity(0.7); SetupScreen(tv: tv) }
@@ -259,12 +259,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installLauncherKeys()
         tv.startPowerManagement()
         tv.startControllers()
-        tv.topShelf.start()
         // 自用分支：启动时就把哔哩哔哩每一页的内容取好，进去和切换时不用等
         tv.bilibiliStore.tv = tv
         tv.bilibiliStore.preload()
         tv.neteaseStore.tv = tv
         tv.neteaseStore.preload()
+        // 主屏顶部：哔哩哔哩关注的 UP 主最新视频、网易云的歌单、YouTube 为你推荐（在各自的设置里可以换）
+        tv.appShelf.start()
         tv.ensureSteamHeroes()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(displaysSlept),
             name: NSWorkspace.screensDidSleepNotification, object: nil)
@@ -277,13 +278,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
         _ = DiagnosticReport.launched
-        Log.app.notice("Mac TV \(Updater.currentVersion, privacy: .public) started on macOS \(ProcessInfo.processInfo.operatingSystemVersionString, privacy: .public)")
+        Log.app.notice("Mac TV \(AppVersion.current, privacy: .public) started on macOS \(ProcessInfo.processInfo.operatingSystemVersionString, privacy: .public)")
 
         // `--setup` shows first-run setup again.
-        // Usage analytics sends nothing unless the user has said yes (Analytics.swift).
-        Analytics.start(context: tv.analyticsContext)
         tv.updater.onAvailable = { [weak self] version in
-            self?.tv.showToast("Mac TV \(version) is available in Settings › About")
+            self?.tv.showToast("Mac TV \(version) Available")
         }
         tv.updater.isIdle = { [weak self] in self?.tv.idleForUpdate ?? false }
         tv.updater.start()
@@ -291,15 +290,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `--open-website <url>` opens a page in the website player at launch, for testing.
         if let flag = CommandLine.arguments.firstIndex(of: "--open-website"), flag + 1 < CommandLine.arguments.count,
            let url = WebsiteAddress.url(from: CommandLine.arguments[flag + 1]) {
-            tv.open(Service(id: "browser-session", name: url.host ?? "Website", kind: .web(url)))
+            tv.open(Service.website(url))
             return
         }
         if tv.needsSetup || CommandLine.arguments.contains("--setup") {
             tv.startSetup()
             return
-        } else if Analytics.available, Analytics.consent == .unasked {
-            // An install from before the question: ask it once.
-            tv.askAboutAnalytics()
         } else if tv.profiles.all.count > 1 {
             tv.openProfiles()
         }
@@ -316,6 +312,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // 正在看哔哩哔哩、听得到：先把看到哪 / 听到哪记下（这台 Mac 上马上记好；告诉它们那一下不一定来得及）
+        tv.bilibiliStore.player.stop()
+        tv.dedaoStore.player.stop()
         server?.stop()
         tv.closeExternalBrowser()
         tv.closeIINAPlayback(terminating: true)
@@ -359,18 +358,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.server = server
     }
 
-    // 双指滑动（规则见 TVController.Module）：一次滑动从手指放上去到惯性停下
-    private var scrollTotal: CGFloat = 0
-    private var scrollReadyAt = Date.distantPast
-    /// 这一次滑动已经走过格子了
-    private var swipedInGesture = false
-    /// 这一次滑动是横着还是竖着：刚开始滑时按哪个方向动得多来定，滑完之前不变（斜着滑不会两个方向都走）
-    private var scrollHorizontal: Bool?
-    /// 这一次滑动在当前界面算哪一类，和方向一起定下来
-    private var swipeModule: TVController.Module = .drawer
-    /// 甩出去以后已经走了几格：越往后每一格要的距离越长，慢慢停下
-    private var flungSteps = 0
-
     /// Arrows, Return and Escape drive the home screen. In a player, keys go to the page.
     /// Trackpad or wheel scrolling moves between the Top Shelf, the dock and the grid.
     private func installLauncherKeys() {
@@ -384,104 +371,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return woke && event.type == .leftMouseDown ? nil : event
         }
+        // 双指滑动、鼠标滚轮：规则在 TrackpadGestures（手机遥控器触控板上的双指滑动也走那里）
         NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self, event.window === window else { return event }
             if tv.noteActivity() { return nil }
-            guard tv.mode == .launcher, !tv.pairing, tv.settings == nil, tv.adder == nil,
-                  tv.organizer == nil, tv.playbackCheck == nil, tv.topShelfPreferences == nil,
-                  tv.setup == nil, tv.profilePicker == nil, tv.controlCenter == nil else { return event }
-
-            tv.suppressHover = true
-            PointerActivity.shared.set(false)
-
-            let isTrackpad = event.hasPreciseScrollingDeltas || !event.phase.isEmpty
-            let flicking = scrollHorizontal != nil && swipeModule == .strip
-
-            // 一次滑动的开始和结束。长条上的滑动在手指离开后还有惯性，惯性停了才算完
-            if event.phase == .began {
-                scrollTotal = 0
-                swipedInGesture = false
-                scrollHorizontal = nil
-                swipeModule = .drawer
-                flungSteps = 0
-            }
-            if event.momentumPhase == .ended || event.momentumPhase == .cancelled {
-                scrollHorizontal = nil
-                return nil
-            }
-            if !event.momentumPhase.isEmpty, !flicking { return nil }
-            if event.phase == .ended || event.phase == .cancelled {
-                if scrollHorizontal == true, swipeModule == .scrub { tv.endScrub() }   // 拖进度：手指抬起才跳过去
-                if !flicking { scrollHorizontal = nil }
-                return nil
-            }
-
-            let dx = isTrackpad ? event.scrollingDeltaX : (event.deltaX != 0 ? event.deltaX : event.scrollingDeltaX)
-            let dy = isTrackpad ? event.scrollingDeltaY : (event.deltaY != 0 ? event.deltaY : event.scrollingDeltaY)
-            if !isTrackpad {
-                // 滚轮没有"一次滑动"：每一格自己定方向，和长条一样一格一格走
-                scrollHorizontal = abs(dx) > abs(dy)
-                let style = tv.module(horizontal: abs(dx) > abs(dy))
-                swipeModule = style == .off || style == .scrub ? style : .drawer   // 滚轮拖进度：一格快进 / 快退十秒
-            } else if scrollHorizontal == nil, max(abs(dx), abs(dy)) > 0.5 {
-                scrollHorizontal = abs(dx) > abs(dy)
-                swipeModule = tv.module(horizontal: abs(dx) > abs(dy))
-            }
-            guard let horizontal = scrollHorizontal, swipeModule != .off else { return nil }
-            let delta = horizontal ? dx : dy
-            let next: RemoteCommand.Direction = horizontal ? .right : .down
-            let previous: RemoteCommand.Direction = horizontal ? .left : .up
-            // 长条和区域之间：内容跟着手走，往左 / 往上滑（delta 为负）是下一个。
-            // 光标：光标跟着手走，往右 / 往下滑（delta 为正）是下一个
-            let followsCursor = swipeModule == .picker
-
-            if isTrackpad, swipeModule == .scrub {
-                // 拖进度：手指滑多远，进度就跟着走多远（往右滑往前），手指抬起才跳过去
-                tv.scrubMove(points: Double(delta))
-            } else if !isTrackpad {
-                guard Date() >= scrollReadyAt else { return nil }
-                scrollTotal += delta
-                if abs(scrollTotal) >= 1.0 {
-                    // 拖进度的地方（视频、音乐播放中），滚轮左右一格是快进 / 快退十秒；别的地方是走一格
-                    tv.handle(swipeModule == .scrub ? .seek(forward: scrollTotal > 0) : .move(scrollTotal < 0 ? next : previous), from: .trackpad)
-                    scrollTotal = 0
-                    scrollReadyAt = Date().addingTimeInterval(0.32)
-                }
-            } else if swipeModule == .strip {
-                // 长条：手指还在时一段一格地跟着走；手指离开后的惯性照样走，甩得越用力走得越远，
-                // 每走一格下一格要的距离就长一点，慢慢停下（像 Safari）。轻轻一拨只走一格
-                scrollTotal += delta
-                let threshold: CGFloat = !swipedInGesture ? 30
-                    : (event.momentumPhase.isEmpty ? 150 : 170 + 35 * CGFloat(flungSteps))
-                if abs(scrollTotal) >= threshold {
-                    let direction = scrollTotal < 0 ? next : previous
-                    scrollTotal += scrollTotal < 0 ? threshold : -threshold
-                    // 第一格照常（可以走到别的区域，比如在第一张上往左拨进左边栏）；
-                    // 接着走的只在这一条里，到头就停
-                    if !swipedInGesture || tv.flickCanMove(direction) { tv.handle(.move(direction), from: .trackpad) }
-                    swipedInGesture = true
-                    if !event.momentumPhase.isEmpty { flungSteps += 1 }
-                }
-            } else {
-                // 光标、区域之间：一次滑动只走一格
-                guard !swipedInGesture else { return nil }
-                scrollTotal += delta
-                if abs(scrollTotal) >= 28 {
-                    let toNext = followsCursor ? scrollTotal > 0 : scrollTotal < 0
-                    tv.handle(.move(toNext ? next : previous), from: .trackpad)
-                    scrollTotal = 0
-                    swipedInGesture = true
-                }
-            }
-            return nil
+            return tv.trackpadGestures.feed(TrackpadGestures.Sample(event), from: .trackpad) ? nil : event
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
-            // 网易云播放界面的左右键松开：没按到"按住"的程度就是切歌，按住过就是快进 / 快退结束、从那里接着放
+            // 网易云、得到播放界面的左右键松开：没按到"按住"的程度就是切歌 / 换一讲，按住过就是快进 / 快退结束、从那里接着放
             if let self, event.keyCode == 123 || event.keyCode == 124, self.arrowDownAt != nil {
                 let held = self.arrowHeld
                 self.arrowDownAt = nil
                 self.arrowTimer?.invalidate()
-                if held { self.tv.neteaseStore.endScrub() } else { self.tv.handle(.move(self.arrowForward ? .right : .left)) }
+                if held {
+                    if self.tv.dedaoOpen { self.tv.dedaoStore.endHold() } else { self.tv.neteaseStore.endScrub() }
+                } else {
+                    self.tv.handle(.move(self.arrowForward ? .right : .left))
+                }
                 return nil
             }
             // 确认键松开：没按到"长按"的程度，才是一次"确认"
@@ -512,7 +418,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 搜索框里输入法还有待选字时，Esc 是输入法的，不拦。
             if event.keyCode == 53, mods.isEmpty {
                 let composing = tv.mode == .launcher
-                    && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.typing))
+                    && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.typing)
+                        || (tv.browserOpen && tv.browserStore.editing))
                     && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
                 if composing { return event }
                 if !event.isARepeat {
@@ -547,18 +454,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                         MainActor.assumeIsolated {
                             guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            let store = self.tv.bilibiliStore
-                            let opened = store.player.current != nil ? store.player.openPanel() : store.openCardMenu()
-                            if opened { self.selectHeld = true }
+                            // 和手机遥控器上按住 OK 是同一套（TVController.openHoldMenu）
+                            if self.tv.openHoldMenu() {
+                                self.selectHeld = true
+                                self.tv.feedback.play(.select, from: .keyboard)   // 和手机上按住 OK 一样：响一声、震一下
+                            }
                         }
                     }
                     return nil
                 }
                 // 菜单、面板、设置已经开着：新按下的这一次立刻生效（走下面的常规处理）
             }
-            // 网易云音乐的播放界面：短按左右 = 上一首 / 下一首（松开时算数）；按住 = 快退 / 快进，松手从那里接着放
-            if (event.keyCode == 123 || event.keyCode == 124), mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen,
-               tv.activeSheet == nil, tv.neteaseStore.canHoldSeek {
+            // 网易云音乐、得到的播放界面：短按左右 = 上一首 / 下一首、上一讲 / 下一讲（松开时算数）；
+            // 按住 = 快退 / 快进，松手从那里接着放
+            if (event.keyCode == 123 || event.keyCode == 124), mods.isEmpty, tv.mode == .launcher, tv.activeSheet == nil,
+               (tv.neteaseOpen && tv.neteaseStore.canHoldSeek) || (tv.dedaoOpen && tv.dedaoStore.canHoldSeek) {
                 if event.isARepeat { return nil }
                 let forward = event.keyCode == 124
                 self?.arrowDownAt = Date()
@@ -569,7 +479,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     MainActor.assumeIsolated {
                         guard let self, self.arrowDownAt != nil else { return }
                         self.arrowHeld = true
-                        self.tv.neteaseStore.beginHold(forward: forward)
+                        if self.tv.dedaoOpen { self.tv.dedaoStore.beginHold(forward: forward) } else { self.tv.neteaseStore.beginHold(forward: forward) }
                     }
                 }
                 return nil
@@ -578,6 +488,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if event.keyCode == 49, mods.isEmpty, tv.mode == .launcher, tv.neteaseOpen, tv.activeSheet == nil,
                !tv.neteaseStore.typing, tv.neteaseStore.account != nil {
                 if !event.isARepeat { tv.neteaseStore.handle(.playPause) }
+                return nil
+            }
+            // 得到里的空格：放 / 停
+            if event.keyCode == 49, mods.isEmpty, tv.mode == .launcher, tv.dedaoOpen, tv.activeSheet == nil {
+                if !event.isARepeat { tv.dedaoStore.handle(.playPause) }
+                return nil
+            }
+            // 得到的播放界面里的确认键，和网易云一样：按一下（松开时算数）= 放 / 停；按住半秒 = "⋯"菜单
+            //（倍速、定时关闭、讲目列表）。菜单、讲目列表开着时，新按下的这一次立刻生效（走下面的常规处理）
+            if (event.keyCode == 36 || event.keyCode == 76), mods.isEmpty, tv.mode == .launcher, tv.dedaoOpen, tv.activeSheet == nil,
+               tv.dedaoStore.canHoldSeek {
+                if event.isARepeat { return nil }
+                self?.selectDownAt = Date()
+                self?.selectHeld = false
+                self?.selectTimer?.invalidate()
+                self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
+                        if self.tv.openHoldMenu() {
+                            self.selectHeld = true
+                            self.tv.feedback.play(.select, from: .keyboard)   // 和手机上按住 OK 一样：响一声、震一下
+                        }
+                    }
+                }
                 return nil
             }
             // 网易云音乐里的确认键，规矩一样：按一下（松开时算数）= 确认；
@@ -592,7 +526,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                         MainActor.assumeIsolated {
                             guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
-                            if self.tv.neteaseStore.openCardMenu() { self.selectHeld = true }
+                            // 和手机上按住 OK 是同一套：响一声、震一下
+                            if self.tv.openHoldMenu() {
+                                self.selectHeld = true
+                                self.tv.feedback.play(.select, from: .keyboard)
+                            }
                         }
                     }
                     return nil
@@ -606,12 +544,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if self?.window.firstResponder is NSTextView { return event }
                 tv.bilibiliStore.stopEditing()
             }
+            // 浏览器的地址栏：和网易云的搜索框一样，还没拿到键盘（刚出现那一瞬间）就让它再要一次，这一下不算
+            if tv.mode == .launcher, tv.browserOpen, tv.browserStore.editing {
+                if self?.window.firstResponder is NSTextView { return event }
+                tv.browserStore.refocus()
+                return nil
+            }
             // 网易云音乐的搜索框同理
             if tv.mode == .launcher, tv.neteaseOpen, tv.neteaseStore.typing {
                 if self?.window.firstResponder is NSTextView { return event }
                 // 输入框还没拿到键盘（刚出现的那一瞬间）：让它再要一次，这一下按键不算，也不把输入框收掉
                 tv.neteaseStore.refocus()
                 return nil
+            }
+            // 浏览器的网页：焦点在标签栏上时，方向键、回车、空格归标签栏（"⋯"菜单开着时回车立刻生效）。
+            // 焦点在网页里时，视频铺满的时候按上叫出标签栏，别的方向键照常给网页。
+            // 按住回车半秒 = "⋯"菜单（和手机遥控器上按住 OK 一样）；按一下照常是回车（松开时算数，在网页里交给网页）。
+            // 网页里正在用输入法打字（有待选的字）时不拦回车
+            if tv.browserPageInFront, mods.isEmpty {
+                let inBar = tv.browserChromeUp
+                if inBar {
+                    switch event.keyCode {
+                    case 123: tv.handle(.move(.left)); return nil
+                    case 124: tv.handle(.move(.right)); return nil
+                    case 125: tv.handle(.move(.down)); return nil
+                    case 126: tv.handle(.move(.up)); return nil
+                    case 49: if !event.isARepeat { tv.handle(.select) }; return nil
+                    case 36, 76:
+                        if tv.browserStore.menu != nil {
+                            if !event.isARepeat { tv.handle(.select) }
+                            return nil
+                        }
+                    default: return event
+                    }
+                } else if event.keyCode == 126, tv.browserStore.videoMode {
+                    tv.handle(.move(.up))
+                    return nil
+                }
+                let composing = !inBar && ((self?.window.firstResponder as? NSTextInputClient)?.hasMarkedText() ?? false)
+                if event.keyCode == 36 || event.keyCode == 76, !composing {
+                    if event.isARepeat { return nil }
+                    self?.selectDownAt = Date()
+                    self?.selectHeld = false
+                    self?.selectTimer?.invalidate()
+                    self?.selectTimer = Timer.scheduledTimer(withTimeInterval: Self.holdTime, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.selectDownAt != nil, !self.selectHeld else { return }
+                            if self.tv.openHoldMenu() {
+                                self.selectHeld = true
+                                self.tv.feedback.play(.select, from: .keyboard)
+                            }
+                        }
+                    }
+                    return nil
+                }
             }
             guard tv.mode == .launcher || tv.mode == .movie else { return event }
             // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.
@@ -652,7 +638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func reloadPage(_ sender: Any?) { tv.webView?.reload() }
     @objc func copyReport(_ sender: Any?) { DiagnosticReport.copy(from: tv) }
     @objc func reportBug(_ sender: Any?) {
-        NSWorkspace.shared.open(URL(string: "https://github.com/Arunprakaash/mac-tv/issues/new?template=bug_report.md")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/kaisenyao/mac-tv/issues/new?template=bug_report.md")!)
     }
 
     private func makeMainMenu() -> NSMenu {

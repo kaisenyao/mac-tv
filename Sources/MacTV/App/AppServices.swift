@@ -9,6 +9,5 @@ struct AppServices {
     var jellyfin: JellyfinServers = .shared
     var networkShares: NetworkShares = .shared
     var updater: Updater = .shared
-    var topShelf: TopShelfFeed = .shared
     var feedback: Feedback = .shared
 }

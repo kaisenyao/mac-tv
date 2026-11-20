@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// 看视频时长按确认，从右边拉出来的面板：UP 主、点赞、投币、收藏、倍速、字幕。
-/// 和账号菜单是同一种玻璃底板、同一块滑动的白色高亮；选了投币、倍速、字幕，面板里换成那一项的小列表，返回回到上一层。
+/// 看视频时长按确认，从右边拉出来的面板：UP 主、点赞、投币、收藏、选集（分 P、合集才有）、倍速、字幕、弹幕。
+/// 和账号菜单是同一种玻璃底板、同一块滑动的白色高亮；选了投币、倍速、字幕、弹幕（取消收藏要先确认），
+/// 面板里换成那一项的小列表，返回回到上一层。选集是收起面板、拉出下面那一排。
 /// 它一直都在，平时停在屏幕右边外面，所以拉出、推回都是连贯的滑动。
 struct BilibiliPlayerPanel: View {
     @ObservedObject var player: BilibiliNativePlayer
 
-    private static let slide = Animation.spring(response: 0.42, dampingFraction: 0.84)
     private let width: CGFloat = 430
     private let rowHeight: CGFloat = 76
     private let gap: CGFloat = 8
@@ -36,11 +36,11 @@ struct BilibiliPlayerPanel: View {
         .offset(x: open ? 0 : width + 140)
         .opacity(open ? 1 : 0)
         .allowsHitTesting(open)
-        .animation(Self.slide, value: open)
-        .animation(Self.slide, value: player.panelIndex)
-        .animation(Self.slide, value: player.panelListIndex)
-        .animation(.easeOut(duration: 0.18), value: player.panelList)
-        .animation(.easeOut(duration: 0.18), value: player.relation)
+        .animation(BiliMotion.slide, value: open)
+        .animation(BiliMotion.slide, value: player.panelIndex)
+        .animation(BiliMotion.slide, value: player.panelListIndex)
+        .animation(Motion.press, value: player.panelList)
+        .animation(Motion.press, value: player.relation)
     }
 
     // MARK: 第一层：一行一项
@@ -70,7 +70,7 @@ struct BilibiliPlayerPanel: View {
                     .clipShape(Circle())
                 VStack(alignment: .leading, spacing: 2) {
                     Text(player.info?.owner.name ?? player.current?.owner ?? "").font(.system(size: 26, weight: .bold)).lineLimit(1)
-                    Text("UP 主主页").font(.system(size: 19, weight: .medium)).opacity(0.6)
+                    Text("UP主主页").font(.system(size: 19, weight: .medium)).opacity(0.6)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.5)
@@ -79,7 +79,7 @@ struct BilibiliPlayerPanel: View {
                 label(player.relation.liked ? "已点赞" : "点赞", value: player.info.map { biliCount($0.likes) })
             case .coin:
                 CoinIcon(lit: player.relation.coins > 0, focused: focused, pink: pink).frame(width: 46)
-                label(player.relation.coins > 0 ? "已投 \(player.relation.coins) 个硬币" : "投币", value: player.info.map { biliCount($0.coins) },
+                label(player.relation.coins > 0 ? "已投 \(player.relation.coins) 枚硬币" : "投币", value: player.info.map { biliCount($0.coins) },
                       more: !player.coinChoices.isEmpty)
             case .favorite:
                 icon(player.relation.favorited ? "star.fill" : "star", lit: player.relation.favorited, focused: focused)
@@ -95,7 +95,7 @@ struct BilibiliPlayerPanel: View {
                 label("字幕", value: player.subtitleTracks.isEmpty ? "无" : (player.subtitleTrack?.name ?? "关闭"), more: !player.subtitleTracks.isEmpty)
             case .danmaku:
                 icon(player.danmakuOn ? "text.bubble.fill" : "text.bubble", lit: false, focused: focused)
-                label("弹幕", value: player.danmakuOn ? "开" : "关", more: true)   // 里面有好几项，这里只写开没开
+                label("弹幕", value: player.danmakuOn ? "打开" : "关闭", more: true)   // 里面有好几项，这里只写开没开
             }
         }
         .foregroundStyle(tint)
@@ -110,13 +110,14 @@ struct BilibiliPlayerPanel: View {
             .frame(width: 46)
     }
 
-    /// 一行的名字和右边的值。more = 选它会进下一层（倍速、字幕、弹幕、投币、选集）：值后面带一个 ">"
+    /// 一行的名字和右边的值。more = 选它会进下一层（倍速、字幕、弹幕、投币、选集）：值后面带一个 ">"。
+    /// 没有 ">" 的行（点赞、收藏）也留着它的位置，这样每一行的数字右边都对在同一条竖线上
     private func label(_ title: String, value: String?, more: Bool = false) -> some View {
         HStack(spacing: 12) {
             Text(title).font(.system(size: 26, weight: .semibold)).lineLimit(1)
             Spacer(minLength: 8)
             if let value { Text(value).font(.system(size: 23, weight: .medium).monospacedDigit()).opacity(0.6).lineLimit(1).contentTransition(.numericText()) }
-            if more { Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.5) }
+            Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(more ? 0.5 : 0)
         }
     }
 
@@ -124,14 +125,11 @@ struct BilibiliPlayerPanel: View {
     // MARK: 第二层：投几个币、倍速、字幕、确认取消收藏
 
     private func listHeader(_ list: BilibiliNativePlayer.PanelList) -> some View {
-        // 投币：原创最多两个，转载一个；已经投过的扣掉。只剩一个能投时写出来，免得以为少了一个选项
-        let coinNote = (player.info?.original == false) ? " · 转载视频最多 1 个"
-            : (player.relation.coins == 1 ? " · 已投 1 个，还能投 1 个" : "")
         let title = switch list {
-        case .coins: "投币" + coinNote
+        case .coins: "投币"
         case .speed: "倍速"
         case .subtitles: "字幕"
-        case .unfavorite: "取消收藏这个视频？"
+        case .unfavorite: "要取消收藏吗？"
         case .danmaku: "弹幕"
         }
         return HStack(spacing: 12) {
@@ -146,7 +144,7 @@ struct BilibiliPlayerPanel: View {
     private func optionTitles(_ list: BilibiliNativePlayer.PanelList) -> [(title: String, value: String?, checked: Bool)] {
         switch list {
         case .coins:
-            return player.coinChoices.map { ("投 \($0) 个硬币", nil, false) }
+            return player.coinChoices.map { ("投 \($0) 枚硬币", nil, false) }
         case .speed:
             return BilibiliNativePlayer.speeds.map { (BilibiliNativePlayer.speedName($0), nil, $0 == player.speed) }
         case .subtitles:

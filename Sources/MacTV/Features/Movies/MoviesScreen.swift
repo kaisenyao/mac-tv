@@ -24,8 +24,8 @@ struct ShareForm: Equatable {
     var address = ""
     var user = ""
     var password = ""
+    /// Why the share or server couldn't be added.
     var message: String?
-    var failed = false
     var connecting = false
 }
 
@@ -66,12 +66,9 @@ extension TVController {
         return (row, min(browser.column, rows[row].items.count - 1))
     }
 
-    var focusedMovieItem: MovieItem {
-        let focus = movieFocus
-        return movieRows[focus.row].items[focus.column]
-    }
-
     func openMovies() {
+        // 从设置里进来时，哔哩哔哩、网易云、得到、浏览器的页面可能还开着：先收起来，不然片库被它们挡住
+        closeBilibili(); leaveNetease(); closeDedao(); closeBrowser()
         movies = MoviesBrowser()
         movieLibrary.refresh()
     }
@@ -185,7 +182,6 @@ extension TVController {
         // While connecting, only Back does anything: it closes the form and the share keeps trying.
         if form.connecting { if case .back = command { movies?.shareForm = nil }; return }
         form.message = nil
-        form.failed = false
         switch command {
         case .back:
             movies?.shareForm = nil
@@ -224,12 +220,10 @@ extension TVController {
         let shares = networkShares
         guard let share = shares.add(address: form.address, user: form.user, password: form.password) else {
             form.message = form.address.isEmpty ? "Type the shared folder's address first." : "Use an address like nas.local/Movies."
-            form.failed = true
             movies?.shareForm = form
             return
         }
         form.connecting = true
-        form.message = "Connecting to \(share.host)…"
         movies?.shareForm = form
         Task { @MainActor [weak self] in
             // macOS gives up on an unreachable server after about a minute.
@@ -239,12 +233,10 @@ extension TVController {
                 switch shares.status[share.id] {
                 case .connected:
                     self.movies?.shareForm = nil
-                    self.showToast("Connected to \(share.name). Its movies are on the way.")
                     return
                 case .offline(let reason):
                     self.movies?.shareForm?.connecting = false
                     self.movies?.shareForm?.message = reason
-                    self.movies?.shareForm?.failed = true
                     return
                 default: continue
                 }
@@ -256,7 +248,6 @@ extension TVController {
     private func submitJellyfinForm() {
         guard var form = movies?.shareForm else { return }
         form.connecting = true
-        form.message = "Signing in…"
         movies?.shareForm = form
         let jellyfin = jellyfin
         Task { @MainActor [weak self] in
@@ -265,11 +256,8 @@ extension TVController {
             if let error {
                 self.movies?.shareForm?.connecting = false
                 self.movies?.shareForm?.message = error
-                self.movies?.shareForm?.failed = true
             } else {
                 self.movies?.shareForm = nil
-                let name = jellyfin.servers.last?.name ?? "the server"
-                self.showToast("Signed in to \(name). Its movies are on the way.")
             }
         }
     }
@@ -407,11 +395,8 @@ struct MoviesScreen: View {
     }
 
     private var foldersLine: String {
-        let names = library.folders.map { FileManager.default.displayName(atPath: $0.path) }
-        let place = names.isEmpty ? "no folders" : ListFormatter.localizedString(byJoining: names)
-        return library.movies.isEmpty
-            ? "Mac TV shows the video files in \(place). Put movies there, or choose more folders."
-            : "Looking in \(place). Choose more folders, or drives."
+        let names = ListFormatter.localizedString(byJoining: library.folders.map { FileManager.default.displayName(atPath: $0.path) })
+        return library.movies.isEmpty && !names.isEmpty ? "No movies in \(names)." : names
     }
 
     private func details(of movie: Movie) -> String {
@@ -550,8 +535,6 @@ struct FoldersSheet: View {
         let folders = library.suggestedFolders
         VStack(alignment: .leading, spacing: 10) {
             Text("Folders").font(.tv(.title3, emphasized: true))
-            Text("Mac TV shows the movies in the folders and servers you turn on.")
-                .font(.tv(.caption2)).foregroundStyle(.white.opacity(0.65))
                 .padding(.bottom, 14)
             ForEach(Array(folders.enumerated()), id: \.element) { index, folder in
                 if let share = shares.share(for: folder) {
@@ -587,7 +570,7 @@ struct FoldersSheet: View {
             row(extras + 1, systemImage: "plus", title: "Add Jellyfin Server…") {
                 Image(systemName: "chevron.right").font(.system(size: 22, weight: .semibold)).opacity(0.6)
             }
-            row(extras + 2, systemImage: "folder.badge.plus", title: "Choose Another Folder…") {
+            row(extras + 2, systemImage: "folder.badge.plus", title: "Add Folder…") {
                 Image(systemName: "chevron.right").font(.system(size: 22, weight: .semibold)).opacity(0.6)
             }
         }
@@ -639,10 +622,10 @@ struct ResumeSheet: View {
         VStack(spacing: 18) {
             Text(movie.displayTitle).font(.tv(.callout, emphasized: true)).lineLimit(2).multilineTextAlignment(.center)
                 .padding(.bottom, 10)
-            button("Resume from \(MoviePlayerView.clock(position))", systemImage: "play.fill", focused: row == 0) {
+            button("Resume From \(clockText(position))", systemImage: "play.fill", focused: row == 0) {
                 choose(max(0, position - 5))
             }
-            button("Start from the Beginning", systemImage: "arrow.counterclockwise", focused: row == 1) { choose(0) }
+            button("Start From Beginning", systemImage: "arrow.counterclockwise", focused: row == 1) { choose(0) }
         }
         .padding(48)
         .frame(width: 720)
@@ -766,9 +749,9 @@ struct MoviePlayerView: View {
                 }
                 progress
                 HStack {
-                    Text(Self.clock(player.time))
+                    Text(clockText(player.time))
                     Spacer()
-                    Text("-" + Self.clock(max(0, player.duration - player.time)))
+                    Text("−" + clockText(max(0, player.duration - player.time)))
                 }
                 .font(.system(size: 24, weight: .semibold))
                 .monospacedDigit()
@@ -838,11 +821,6 @@ struct MoviePlayerView: View {
         .animation(Motion.focus, value: menu)
     }
 
-    static func clock(_ seconds: Double) -> String {
-        let total = Int(max(0, seconds))
-        let h = total / 3600, m = total / 60 % 60, s = total % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
-    }
 }
 
 /// A small round glass control at the player's edges (back, subtitles, audio). `lit` shows it
@@ -951,13 +929,12 @@ struct ShareFormSheet: View {
                 set(3)
                 tv.handle(.select)
             }
-            Text(form.message ?? (form.jellyfin
-                ? "Use the user the server's owner made for you. Only a sign-in key is kept, in this Mac's Keychain."
-                : "Type with the keyboard or the remote's typing box. The password stays in this Mac's Keychain."))
-                .font(.tv(.caption2, emphasized: form.message != nil))
-                .foregroundStyle(form.failed ? Color(hex: "#FF8A80") : .white.opacity(form.message == nil ? 0.55 : 0.9))
-                .lineLimit(2)
-                .frame(minHeight: 64, alignment: .topLeading)
+            if let message = form.message {
+                Text(message)
+                    .font(.tv(.caption2, emphasized: true))
+                    .foregroundStyle(Color(hex: "#FF8A80"))
+                    .lineLimit(2)
+            }
         }
         .padding(56)
         .frame(width: 1000, alignment: .leading)

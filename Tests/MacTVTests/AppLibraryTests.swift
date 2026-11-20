@@ -17,15 +17,15 @@ struct AppLibraryTests {
     @Test
     func testLegacyFilePreservesAddedAndHiddenApps() throws {
         try withFolder { folder in
-            let legacy = #"{"added":[{"id":"user-legacy","name":"Legacy","url":"https://example.com"}],"hidden":["netflix"]}"#
+            let legacy = #"{"added":[{"id":"user-legacy","name":"Legacy","url":"https://example.com"}],"hidden":["youtube"]}"#
             try Data(legacy.utf8).write(to: folder.appendingPathComponent("apps.json"))
             let library = AppLibrary(folder: folder)
             #expect(library.hasHiddenBuiltIns)
-            #expect(!library.services().contains { $0.id == "netflix" })
+            #expect(!library.services().contains { $0.id == "youtube" })
             #expect(library.services().contains { $0.id == "user-legacy" })
             library.restoreBuiltIns()
             let reloaded = AppLibrary(folder: folder)
-            #expect(reloaded.services().contains { $0.id == "netflix" })
+            #expect(reloaded.services().contains { $0.id == "youtube" })
             #expect(reloaded.services().contains { $0.id == "user-legacy" })
         }
     }
@@ -58,19 +58,19 @@ struct AppLibraryTests {
     func testMoveBoundariesAndUtilityTiles() throws {
         try withFolder { folder in
             let library = AppLibrary(folder: folder)
-            #expect(library.setPinned("netflix", true))
+            #expect(library.setPinned("youtube", true))
             let before = library.services().map(\.id)
             for id in ["missing", "add-app", "settings"] {
                 #expect(!library.setPinned(id, true))
-                #expect(!library.canMove(id, by: -1))
+                #expect(!library.move(id, by: -1))
                 #expect(!library.move(id, by: -1))
             }
-            #expect(!library.canMove("netflix", by: -1))
-            #expect(!library.canMove("netflix", by: 1))
-            #expect(!library.move("netflix", by: 1))
+            #expect(!library.move("youtube", by: -1))
+            #expect(!library.move("youtube", by: 1))
+            #expect(!library.move("youtube", by: 1))
             // 第一个没置顶的应用不能挪进置顶区（这个分支里排在最前面的是哔哩哔哩，不是 YouTube）
             let firstUnpinned = try #require(before.dropFirst().first)
-            #expect(!library.canMove(firstUnpinned, by: -1))
+            #expect(!library.move(firstUnpinned, by: -1))
             #expect(!library.move(firstUnpinned, by: -1))
             #expect(library.services().map(\.id) == before)
             #expect(Array(before.suffix(2)) == ["add-app", "settings"])
@@ -81,17 +81,17 @@ struct AppLibraryTests {
     func testHiddenBuiltinRetainsPreferenceAndRemovedAddedAppDoesNot() throws {
         try withFolder { folder in
             let library = AppLibrary(folder: folder)
-            #expect(library.setPinned("netflix", true))
+            #expect(library.setPinned("netease", true))
             #expect(library.setPinned("youtube", true))
             let original = library.services().filter { library.isPinned($0.id) }.map(\.id)
             try #require(original.count == 2)
             #expect(library.move(original[1], by: -1))
             let reordered = library.services().filter { library.isPinned($0.id) }.map(\.id)
-            library.remove("netflix")
-            #expect(!library.services().contains { $0.id == "netflix" })
+            library.remove("netease")
+            #expect(!library.services().contains { $0.id == "netease" })
             let reloaded = AppLibrary(folder: folder)
             reloaded.restoreBuiltIns()
-            #expect(reloaded.isPinned("netflix"))
+            #expect(reloaded.isPinned("netease"))
             #expect(reloaded.services().filter { reloaded.isPinned($0.id) }.map(\.id) == reordered)
 
             let added = reloaded.add(name: "Disposable", url: URL(string: "https://example.com"), bundleID: nil)
@@ -108,7 +108,8 @@ struct AppLibraryTests {
     func testMoreThanSixAppsCanBePinned() throws {
         try withFolder { folder in
             let library = AppLibrary(folder: folder)
-            let ids = ["netflix", "youtube", "prime", "hotstar", "appletv", "spotify", "ytmusic", "movies"]
+            let sites = (1...4).map { library.add(name: "Site \($0)", url: URL(string: "https://site\($0).example"), bundleID: nil).id }
+            let ids = ["bilibili", "netease", "youtube", "movies"] + sites
             for id in ids { #expect(library.setPinned(id, true)) }
             #expect(Set(library.services().filter { library.isPinned($0.id) }.map(\.id)) == Set(ids))
             #expect(Array(library.services().suffix(2).map(\.id)) == ["add-app", "settings"])
@@ -118,14 +119,14 @@ struct AppLibraryTests {
     @Test
     func testStaleAndDuplicateOrderIDsAndInvalidOffsets() throws {
         try withFolder { folder in
-            let json = #"{"added":[],"hidden":[],"order":["youtube","user-later","missing","youtube","netflix"],"pinned":["user-later"]}"#
+            let json = #"{"added":[],"hidden":[],"order":["youtube","user-later","missing","youtube","netease"],"pinned":["user-later"]}"#
             try Data(json.utf8).write(to: folder.appendingPathComponent("apps.json"))
             let library = AppLibrary(folder: folder)
             let ids = library.services().map(\.id)
-            #expect(Array(ids.prefix(2)) == ["youtube", "netflix"])
+            #expect(Array(ids.prefix(2)) == ["youtube", "netease"])
             #expect(Set(ids).count == ids.count)
             for offset in [Int.min, -2, 0, 2, Int.max] {
-                #expect(!library.canMove("youtube", by: offset))
+                #expect(!library.move("youtube", by: offset))
                 #expect(!library.move("youtube", by: offset))
             }
             #expect(library.services().map(\.id) == ids)
@@ -139,7 +140,7 @@ struct AppLibraryTests {
     @Test
     func testMovingVisibleAppsPreservesUnavailableAppPreference() throws {
         try withFolder { folder in
-            let json = #"{"added":[{"id":"user-unavailable","name":"Unavailable","bundleID":"invalid.example.mactv.unavailable"}],"hidden":[],"order":["netflix","user-unavailable","youtube"],"pinned":["user-unavailable"]}"#
+            let json = #"{"added":[{"id":"user-unavailable","name":"Unavailable","bundleID":"invalid.example.mactv.unavailable"}],"hidden":[],"order":["netease","user-unavailable","youtube"],"pinned":["user-unavailable"]}"#
             let file = folder.appendingPathComponent("apps.json")
             try Data(json.utf8).write(to: file)
             let library = AppLibrary(folder: folder)
@@ -147,7 +148,7 @@ struct AppLibraryTests {
             #expect(library.move("youtube", by: -1))
             let saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
             let order = try #require(saved["order"] as? [String])
-            #expect(Array(order.prefix(3)) == ["youtube", "user-unavailable", "netflix"])
+            #expect(Array(order.prefix(3)) == ["youtube", "user-unavailable", "netease"])
             let reloaded = AppLibrary(folder: folder)
             #expect(reloaded.isPinned("user-unavailable"))
         }
@@ -157,11 +158,13 @@ struct AppLibraryTests {
     @Test
     func controllerKeepsFocusByAppIdentityAcrossChanges() throws {
         try withFolder { folder in
-            let tv = TVController(library: AppLibrary(folder: folder))
+            let library = AppLibrary(folder: folder)
+            let sites = (1...3).map { library.add(name: "Site \($0)", url: URL(string: "https://site\($0).example"), bundleID: nil).id }
+            let tv = TVController(library: library)
             tv.setFocus(.shelf(0))
-            // 焦点停在排第一的应用上（原版是 Netflix，这个分支里是哔哩哔哩），之后按"是哪个应用"跟着它走
+            // 焦点停在排第一的应用上（这个分支里是哔哩哔哩），之后按"是哪个应用"跟着它走
             let first = try #require(tv.services.first?.id)
-            for id in ["youtube", "prime", "hotstar", "appletv", "spotify", "ytmusic"] where id != first {
+            for id in ["netease", "youtube", "movies"] + sites where id != first {
                 #expect(tv.setPinned(id, true))
             }
             let firstIndex = try #require(tv.services.firstIndex { $0.id == first })
@@ -201,8 +204,8 @@ struct AppLibraryTests {
                 tv.handleAppsRequest(HTTPRequest(method: "POST", path: path, query: [:], headers: [:], body: Data(json.utf8)))
             }
             let invalid: [(String, String)] = [
-                ("/apps/pin", #"{"id":"netflix","pinned":1}"#),
-                ("/apps/pin", #"{"id":"netflix","pinned":"true"}"#),
+                ("/apps/pin", #"{"id":"movies","pinned":1}"#),
+                ("/apps/pin", #"{"id":"movies","pinned":"true"}"#),
                 ("/apps/pin", #"{"id":"missing","pinned":true}"#),
                 ("/apps/pin", #"{"id":"settings","pinned":true}"#),
                 ("/apps/move", #"{"id":"youtube","offset":true}"#),
@@ -220,8 +223,8 @@ struct AppLibraryTests {
             let second = tv.services[1].id
             #expect(request("/apps/move", #"{"id":"\#(second)","offset":-1}"#)?.status == "200 OK")
             #expect(tv.services.first?.id == second)
-            #expect(request("/apps/pin", #"{"id":"netflix","pinned":true}"#)?.status == "200 OK")
-            #expect(tv.isPinned("netflix"))
+            #expect(request("/apps/pin", #"{"id":"movies","pinned":true}"#)?.status == "200 OK")
+            #expect(tv.isPinned("movies"))
         }
     }
 

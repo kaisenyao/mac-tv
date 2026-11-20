@@ -53,7 +53,7 @@ final class TVMode {
             self.manualRestoreFullscreen = false
             self.manualDedicatedEntry = false
             self.relocationPending = false
-            self.tv?.showToast("Fullscreen transition did not finish. Try choosing the display again.")
+            self.tv?.showToast("Couldn't Move to That Display")
             self.tv?.objectWillChange.send()
         }
     }
@@ -219,7 +219,7 @@ final class TVMode {
                 self.moveWindow(to: target)
                 self.confirmManualMove(targetID: targetID, attempt: attempt + 1)
             } else {
-                self.finishManualMoveFailure("Could not move Mac TV to the selected display.")
+                self.finishManualMoveFailure("Couldn't Move to That Display")
             }
         }
     }
@@ -247,7 +247,7 @@ final class TVMode {
 
     var preferredName: String {
         guard let preferredID else { return "Automatic" }
-        return NSScreen.screens.first(where: { id($0) == preferredID })?.localizedName ?? "Display disconnected"
+        return NSScreen.screens.first(where: { id($0) == preferredID })?.localizedName ?? "Disconnected"
     }
 
     func stepDisplay(_ step: Int, wrap: Bool) {
@@ -374,7 +374,7 @@ final class TVMode {
                     self.performManualMove()
                 } else {
                     self.fullscreenMoveRetries = 0
-                    self.tv?.showToast("Could not move fullscreen Mac TV to the selected display.")
+                    self.tv?.showToast("Couldn't Move to That Display")
                 }
                 return
             }

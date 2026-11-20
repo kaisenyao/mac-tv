@@ -152,7 +152,7 @@ final class AVPlayback: NSObject, PlaybackEngine {
     }
 
     private init(item: AVPlayerItem, duration: Double, audible: AVMediaSelectionGroup?, legible: AVMediaSelectionGroup?) {
-        player = AVPlayer(playerItem: item)
+        player = PlaybackVolume.attached(AVPlayer(playerItem: item))   // 电视的音量调不了时，音量键调它
         playerLayer = AVPlayerLayer(player: player)
         self.duration = duration
         self.audible = audible
@@ -453,7 +453,7 @@ final class MoviePlayer: ObservableObject {
                 let cues = SubtitleCue.parse(file: file)
                 guard !cues.isEmpty else { return nil }
                 let known = MediaOption.languageCode(language).flatMap { Locale.current.localizedString(forLanguageCode: $0) } != nil
-                return (MediaOption(language: known ? language : "und", name: known ? nil : "Subtitles file", detail: nil), cues)
+                return (MediaOption(language: known ? language : "und", name: known ? nil : "Subtitle File", detail: nil), cues)
             }
     }
 }

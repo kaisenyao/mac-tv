@@ -1,12 +1,12 @@
 import AppKit
 @preconcurrency import Security // SecRequirement is immutable, so passing it to the install queue is safe.
 
-/// Keeps Mac TV up to date from its GitHub releases. It checks at launch and once a day. With
-/// automatic updates on (the default), a new version downloads straight away and installs only while
-/// nothing is in use, so the restart never interrupts watching. Otherwise it waits for Settings › About.
+/// 从我们自己的仓库（github.com/kaisenyao/mac-tv）的 Releases 更新 Mac TV，不再碰原作者的发布页。
+/// 启动时和之后每天查一次。打开"自动更新"时，新版本马上下载，等没人在用时才装（装完重启，不会打断正在看的）；
+/// 关着（默认）就等你在 设置 › 关于 › 软件更新 里按。
 ///
-/// A downloaded update is installed only if it's signed by the same certificate as the running app
-/// (its designated requirement), so nothing but a real Mac TV release can replace it.
+/// 下载来的新版本必须和正在跑的这个用同一张证书签名（本机的"Mac TV Local Signing"，见 build.sh），
+/// 才会被装上；别人的版本、原作者的官方版都换不掉它。发版：打 vX.Y 的 tag，附一个 .dmg
 @MainActor
 final class Updater: ObservableObject {
     static let shared = Updater()
@@ -43,7 +43,7 @@ final class Updater: ObservableObject {
     /// Whether nothing is being watched or used right now, so restarting Mac TV is fine.
     var isIdle: () -> Bool = { false }
 
-    /// Install new versions on their own while Mac TV is idle. On unless turned off.
+    /// 没人在用时自己把新版本装上。默认关着（设置 › 关于 › 自动更新）
     var automatic: Bool {
         get { preferences.automaticUpdates }
         set {
@@ -58,18 +58,13 @@ final class Updater: ObservableObject {
         return UserDefaults.standard.bool(forKey: "restartedForUpdate")
     }
 
-    private static let latestRelease = URL(string: "https://api.github.com/repos/Arunprakaash/mac-tv/releases/latest")!
+    private static let latestRelease = URL(string: "https://api.github.com/repos/kaisenyao/mac-tv/releases/latest")!
     private static let checkInterval: TimeInterval = 24 * 60 * 60
-    /// 自用分支的总开关：false = 完全不联系 GitHub 的发布页。
-    static let upstreamUpdatesEnabled = false
     private var timer: Timer?
     private var idleTimer: Timer?
     private var download: URLSessionDownloadTask?
     private var progress: NSKeyValueObservation?
 
-    static var currentVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-    }
 
     var availableVersion: String? {
         switch state {
@@ -79,9 +74,6 @@ final class Updater: ObservableObject {
     }
 
     func start() {
-        // 自用分支：不从上游自动检查 / 下载 / 安装更新，否则会把本地改动换回官方版。
-        // 需要时在这里用 git 合并上游即可。
-        if !Self.upstreamUpdatesEnabled { return }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(20))
             self.check()
@@ -122,17 +114,20 @@ final class Updater: ObservableObject {
         state = .checking
         var request = URLRequest(url: Self.latestRelease, timeoutInterval: 20)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             let release = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let status = (response as? HTTPURLResponse)?.statusCode
             Task { @MainActor in
                 guard let shared = self else { return }
+                // 仓库还没发过版时 GitHub 回 404：当作已是最新，不算出错
+                if status == 404 { shared.state = .upToDate; return }
                 guard let release, let tag = release["tag_name"] as? String else {
                     shared.state = .failed(error == nil ? "Couldn't read the latest release." : "Couldn't reach GitHub.")
                     return
                 }
                 let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
                 let assets = release["assets"] as? [[String: Any]] ?? []
-                guard Self.isNewer(version, than: Self.currentVersion) else { shared.state = .upToDate; return }
+                guard Self.isNewer(version, than: AppVersion.current) else { shared.state = .upToDate; return }
                 guard let link = assets.lazy.compactMap({ $0["browser_download_url"] as? String })
                         .first(where: { $0.hasSuffix(".dmg") }),
                       let url = URL(string: link), url.scheme == "https" else {
@@ -140,9 +135,10 @@ final class Updater: ObservableObject {
                     return
                 }
                 shared.state = .available(version: version, download: url)
-                if shared.automatic { shared.install(from: url, now: false) }
-                let noticed = UserDefaults.standard.string(forKey: "updateNoticeShown")
-                if noticed != version {
+                // With automatic updates on, the update installs itself, so there's nothing to say.
+                if shared.automatic {
+                    shared.install(from: url, now: false)
+                } else if UserDefaults.standard.string(forKey: "updateNoticeShown") != version {
                     UserDefaults.standard.set(version, forKey: "updateNoticeShown")
                     shared.onAvailable?(version)
                 }

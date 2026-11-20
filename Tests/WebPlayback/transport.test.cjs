@@ -1,16 +1,21 @@
 // Run with: node Tests/WebPlayback/transport.test.cjs
-// Exercise the embedded transport and refresh scheduler with controlled slow responses.
+// Exercise the page's transport, command queue, refresh scheduler, pairing recovery and clickpad holds with
+// controlled slow responses.
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const vm = require('node:vm');
 const { script: source } = require('./page.cjs');
-const transport = source.slice(source.indexOf('// A timed-out POST'), source.indexOf('// State: connection'));
-const refresh = source.slice(source.indexOf('let stateInFlight = null;'), source.indexOf('async function readState()'));
-assert.ok(transport.includes('function request') && refresh.includes('function refresh'));
+const section = (from, to) => {
+  const start = source.indexOf(from), end = source.indexOf(to, start);
+  assert.ok(start >= 0 && end > start, `${from} … ${to} is in remote.js`);
+  return source.slice(start, end);
+};
+const transport = section('// A timed-out POST', '// State: connection');
+const refresh = section('let stateInFlight = null;', 'async function readState()');
+assert.ok(transport.includes('function request') && transport.includes('function send') && refresh.includes('function refresh'));
 const requests = [], calls = [], errors = [], storage = [];
 let readCount = 0, finishRead, finishFetch;
 const context = vm.createContext({
-  AbortController, Promise, Error,
+  AbortController, Promise, Error, Math, JSON,
   setTimeout: (fn, ms) => setTimeout(fn, ms === 9000 ? 30 : ms), clearTimeout,
   fetch: (path, options) => {
     requests.push({ path, options });
@@ -26,6 +31,11 @@ const context = vm.createContext({
 vm.runInContext("let key = 'original'; let appMutationPending = false;" + transport + refresh, context);
 const run = code => vm.runInContext(code, context);
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const commands = () => requests.filter(r => r.path === '/cmd');
+const body = r => JSON.parse(r.options.body);
+const ok = () => finishFetch({ status: 200, ok: true, json: async () => ({ ok: true }) });
+// Answer the command on the way, and each one the queue sends after it, until it is empty.
+const drain = async () => { for (let i = 0; i < 50 && run('activeCommand !== null'); i++) { ok(); await wait(0); } };
 (async () => {
   const timeout = run("api('/files/play', {id:'video'})");
   await assert.rejects(timeout, /timed out|aborted/);
@@ -43,18 +53,42 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   finishRead(true); assert.equal(await reconcile, true);
   run('appMutationPending = false');
 
-  const a = run("send('up', {}, 'repeat')");
-  for (let i = 0; i < 20; i++) run("send('up', {}, 'repeat')");
+  // One command at a time. A held key's repeats (volume, "still holding") are dropped while one is on the
+  // way; taps and the press / hold / release of a key never are, however many wait.
+  const first = run("send('volup', {}, true)");
+  for (let i = 0; i < 20; i++) run("send('volup', {}, true)");
+  for (const p of ['tap', 'hold', 'release']) run(`send('press', { k: 'up', p: '${p}' })`);
+  for (let i = 0; i < 8; i++) run("send('press', { k: 'down', p: 'tap' })");
+  run("send('press', { k: 'up', p: 'alive' }, true)");
   await wait(0);
-  assert.equal(requests.filter(r => r.path === '/cmd').length, 1, 'repeat traffic is dropped while busy');
-  const urgent = run("send('home', {}, 'tap')");
+  assert.equal(commands().length, 1, 'repeat traffic is dropped while busy');
+  await drain(); await first;
+  const sent = commands().map(body);
+  assert.deepEqual(sent.map(b => b.a === 'press' ? `${b.k}:${b.p}` : b.a),
+    ['volup', 'up:tap', 'up:hold', 'up:release', ...Array(8).fill('down:tap')], 'presses are kept in order, "alive" is dropped');
+
+  // The clickpad wheel: ticks made while a command is on the way are added up and sent as one, at most 16
+  // a time; none are lost.
+  const before = commands().length;
+  for (let i = 0; i < 20; i++) run('sendWheel(1)');
+  await drain();
+  const wheel = commands().slice(before).map(body);
+  assert.ok(wheel.every(b => b.a === 'wheel' && Math.abs(b.d) <= 16), 'wheel steps are batched, 16 at most');
+  assert.equal(wheel.reduce((n, b) => n + b.d, 0), 20, 'every wheel step arrives');
+  assert.ok(wheel.length <= 3, 'wheel steps are merged while busy');
+
+  // Home is urgent: it cancels the command on the way and everything waiting, wheel steps included.
+  const busy = run("send('playpause')");
+  run("send('press', { k: 'left', p: 'tap' })");
+  run('sendWheel(1); sendWheel(1)');
+  const urgent = run("send('home')");
   await wait(0);
-  const cmd = requests.filter(r => r.path === '/cmd');
-  assert.equal(cmd.length, 2);
-  assert.equal(cmd[0].options.signal.aborted, true, 'urgent command cancels old request');
-  assert.equal(JSON.parse(cmd[1].options.body).a, 'home');
-  finishFetch({ status: 200, ok: true, json: async () => ({ ok: true }) });
-  await Promise.all([a, urgent]);
+  const cmd = commands();
+  assert.equal(cmd.at(-2).options.signal.aborted, true, 'urgent command cancels old request');
+  assert.equal(body(cmd.at(-1)).a, 'home');
+  await drain();
+  await Promise.all([busy, urgent]);
+  assert.equal(body(commands().at(-1)).a, 'home', 'nothing queued before Home is sent after it');
   assert.deepEqual(errors, [], 'intentional cancellation is not an offline error');
 
   const expired = run("api('/state')");
@@ -65,7 +99,7 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   assert.deepEqual(calls, ['pair']);
   await run('refresh()');
   assert.equal(readCount, 2, 'unpaired polling never contacts state');
-  const pairSource = source.slice(source.indexOf('function showPair()'), source.indexOf('async function pair(', source.indexOf('function showPair()')));
+  const pairSource = section('function showPair()', 'async function pair(');
   let shown = false, focuses = 0, scheduled = 0;
   const pairElements = { '#pair': { classList: { contains: () => shown, add: () => { shown = true; } } }, '#code': { focus: () => { focuses++; } } };
   const pairContext = vm.createContext({ $: s => pairElements[s], setTimeout: fn => { scheduled++; fn(); } });
@@ -74,28 +108,65 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   assert.equal(scheduled, 1, 'pairing focus is scheduled only on transition');
   assert.equal(focuses, 1);
 
-  const start = source.indexOf('// Clickpad:');
-  const end = source.indexOf('// Touchpad:', start);
-  const listeners = {}, documentListeners = {}, repeats = [];
-  let intervalCallback, intervalCleared = false;
-  const pad = { querySelectorAll: () => [], setPointerCapture() {},
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 200, height: 200 }),
-    querySelector: () => ({ getBoundingClientRect: () => ({ width: 160 }), classList: { add() {}, remove() {} } }),
+  // The clickpad with the real "press" protocol: holding an arrow tells the Mac "hold", then "alive" every
+  // 300 ms, then "release". Hiding the page or losing the finger releases it, so a key is never left held.
+  const press = section('const press = {', '// 返回（按住');
+  const clickpad = section('// Clickpad：', '// 触控板：');
+  const sends = [], timers = [], intervals = new Map(), documentListeners = {}, listeners = {};
+  let nextId = 1;
+  const ring = { getBoundingClientRect: () => ({ left: 70, top: 20, width: 210, height: 210 }) };
+  const pad = { querySelector: () => ring, querySelectorAll: () => [], setPointerCapture() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 350, height: 251 }),
     addEventListener: (type, fn) => { listeners[type] = fn; } };
   const doc = { visibilityState: 'visible', addEventListener: (type, fn) => { documentListeners[type] = fn; } };
-  const padContext = vm.createContext({ document: doc, Math,
-    $: selector => selector === '#clickpad' ? pad : { getBoundingClientRect: () => ({ width: 40 }) },
-    send: action => repeats.push(action), setTimeout: (fn, ms) => { if (ms === 420) fn(); return 1; },
-    clearTimeout() {}, setInterval: fn => { intervalCallback = fn; return 2; },
-    clearInterval: () => { intervalCleared = true; }, });
-  vm.runInContext(source.slice(start, end), padContext);
-  listeners.pointerdown({ pointerId: 1, clientX: 150, clientY: 100 });
-  intervalCallback(); assert.equal(repeats.length, 1);
+  const padContext = vm.createContext({ document: doc, Math, Map,
+    $: selector => selector === '#clickpad' ? pad : {},
+    showArt() {}, haptic() {}, sendWheel: d => sends.push(`wheel:${d}`),
+    send: (a, extra = {}, repeat = false) => { sends.push(a === 'press' ? `${extra.k}:${extra.p}${repeat ? '~' : ''}` : a); return Promise.resolve(); },
+    setTimeout: (fn, ms) => { const id = nextId++; timers.push({ id, fn, ms }); return id; },
+    clearTimeout: id => { const t = timers.find(x => x.id === id); if (t) t.fn = null; },
+    setInterval: fn => { const id = nextId++; intervals.set(id, fn); return id; },
+    clearInterval: id => intervals.delete(id) });
+  vm.runInContext(press + clickpad, padContext);
+  const fire = ms => { for (const t of timers.splice(0)) if (t.fn && t.ms === ms) t.fn(); };
+  const at = (type, x, y, id = 1) => listeners[type]({ type, pointerId: id, clientX: x, clientY: y });
+  const centre = [175, 125], right = [175 + 90, 125];
+
+  at('pointerdown', ...right); at('pointerup', ...right);
+  at('pointerdown', ...centre); at('pointerup', ...centre);
+  at('pointerdown', 5, 5); at('pointerup', 5, 5);
+  assert.deepEqual(sends.splice(0), ['right:tap', 'select:tap'], 'arrow and OK taps; outside the ring does nothing');
+
+  at('pointerdown', ...right); fire(350);
+  assert.deepEqual(sends.splice(0), ['right:hold']);
+  assert.equal(intervals.size, 1);
+  [...intervals.values()][0]();
+  assert.deepEqual(sends.splice(0), ['right:alive~'], '"still holding" is a droppable repeat');
   doc.visibilityState = 'hidden'; documentListeners.visibilitychange();
-  assert.equal(intervalCleared, true, 'hiding the page stops held direction repeats');
-  intervalCleared = false;
-  listeners.pointerdown({ pointerId: 2, clientX: 150, clientY: 100 });
-  listeners.lostpointercapture();
-  assert.equal(intervalCleared, true, 'losing capture stops held direction repeats');
-  console.log('Remote request deadlines, serialized refresh, bounded commands and pairing recovery passed');
+  assert.deepEqual(sends.splice(0), ['right:release'], 'hiding the page releases the held arrow');
+  assert.equal(intervals.size, 0, 'and stops "still holding"');
+  doc.visibilityState = 'visible';
+
+  at('pointerdown', ...centre); fire(500);
+  assert.deepEqual(sends.splice(0), ['select:hold'], 'holding OK is a hold of select');
+  listeners.lostpointercapture({});
+  assert.deepEqual(sends.splice(0), ['select:release'], 'losing the finger releases it');
+  assert.equal(intervals.size, 0);
+  at('pointerup', ...centre);
+  assert.deepEqual(sends.splice(0), [], 'no tap after a released hold');
+
+  at('pointerdown', ...right); fire(350); at('pointerup', ...right);
+  assert.deepEqual(sends.splice(0), ['right:hold', 'right:release'], 'lifting after a hold releases, no extra tap');
+
+  // A swipe anywhere is one step that way; turning around the ring is the wheel, not a press.
+  at('pointerdown', 20, 125); at('pointermove', 60, 125); at('pointerup', 60, 125);
+  assert.deepEqual(sends.splice(0), ['right:tap'], 'a swipe from outside the ring is one step');
+  const turn = a => [175 + Math.cos(a) * 90, 125 + Math.sin(a) * 90];
+  at('pointerdown', ...turn(0));
+  for (let a = 0.1; a <= 1.6; a += 0.1) at('pointermove', ...turn(a));
+  at('pointerup', ...turn(1.6));
+  const turned = sends.splice(0);
+  assert.ok(turned.length >= 3 && turned.every(s => s === 'wheel:1'), `clockwise turn is wheel steps: ${turned}`);
+  assert.equal(timers.filter(t => t.fn).length, 0, 'no hold left pending');
+  console.log('Remote request deadlines, serialized refresh, bounded commands, clickpad holds and pairing recovery passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

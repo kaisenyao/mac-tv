@@ -8,6 +8,8 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
     let name: String
     let transport: UInt32
     let isDefault: Bool
+    /// CoreAudio 的 UID。显示器的声音在 Apple 芯片上就是显示器的 EDID UUID（见 DisplayAudioLink）
+    var uid = ""
 
     /// Maps transport type and device name to the appropriate tvOS SF Symbol.
     var symbol: String {
@@ -60,6 +62,13 @@ final class AudioCoordinator: ObservableObject {
 
     init(tv: TVController? = nil) {
         self.tv = tv
+        fixedOutput.onChange = { [weak self] level, showHUD in
+            self?.currentVolume = level
+            if showHUD { self?.tv?.showVolume(level) }
+        }
+        fixedOutput.reachesPlayback = { [weak self] in
+            NSApplication.shared.isActive && self?.tv?.playbackCoordinator.externalBrowser == nil
+        }
         refreshDevices()
         startListening()
     }
@@ -85,7 +94,8 @@ final class AudioCoordinator: ObservableObject {
                 id: id,
                 name: name,
                 transport: transport,
-                isDefault: isCurrent
+                isDefault: isCurrent,
+                uid: deviceUID(id) ?? ""
             )
             newDevices.append(device)
         }
@@ -107,13 +117,39 @@ final class AudioCoordinator: ObservableObject {
     /// Reads the Mac's volume. Tests swap it out, so they don't depend on the Mac's sound hardware.
     static var readVolume: () -> VolumeLevel = SystemControl.volume
 
+    /// 系统调不了音量的输出：显示器自己的音量（DDC），不然是 Mac TV 自己放的声音（见 FixedOutputVolume）
+    let fixedOutput = FixedOutputVolume()
+
     func refreshVolume() {
-        currentVolume = Self.readVolume()
+        let system = Self.readVolume()
+        fixedOutput.update(currentDevice, systemControls: system.level != nil)
+        currentVolume = system.level != nil ? system : fixedOutput.volume
     }
 
-    func setVolume(_ level: Int) {
-        currentVolume = SystemControl.setVolume(to: level)
+    /// 系统能调现在这个输出的音量（内建扬声器、AirPods…）：照旧用 CoreAudio
+    private var systemControlsVolume: Bool {
+        let settable = Self.readVolume().level != nil
+        fixedOutput.update(currentDevice, systemControls: settable)
+        return settable
+    }
+
+    /// 遥控器、键盘上的音量键：调完出音量条
+    func pressVolume(by delta: Int) {
+        guard systemControlsVolume else { fixedOutput.perform(.step(delta), showHUD: true); return }
+        currentVolume = SystemControl.changeVolume(by: delta)
         tv?.showVolume(currentVolume)
+    }
+
+    func pressMute() {
+        guard systemControlsVolume else { fixedOutput.perform(.toggleMute, showHUD: true); return }
+        currentVolume = SystemControl.toggleMute()
+        tv?.showVolume(currentVolume)
+    }
+
+    // The audio picker's own controls. The picker shows the level itself, so there's no volume HUD.
+    func setVolume(_ level: Int) {
+        guard systemControlsVolume else { fixedOutput.perform(.set(level), showHUD: false); return }
+        currentVolume = SystemControl.setVolume(to: level)
     }
 
     /// A drag sets the volume only when the level changes.
@@ -123,13 +159,19 @@ final class AudioCoordinator: ObservableObject {
     }
 
     func stepVolume(by delta: Int) {
+        guard systemControlsVolume else { fixedOutput.perform(.step(delta), showHUD: false); return }
         currentVolume = SystemControl.changeVolume(by: delta)
-        tv?.showVolume(currentVolume)
     }
 
     func toggleMute() {
+        guard systemControlsVolume else { fixedOutput.perform(.toggleMute, showHUD: false); return }
         currentVolume = SystemControl.toggleMute()
-        tv?.showVolume(currentVolume)
+    }
+
+    /// 打开音量面板时：系统调不了的输出读一次显示器（或拿 Mac TV 自己的音量）
+    func readFixedOutputVolume() {
+        guard !systemControlsVolume else { return }
+        fixedOutput.perform(.refresh, showHUD: false)
     }
 
     func selectDevice(_ device: AudioOutputDevice) {
@@ -156,7 +198,6 @@ final class AudioCoordinator: ObservableObject {
         Log.audio.notice("Audio output switched to a \(DiagnosticReport.transportName(device.transport), privacy: .public) device")
         refreshDevices()
         refreshVolume()
-        tv?.showToast("Audio: \(device.name)")
     }
 
     // MARK: - Real-Time CoreAudio Listeners
@@ -269,6 +310,18 @@ final class AudioCoordinator: ObservableObject {
         return name
     }
 
+    private func deviceUID(_ id: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfUID: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &cfUID) == noErr else { return nil }
+        return cfUID?.takeRetainedValue() as String?
+    }
+
     private func transportType(_ id: AudioDeviceID) -> UInt32 {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
@@ -285,6 +338,7 @@ final class AudioCoordinator: ObservableObject {
 extension TVController {
     func openAudioPicker() {
         audioCoordinator.refreshVolume()
+        audioCoordinator.readFixedOutputVolume()
         let currentIndex = audioDevices.firstIndex(where: { $0.isDefault }) ?? 0
         audioPicker = AudioPickerPanel(row: currentIndex)
     }
@@ -366,13 +420,9 @@ struct AudioPickerSheet: View {
                     .background(.white.opacity(0.12), in: Capsule())
             }
 
-            Text("Choose where sound plays from this Mac. Connect AirPods in System Settings › Bluetooth.")
-                .font(.tv(.caption1))
-                .foregroundStyle(.white.opacity(0.7))
-
             VStack(spacing: 12) {
                 if tv.audioDevices.isEmpty {
-                    Text("No audio output devices found")
+                    Text("No Audio Outputs")
                         .font(.tv(.callout))
                         .foregroundStyle(.white.opacity(0.55))
                         .frame(maxWidth: .infinity, minHeight: 80)
@@ -430,20 +480,6 @@ struct AudioPickerSheet: View {
                     tv.audioPicker?.row = soundSliderRow
                 }
             }
-
-            let hint: String = {
-                if panel.row == masterSliderRow {
-                    return "Use ◀ ▶ to change volume, Select to mute, Esc or Back closes."
-                } else if panel.row == soundSliderRow {
-                    return "Use ◀ ▶ to change sound effects volume, Select to mute, Esc or Back closes."
-                } else {
-                    return "Press Select to switch audio output. Esc or Back closes."
-                }
-            }()
-
-            Text(hint)
-                .font(.tv(.caption2))
-                .foregroundStyle(.white.opacity(0.55))
         }
         .padding(52)
         .frame(width: 820, alignment: .leading)
@@ -521,7 +557,7 @@ struct AudioVolumeSlider: View {
                     .frame(minWidth: 80, alignment: .trailing)
                     .foregroundStyle(focused ? .white : .white.opacity(0.75))
             } else {
-                Text("Volume is set on the TV")
+                Text("Not Available")
                     .font(.tv(.caption1))
                     .foregroundStyle(.white.opacity(0.6))
                 Spacer()

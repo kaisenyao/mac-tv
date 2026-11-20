@@ -161,7 +161,7 @@ final class DisplayCoordinator: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastDisplayWakeRequest >= 0.5 else { return }
         if SystemControl.displayOn() { lastDisplayWakeRequest = now }
-        else { tv?.showToast("The display wake request failed. Try Wake screen again.") }
+        else { tv?.showToast("Couldn't Wake the Display") }
     }
 
     func holdPlaybackKeepAwake(reason: String) {
@@ -180,14 +180,6 @@ final class DisplayCoordinator: ObservableObject {
 
     func resetPairingFocus() {
         tvMode?.resetPairingFocus()
-    }
-
-    /// Report current connected displays and refresh rates.
-    var displayDiagnostics: [(name: String, width: Int, height: Int, refreshRate: Double)] {
-        NSScreen.screens.compactMap { screen in
-            guard let mode = CGDisplayCopyDisplayMode(screen.displayID) else { return nil }
-            return (screen.localizedName, mode.pixelWidth, mode.pixelHeight, mode.refreshRate)
-        }
     }
 }
 

@@ -5,250 +5,331 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Mac TV">
-<meta name="theme-color" content="#0a0b0e">
+<meta name="theme-color" content="#f2f3f6">
 <title>Mac TV Remote</title>
-<link rel="apple-touch-icon" href="/appicon.png">
-<link rel="icon" type="image/png" href="/appicon.png">
+<link rel="apple-touch-icon" href="/page/touch-icon.png">
+<link rel="icon" type="image/png" href="/page/touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="remote.css">
 </head>
 <body>
+<div id="top-band" aria-hidden="true"></div>
+<!-- 遥控器：照主人的单手设计稿（390 宽的 iPhone 屏幕）。每个画出来的键都有两套样子：正常（data-state="normal"）
+     和按下（data-state="pressed"），手指按着时显示按下的那套；点按转盘的外圈按八个方向各有一套按下的样子。
+     图都在页面最下面的 <svg class="sprite"> 里，这里用 <use> 引用 -->
 <main>
+  <!-- 顶上：打开链接 / 打字、应用、设置、电源（屏幕睡着时是唤醒） -->
   <header>
-    <div style="min-width:0">
-      <h1><img src="/appicon.png" alt="Mac TV"></h1>
-      <div class="status" hidden><span class="dot" id="dot"></span><span id="status"></span></div>
-    </div>
-    <div class="actions">
-      <button class="round" id="open-apps" aria-label="Apps"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></button>
-      <button class="round" id="open-power" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <button class="drawn field" id="open-text" aria-label="Open a link or type on TV"><svg class="art" viewBox="0 0 594 144" aria-hidden="true"><use href="#art-field" data-state="normal"/><use href="#art-field-pressed" data-state="pressed" display="none"/></svg></button>
+    <div class="rounds">
+      <button class="drawn round" id="open-apps" aria-label="Apps"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-apps" data-state="normal"/><use href="#art-apps-pressed" data-state="pressed" display="none"/></svg></button>
+      <button class="drawn round" id="open-settings" aria-label="Settings"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-settings" data-state="normal"/><use href="#art-settings-pressed" data-state="pressed" display="none"/></svg></button>
+      <button class="drawn round" id="power" aria-label="Turn Off Display"><svg class="art" viewBox="-72 -72 144 144" aria-hidden="true"><use href="#art-power" data-state="normal"/><use href="#art-power-pressed" data-state="pressed" display="none"/></svg></button>
     </div>
   </header>
 
-  <p class="note" id="guest-note">Guest remote · playback controls only</p>
-  <div class="tabs" role="tablist" aria-label="Remote mode">
-    <button role="tab" id="tab-click" class="on">Clickpad</button>
-    <button role="tab" id="tab-touch">Touchpad</button>
+  <!-- 连不上 Mac、屏幕睡着了、访客遥控器：一行小字，在顶栏和切换条中间 -->
+  <div class="status-line">
+    <p class="status" role="status" hidden><span class="dot"></span><span id="status"></span></p>
+    <p class="note" id="guest-note">Guest remote · playback controls only</p>
   </div>
 
-  <div class="surface" id="clickpad" aria-label="Swipe or tap an arrow to move, tap the middle to select">
-    <div class="ring">
-    <button type="button" class="chev up" data-dir="up" aria-label="Move up"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button>
-    <button type="button" class="chev down" data-dir="down" aria-label="Move down"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
-    <button type="button" class="chev left" data-dir="left" aria-label="Move left"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
-    <button type="button" class="chev right" data-dir="right" aria-label="Move right"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
-    <button type="button" class="ok" id="ok" aria-label="Select">OK</button>
+  <!-- 点按 / 触控 切换：点一半切过去，或按住滑块拖过去 -->
+  <div class="mode" id="mode" role="tablist" aria-label="Remote mode">
+    <svg class="art" viewBox="0 0 1080 120" aria-hidden="true">
+      <use href="#art-mode-track"/>
+      <g class="thumb" id="mode-thumb"><use href="#art-mode-thumb" data-state="normal"/><use href="#art-mode-thumb-pressed" data-state="pressed" display="none"/></g>
+      <text class="on" id="mode-label-click" x="270" y="75">Clickpad</text>
+      <text id="mode-label-touch" x="810" y="75">Touchpad</text>
+    </svg>
+    <button role="tab" id="tab-click" aria-selected="true">Clickpad</button>
+    <button role="tab" id="tab-touch" aria-selected="false">Touchpad</button>
+  </div>
+
+  <!-- 遥控区：点按转盘放在正中（点外圈四边、在上面滑、绕着外圈转、点中间确认；按住和键盘上按住同一个键一样），
+       或者一整块触控板 -->
+  <div class="pad-area"><div class="pad">
+    <div class="surface" id="clickpad" aria-label="Tap the edge or swipe to move, turn around the ring to scroll, tap the centre to select; hold like holding the key">
+      <div class="ring">
+        <svg class="art" viewBox="-326 -326 652 652" aria-hidden="true">
+          <g id="ring-art">
+            <use href="#art-ring" data-state="normal"/>
+            <use href="#art-ring-up" data-state="pressed-up" display="none"/>
+            <use href="#art-ring-up-right" data-state="pressed-up-right" display="none"/>
+            <use href="#art-ring-right" data-state="pressed-right" display="none"/>
+            <use href="#art-ring-down-right" data-state="pressed-down-right" display="none"/>
+            <use href="#art-ring-down" data-state="pressed-down" display="none"/>
+            <use href="#art-ring-down-left" data-state="pressed-down-left" display="none"/>
+            <use href="#art-ring-left" data-state="pressed-left" display="none"/>
+            <use href="#art-ring-up-left" data-state="pressed-up-left" display="none"/>
+          </g>
+          <g id="center-art"><use href="#art-center" data-state="normal"/><use href="#art-center-pressed" data-state="pressed" display="none"/></g>
+        </svg>
+        <!-- 给键盘和读屏用的五个键（手指按在哪里由转盘自己按位置算，不经过它们） -->
+        <button type="button" class="chev up" data-dir="up" aria-label="Up"></button>
+        <button type="button" class="chev down" data-dir="down" aria-label="Down"></button>
+        <button type="button" class="chev left" data-dir="left" aria-label="Left"></button>
+        <button type="button" class="chev right" data-dir="right" aria-label="Right"></button>
+        <button type="button" class="ok" aria-label="Select (hold for options)"></button>
+      </div>
     </div>
-  </div>
-  <div class="surface" id="touchpad"><div class="hint">Drag to move · tap to click · two fingers to scroll</div></div>
+    <div class="surface" id="touchpad" aria-label="Drag to move, tap to click, two fingers to scroll">
+      <svg class="art" viewBox="0 0 1080 775" aria-hidden="true"><use href="#art-touchpad"/></svg>
+    </div>
+  </div></div>
 
-  <div class="keys">
-    <button class="key" data-a="back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
-    <button class="key home" data-a="home" aria-label="Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span>Home</span></button>
-    <button class="key primary" data-a="playpause" data-h="tap" aria-label="Play or pause"><svg viewBox="0 0 24 24" fill="#000"><path d="M3 5v14l8-7z"/><rect x="14" y="5" width="3" height="14" rx="1"/><rect x="19" y="5" width="3" height="14" rx="1"/></svg></button>
-    <button class="key" data-a="mute" aria-label="Mute"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M22 9l-6 6M16 9l6 6"/></svg></button>
-    <button class="key" data-a="rewind" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 6v12l-8-6z"/><path d="M21 6v12l-8-6z"/></svg></button>
-    <button class="key" data-a="voldown" aria-label="Volume down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M16 12h5"/></svg></button>
-    <button class="key" data-a="volup" aria-label="Volume up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M16 12h5M18.5 9.5v5"/></svg></button>
-    <button class="key" data-a="forward" aria-label="Forward 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 6v12l8-6z"/><path d="M3 6v12l8-6z"/></svg></button>
+  <!-- 下面：左边一列四个快捷键（跟着电视上的应用换），右边按键：返回（按住回主屏）、电视 = 主屏（按住控制中心）、
+       播放 / 暂停、静音，和一条竖着的音量（上加下减，按住连续调） -->
+  <div class="shortcuts-label">Shortcuts</div>
+  <div class="controls">
+    <div class="chips" role="group" aria-label="Shortcuts">
+      <button class="drawn chip empty" tabindex="-1"><svg class="art" viewBox="0 0 132 57" aria-hidden="true"><use href="#art-chip" data-state="normal"/><use href="#art-chip-pressed" data-state="pressed" display="none"/></svg><svg class="icon" viewBox="0 0 44 44" aria-hidden="true"><use/></svg><span class="text"><span class="run"><span class="copy"><b></b> <span class="value"></span></span></span></span></button>
+      <button class="drawn chip empty" tabindex="-1"><svg class="art" viewBox="0 0 132 57" aria-hidden="true"><use href="#art-chip" data-state="normal"/><use href="#art-chip-pressed" data-state="pressed" display="none"/></svg><svg class="icon" viewBox="0 0 44 44" aria-hidden="true"><use/></svg><span class="text"><span class="run"><span class="copy"><b></b> <span class="value"></span></span></span></span></button>
+      <button class="drawn chip empty" tabindex="-1"><svg class="art" viewBox="0 0 132 57" aria-hidden="true"><use href="#art-chip" data-state="normal"/><use href="#art-chip-pressed" data-state="pressed" display="none"/></svg><svg class="icon" viewBox="0 0 44 44" aria-hidden="true"><use/></svg><span class="text"><span class="run"><span class="copy"><b></b> <span class="value"></span></span></span></span></button>
+      <button class="drawn chip empty" tabindex="-1"><svg class="art" viewBox="0 0 132 57" aria-hidden="true"><use href="#art-chip" data-state="normal"/><use href="#art-chip-pressed" data-state="pressed" display="none"/></svg><svg class="icon" viewBox="0 0 44 44" aria-hidden="true"><use/></svg><span class="text"><span class="run"><span class="copy"><b></b> <span class="value"></span></span></span></span></button>
+    </div>
+    <div class="keys">
+      <button class="drawn key" data-press="back" aria-label="Back (hold for Home)"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-back" data-state="normal"/><use href="#art-back-pressed" data-state="pressed" display="none"/></svg></button>
+      <button class="drawn key" data-press="home" aria-label="TV: Home (hold for Control Center)"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-tv" data-state="normal"/><use href="#art-tv-pressed" data-state="pressed" display="none"/></svg></button>
+      <button class="drawn key" data-a="playpause" aria-label="Play or pause"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-play" data-state="normal"/><use href="#art-play-pressed" data-state="pressed" display="none"/></svg></button>
+      <div class="volume" role="group" aria-label="Volume">
+        <button class="drawn" data-a="volup" data-repeat aria-label="Volume up"><svg class="art" viewBox="-99 -225.5 198 225.5" preserveAspectRatio="xMidYMax meet" aria-hidden="true"><use href="#art-volup" data-state="normal"/><use href="#art-volup-pressed" data-state="pressed" display="none"/></svg></button>
+        <button class="drawn" data-a="voldown" data-repeat aria-label="Volume down"><svg class="art" viewBox="-99 0 198 225.5" preserveAspectRatio="xMidYMin meet" aria-hidden="true"><use href="#art-voldown" data-state="normal"/><use href="#art-voldown-pressed" data-state="pressed" display="none"/><use href="#art-volume-seam"/></svg></button>
+      </div>
+      <button class="drawn key mute" data-a="mute" aria-label="Mute"><svg class="art" viewBox="-99 -99 198 198" aria-hidden="true"><use href="#art-mute" data-state="normal"/><use href="#art-mute-pressed" data-state="pressed" display="none"/></svg></button>
+    </div>
   </div>
 
   <div id="browser-controls" class="browser-controls" hidden aria-label="Brave controls">
-    <button type="button" data-a="previouscontrol">Previous control</button>
-    <button type="button" data-a="nextcontrol">Next control</button>
+    <button type="button" data-a="previouscontrol">Previous Control</button>
+    <button type="button" data-a="nextcontrol">Next Control</button>
     <button type="button" data-a="activatebrowser">Return to Brave</button>
-    <button type="button" data-a="browserfullscreen">Full screen on/off</button>
-    <button type="button" id="browser-retry" hidden>Retry</button>
+    <button type="button" data-a="browserfullscreen">Full Screen On/Off</button>
+    <button type="button" id="browser-retry" hidden>Try Again</button>
     <p class="note err" id="browser-error" role="status" hidden></p>
     <p class="note" id="browser-control-note" role="status"></p>
   </div>
 
   <div id="iina-controls" class="browser-controls" hidden aria-label="IINA controls">
     <button type="button" data-a="activatebrowser">Return to IINA</button>
-    <button type="button" data-a="browserfullscreen">Full screen on/off</button>
+    <button type="button" data-a="browserfullscreen">Full Screen On/Off</button>
     <p class="note" id="iina-status" role="status" aria-live="polite" hidden></p>
     <p class="note err" id="iina-error" role="status" aria-live="polite" hidden></p>
   </div>
-
-  <button class="row-btn text-tools" id="open-text" aria-label="Open website or type on TV">Open website or type</button>
 </main>
 
+<!-- 弹出页：从下面升起，iOS 设置那样的分组 -->
 <div class="scrim" id="text-sheet">
-  <div class="sheet" role="dialog" aria-modal="true" aria-label="Open website or type on TV">
-    <div class="sheet-head"><span>Website and keyboard</span><div><button class="pill" data-close>Done</button></div></div>
-    <div class="group-label">Open a website</div>
-  <form class="type website-form" id="open-website" autocomplete="off">
-    <input id="website-address" type="text" inputmode="url" placeholder="Open a website…" aria-label="Website address" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button type="submit" id="website-go">Go</button>
-  </form>
-  <p class="note err" id="website-open-error" role="status" aria-live="polite" hidden></p>
-
-  <div class="group-label">Type on TV</div>
-  <form class="type" id="type" autocomplete="off">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
-    <input id="typed" placeholder="Type on the TV…" aria-label="Type on the TV" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button type="button" data-a="backspace" aria-label="Delete"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H8l-6 7 6 7h13z"/><path d="M17 9l-6 6M11 9l6 6"/></svg></button>
-  </form>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Open a link or type on TV">
+    <div class="sheet-head"><h2>Links and Keyboard</h2><button class="pill" data-close>Done</button></div>
+    <h3 class="section-label">Open a link</h3>
+    <form class="type website-form" id="open-website" autocomplete="off">
+      <input id="website-address" type="text" inputmode="url" placeholder="Paste a link or website" aria-label="Link or website address" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button type="submit" id="website-go">Go</button>
+    </form>
+    <p class="footnote err" id="website-open-error" role="status" aria-live="polite" hidden></p>
+    <h3 class="section-label">Type on TV</h3>
+    <form class="type" id="type" autocomplete="off">
+      <input id="typed" placeholder="Type on the TV" aria-label="Type on the TV" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button type="button" class="erase" data-a="backspace" aria-label="Delete"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 5H8l-6 7 6 7h13z"/><path d="M17 9l-6 6M11 9l6 6"/></svg></button>
+    </form>
   </div>
 </div>
 
 <div class="scrim" id="apps-sheet">
   <div class="sheet" role="dialog" aria-label="Apps">
-    <div class="sheet-head"><span id="apps-title">Open on TV</span><div><button class="pill" id="edit-apps">Edit</button><button class="pill" data-close>Done</button></div></div>
-    <button class="row-btn" id="open-files">📁  Files on Mac</button>
+    <div class="sheet-head"><h2 id="apps-title">Open on TV</h2><button class="pill" id="edit-apps">Edit</button><button class="pill" data-close id="apps-done">Done</button></div>
     <div class="apps" id="apps"></div>
-    <p class="note" id="edit-note" hidden>Pinned favourites appear first. Move apps within favourites or other apps. Removed built-in apps can be restored.</p>
-    <p class="note" id="apps-msg" role="status" aria-live="polite" hidden></p>
-    <button class="row-btn" id="restore" hidden>Restore built-in apps</button>
+    <p class="footnote" id="apps-msg" role="status" aria-live="polite" hidden></p>
+    <div class="group" id="restore-group" hidden><button class="row" id="restore">Restore built-in apps</button></div>
   </div>
 </div>
 
 <div class="scrim" id="files-sheet">
   <div class="sheet" role="dialog" aria-label="Files on Mac">
-    <div class="sheet-head"><span>Files on Mac</span><div><button class="pill" id="files-back">Back</button><button class="pill" data-close>Done</button></div></div>
+    <div class="sheet-head"><button class="pill back" id="files-back">Back</button><h2>Files on Mac</h2><button class="pill" data-close>Done</button></div>
     <div class="file-path" id="files-path"></div>
-    <input class="field" id="files-filter" placeholder="Filter filenames" aria-label="Filter filenames" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <p class="note" id="files-msg" role="status" aria-live="polite"></p>
-    <div class="list file-list" id="files-list"></div>
-    <button class="row-btn" id="files-more" hidden>Load more</button>
+    <input class="search-field" id="files-filter" placeholder="Search" aria-label="Filter filenames" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <p class="footnote" id="files-msg" role="status" aria-live="polite"></p>
+    <div class="group list" id="files-list"></div>
+    <div class="group" id="files-more-group" hidden><button class="row" id="files-more">Load more</button></div>
     <div id="movie-options" hidden>
-      <div class="group-label">Selected video</div>
-      <p id="movie-name"></p>
-      <div class="file-actions">
-        <button class="row-btn" id="play-native">Play on Mac TV</button>
-        <button class="row-btn" id="play-iina">Play in IINA</button>
-        <button class="row-btn" id="subtitle-options">Subtitle options</button>
+      <h3 class="section-label">Selected video</h3>
+      <p class="movie-name" id="movie-name"></p>
+      <div class="group">
+        <button class="row" id="play-native">Play on Mac TV</button>
+        <button class="row" id="play-iina">Play in IINA</button>
+        <button class="row nav" id="subtitle-options">Subtitles</button>
       </div>
     </div>
     <div id="subtitle-panel" hidden>
-      <div class="group-label">Subtitles</div>
-      <p class="note">Choose a subtitle from this folder or upload a UTF-8 .srt file from your phone (up to 256 KB). Applying a subtitle opens the video in IINA.</p>
-      <div class="list file-list" id="subtitle-list"></div>
-      <input id="subtitle-upload" type="file" accept=".srt,text/plain" aria-label="Upload subtitle file">
-      <div class="file-actions">
-        <button class="row-btn" id="subtitle-search-iina">Search in IINA</button>
-        <button class="row-btn" id="subtitle-search-web">Search subtitles on phone</button>
+      <h3 class="section-label">Subtitles</h3>
+      <div class="group list" id="subtitle-list"></div>
+      <label class="upload"><span>Upload .srt from phone</span><input id="subtitle-upload" type="file" accept=".srt,text/plain" aria-label="Upload subtitle file"></label>
+      <div class="group">
+        <button class="row" id="subtitle-search-iina">Search in IINA</button>
+        <button class="row" id="subtitle-search-web">Search on phone</button>
       </div>
     </div>
   </div>
 </div>
 
 <div class="scrim" id="add-sheet">
-  <div class="sheet" role="dialog" aria-label="Add an app">
-    <div class="sheet-head"><span>Add an app</span><div><button class="pill" data-close>Cancel</button></div></div>
-    <div class="tabs" role="tablist">
+  <div class="sheet" role="dialog" aria-label="Add App">
+    <div class="sheet-head"><h2>Add App</h2><button class="pill" data-close>Cancel</button></div>
+    <div class="segmented two" role="tablist">
       <button role="tab" id="add-web-tab" class="on">Website</button>
-      <button role="tab" id="add-mac-tab">Mac app</button>
+      <button role="tab" id="add-mac-tab">Mac App</button>
     </div>
     <form id="web-form" autocomplete="off">
-      <input class="field" id="web-url" inputmode="url" placeholder="Website, e.g. crunchyroll.com" aria-label="Website address" autocapitalize="off" autocorrect="off" spellcheck="false">
-      <input class="field" id="web-name" placeholder="Name (optional)" aria-label="Name">
-      <button class="cancel" type="submit">Add to TV</button>
-      <p class="note">Mac TV looks up the app's official icon for you.</p>
+      <div class="group form">
+        <label class="row"><span>Website</span><input id="web-url" inputmode="url" placeholder="crunchyroll.com" aria-label="Website address" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+        <label class="row"><span>Name</span><input id="web-name" placeholder="Optional" aria-label="Name"></label>
+      </div>
+      <button class="action" type="submit">Add to TV</button>
     </form>
     <div id="mac-form" hidden>
-      <input class="field" id="mac-q" placeholder="Search apps on the Mac" aria-label="Search apps on the Mac" autocapitalize="off" autocorrect="off" spellcheck="false">
-      <div class="list" id="mac-list" style="margin-top:10px"></div>
+      <input class="search-field" id="mac-q" placeholder="Search" aria-label="Search apps on the Mac" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="group list" id="mac-list"></div>
     </div>
-    <p class="note" id="add-msg"></p>
+    <p class="footnote" id="add-msg"></p>
   </div>
 </div>
 
-<div class="scrim" id="power-sheet">
-  <div class="sheet settings" role="dialog" aria-label="Settings">
-    <section class="page" id="settings-main">
-      <div class="sheet-head"><span>Settings</span><div><button class="pill" data-close>Done</button></div></div>
+<!-- 睡眠定时：快捷键里点"Sleep Timer"时弹出的小页 -->
+<div class="scrim" id="sleep-sheet">
+  <div class="sheet" role="dialog" aria-label="Sleep Timer">
+    <div class="sheet-head"><h2>Sleep Timer</h2><button class="pill" data-close>Done</button></div>
+    <div class="segmented sleep-choice" role="group" aria-label="Sleep Timer">
+      <button data-m="0">Off</button><button data-m="15">15m</button><button data-m="30">30m</button><button data-m="60">1h</button><button data-m="90">1½h</button>
+    </div>
+    <p class="footnote sleep-left" hidden></p>
+  </div>
+</div>
 
-      <div class="section-label">Sleep timer</div>
-      <div class="segmented" id="sleep-chips" role="group" aria-label="Sleep timer">
+<div class="scrim" id="settings-sheet">
+  <div class="sheet" role="dialog" aria-label="Settings">
+    <section class="page" id="settings-main" data-title="Settings">
+      <div class="sheet-head"><h2>Settings</h2><button class="pill" data-close>Done</button></div>
+
+      <h3 class="section-label">Sleep Timer</h3>
+      <div class="segmented sleep-choice" role="group" aria-label="Sleep Timer">
         <button data-m="0">Off</button><button data-m="15">15m</button><button data-m="30">30m</button><button data-m="60">1h</button><button data-m="90">1½h</button>
       </div>
-      <p class="footnote" id="sleep-left" hidden></p>
+      <p class="footnote sleep-left" hidden></p>
 
-      <div class="section-label">Watching</div>
+      <h3 class="section-label">Remote</h3>
       <div class="group">
-        <label class="row"><span>Skip intros and recaps</span><input type="checkbox" class="switch" id="auto-skip"></label>
-        <label class="row"><span>Play next episode</span><input type="checkbox" class="switch" id="auto-next"></label>
-        <button class="row nav" data-page="page-player"><span>Website player</span><span class="value" id="website-player-value">Built-in</span></button>
+        <button class="row nav" data-page="page-shortcuts" id="shortcuts-row" hidden><span>Shortcuts</span><span class="value" id="shortcuts-value"></span></button>
+        <button class="row nav" data-page="page-start"><span>Start in</span><span class="value" id="start-value">Last used</span></button>
       </div>
 
-      <div class="section-label">TV</div>
+      <h3 class="section-label">Playback</h3>
+      <div class="group">
+        <button class="row" role="switch" aria-checked="false" data-setting="autoNext"><span>Autoplay Next Episode</span><span class="switch" aria-hidden="true"></span></button>
+        <button class="row" role="switch" aria-checked="false" data-setting="autoSkip"><span>Skip YouTube Ads</span><span class="switch" aria-hidden="true"></span></button>
+        <button class="row nav" data-page="page-player"><span>Website Player</span><span class="value" id="website-player-value">Built-in</span></button>
+      </div>
+
+      <h3 class="section-label">TV &amp; Mac</h3>
       <div class="group">
         <button class="row nav" data-page="page-display"><span>Display</span><span class="value" id="display-value">Automatic</span></button>
-      </div>
-      <div class="tiles">
-        <button class="tile" id="screen-on">Wake screen</button>
-        <button class="tile" id="screen-off">Screen off</button>
-      </div>
-
-      <div class="section-label">Power</div>
-      <div class="group">
-        <label class="row"><span>Keep Mac awake</span><input type="checkbox" class="switch" id="keep-awake"></label>
-        <label class="row"><span>Awake with lid closed</span><input type="checkbox" class="switch" id="lid-override"></label>
+        <button class="row" role="switch" aria-checked="false" data-setting="keepMacAwake"><span>Keep Mac Awake</span><span class="switch" aria-hidden="true"></span></button>
+        <button class="row" role="switch" aria-checked="false" data-setting="lidOverride"><span>Awake With Lid Closed</span><span class="switch" aria-hidden="true"></span></button>
       </div>
       <p class="footnote" id="lid-status"></p>
 
-      <div class="section-label">Library</div>
+      <h3 class="section-label">More</h3>
       <div class="group">
         <button class="row nav" data-page="page-shares"><span>Network shares</span><span class="value" id="shares-count"></span></button>
         <button class="row nav" data-page="page-jellyfin"><span>Jellyfin</span><span class="value" id="jellyfin-count"></span></button>
-      </div>
-
-      <div class="section-label">Remotes</div>
-      <div class="group">
         <button class="row nav" data-page="page-devices"><span>Paired devices</span><span class="value" id="devices-count"></span></button>
       </div>
 
-      <button class="tile wide" id="sleep">Sleep Mac</button>
-      <p class="footnote">Wake it again with its keyboard or lid.</p>
+      <button class="action danger" id="sleep">Sleep Now</button>
+      <p class="footnote">Tap twice. Wake it again with its keyboard or lid.</p>
     </section>
 
-    <section class="page" id="page-player" hidden>
-      <div class="page-head"><button class="back" data-back>Settings</button><span>Website player</span></div>
+    <section class="page" id="page-start" data-title="Start in" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Start in</h2><button class="pill" data-close>Done</button></div>
+      <div class="group choices" id="start-choices"></div>
+    </section>
+
+    <section class="page" id="page-player" data-title="Website Player" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Website Player</h2><button class="pill" data-close>Done</button></div>
       <div class="group choices" id="website-player"></div>
-      <p class="footnote">Brave keeps its own sign-ins and Shields.</p>
       <p class="footnote err" id="browser-msg" role="status" aria-live="polite" hidden></p>
     </section>
 
-    <section class="page" id="page-display" hidden>
-      <div class="page-head"><button class="back" data-back>Settings</button><span>Display</span></div>
+    <section class="page" id="page-display" data-title="Display" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Display</h2><button class="pill" data-close>Done</button></div>
       <div class="group choices" id="display-select"></div>
       <p class="footnote" id="display-msg" role="status" aria-live="polite" hidden></p>
     </section>
 
-    <section class="page" id="page-shares" hidden>
-      <div class="page-head"><button class="back" data-back>Settings</button><span>Network shares</span></div>
+    <section class="page" id="page-shares" data-title="Network shares" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Network shares</h2><button class="pill" data-close>Done</button></div>
       <div class="group" id="shares" hidden></div>
-      <div class="section-label">Add a share</div>
+      <h3 class="section-label">Add a share</h3>
       <form class="group form" id="share-form" autocomplete="off">
         <label class="row"><span>Folder</span><input id="share-address" placeholder="nas.local/Movies" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
         <label class="row"><span>User</span><input id="share-user" placeholder="Guest" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
         <label class="row"><span>Password</span><input id="share-password" type="password" placeholder="Optional" autocomplete="off"></label>
       </form>
-      <button class="tile primary" type="submit" form="share-form">Add share</button>
-      <p class="footnote" id="shares-msg" role="status" aria-live="polite">Its movies appear in Movies on the TV.</p>
+      <button class="action primary" type="submit" form="share-form">Add Share</button>
+      <p class="footnote" id="shares-msg" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="page" id="page-jellyfin" hidden>
-      <div class="page-head"><button class="back" data-back>Settings</button><span>Jellyfin</span></div>
+    <section class="page" id="page-jellyfin" data-title="Jellyfin" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Jellyfin</h2><button class="pill" data-close>Done</button></div>
       <div class="group" id="jellyfin" hidden></div>
-      <div class="section-label">Sign in to a server</div>
+      <h3 class="section-label">Sign in to a server</h3>
       <form class="group form" id="jellyfin-form" autocomplete="off">
         <label class="row"><span>Server</span><input id="jellyfin-address" placeholder="192.168.1.5:8096" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
         <label class="row"><span>User</span><input id="jellyfin-user" placeholder="Name" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
         <label class="row"><span>Password</span><input id="jellyfin-password" type="password" placeholder="Password" autocomplete="off"></label>
       </form>
-      <button class="tile primary" type="submit" form="jellyfin-form">Sign in</button>
-      <p class="footnote" id="jellyfin-msg" role="status" aria-live="polite">Its movies appear in Movies on the TV.</p>
+      <button class="action primary" type="submit" form="jellyfin-form">Sign In</button>
+      <p class="footnote" id="jellyfin-msg" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="page" id="page-devices" hidden>
-      <div class="page-head"><button class="back" data-back>Settings</button><span>Paired devices</span></div>
+    <section class="page" id="page-devices" data-title="Paired devices" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Paired devices</h2><button class="pill" data-close>Done</button></div>
       <div class="group" id="devices"></div>
-      <button class="tile wide danger" id="revoke-all">Remove all</button>
+      <button class="action danger" id="revoke-all">Remove All</button>
       <p class="footnote" id="devices-msg"></p>
+    </section>
+
+    <!-- 快捷键：主屏一组，有自己快捷键的应用各一组；点一组进去挑 -->
+    <section class="page" id="page-shortcuts" data-title="Shortcuts" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Shortcuts</h2><button class="pill" data-close>Done</button></div>
+      <h3 class="section-label">Home</h3>
+      <div class="group icons" id="sc-home"></div>
+      <p class="footnote">Also used in apps without their own set.</p>
+      <h3 class="section-label">In Apps</h3>
+      <div class="group apps-rows" id="sc-apps"></div>
+      <p class="footnote">Up to four per app.</p>
+      <p class="footnote err" id="sc-msg" role="status" aria-live="polite" hidden></p>
+    </section>
+
+    <section class="page" id="page-picker" data-title="" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2 id="pick-title"></h2><button class="pill" data-close>Done</button></div>
+      <div class="section-head"><h3 class="section-label">On the Remote</h3><span id="pick-count"></span></div>
+      <div class="group picks" id="pick-on"></div>
+      <h3 class="section-label" id="pick-app-label"></h3>
+      <div class="group picks" id="pick-app"></div>
+      <h3 class="section-label" id="pick-every-label">Everywhere</h3>
+      <div class="group picks" id="pick-every"></div>
+      <p class="footnote">Up to four. Fewer is fine.</p>
+      <p class="footnote err" id="pick-msg" role="status" aria-live="polite" hidden></p>
+    </section>
+
+    <section class="page" id="page-apple" data-title="Run Shortcut" hidden>
+      <div class="sheet-head"><button class="pill back" data-back></button><h2>Run Shortcut</h2><button class="pill" data-close>Done</button></div>
+      <div class="group choices" id="apple-list"></div>
+      <p class="footnote" id="apple-msg" role="status" aria-live="polite" hidden></p>
     </section>
   </div>
 </div>
@@ -256,11 +337,123 @@
 <div id="pair">
   <h1>Pair with your TV</h1>
   <p>Enter the 6-digit code chosen on the TV. It determines this phone’s access.</p>
-  <input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" aria-label="Pairing code">
+  <input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" aria-label="Pairing Code">
   <input id="device-name" maxlength="60" placeholder="Device name (optional)" aria-label="Device name">
   <button id="pair-btn">Pair</button>
   <p id="pair-err"></p>
 </div>
+
+<!-- 遥控器上所有键的图（设计稿原样，每个键在自己的坐标里：圆键圆心在 0,0）。页面上的键用 <use> 按 id 引用 -->
+<svg class="sprite" aria-hidden="true" focusable="false"><defs>
+<!-- 共用的渐变和阴影 -->
+  <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#808080"/><stop offset=".13" stop-color="#535353"/><stop offset=".42" stop-color="#2f2f2f"/><stop offset=".75" stop-color="#1c1c1c"/><stop offset="1" stop-color="#101010"/></linearGradient>
+  <linearGradient id="back-face" x1="0" y1="0" x2=".12" y2="1"><stop stop-color="#111111"/><stop offset=".4" stop-color="#1b1b1b"/><stop offset=".72" stop-color="#282828"/><stop offset="1" stop-color="#353535"/></linearGradient>
+  <radialGradient id="dark-face" cx=".48" cy=".32" r=".85"><stop stop-color="#242424"/><stop offset=".65" stop-color="#202020"/><stop offset="1" stop-color="#1b1b1b"/></radialGradient>
+  <linearGradient id="pressed-dark-rim" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#101112"/><stop offset=".28" stop-color="#191a1b"/><stop offset=".7" stop-color="#323334"/><stop offset="1" stop-color="#616364"/></linearGradient>
+  <linearGradient id="pressed-dark-face" x1="0" y1="0" x2=".05" y2="1"><stop stop-color="#111213"/><stop offset=".18" stop-color="#171819"/><stop offset=".7" stop-color="#202122"/><stop offset="1" stop-color="#292a2b"/></linearGradient>
+  <linearGradient id="power-face" x1=".2" y1="0" x2=".7" y2="1"><stop stop-color="#eff0f1"/><stop offset=".5" stop-color="#e8eaec"/><stop offset="1" stop-color="#dfe1e3"/></linearGradient>
+  <linearGradient id="silver-edge" x1="0" y1="0" x2=".3" y2="1"><stop stop-color="#66686a"/><stop offset=".4" stop-color="#55585b"/><stop offset="1" stop-color="#7e8184"/></linearGradient>
+  <linearGradient id="pressed-silver-face" x1="0" y1="0" x2=".1" y2="1"><stop stop-color="#c5c9cd"/><stop offset=".23" stop-color="#d4d8db"/><stop offset=".75" stop-color="#dfe2e5"/><stop offset="1" stop-color="#e7e9eb"/></linearGradient>
+  <linearGradient id="pressed-silver-rim" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#52575c"/><stop offset=".4" stop-color="#868c91"/><stop offset="1" stop-color="#fafbfd"/></linearGradient>
+  <linearGradient id="field-bezel" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#8d9094"/><stop offset=".18" stop-color="#bfc2c5"/><stop offset=".65" stop-color="#d8dbde"/><stop offset="1" stop-color="#fafbfc"/></linearGradient>
+  <linearGradient id="field-inset" x1="0" y1="0" x2=".05" y2="1"><stop stop-color="#d2d5d8"/><stop offset=".2" stop-color="#dce0e3"/><stop offset=".62" stop-color="#e5e7e9"/><stop offset="1" stop-color="#e9ebed"/></linearGradient>
+  <linearGradient id="silver-selected" x1=".15" y1="0" x2=".4" y2="1"><stop stop-color="#f5f6f7"/><stop offset=".4" stop-color="#eceef0"/><stop offset="1" stop-color="#dfe2e5"/></linearGradient>
+  <linearGradient id="selected-edge" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff"/><stop offset=".3" stop-color="#f1f3f5"/><stop offset="1" stop-color="#a8adb2"/></linearGradient>
+  <filter id="selection-relief" x="-15%" y="-40%" width="130%" height="200%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#454b52" flood-opacity=".2"/></filter>
+  <filter id="touchpad-contact-shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#22262a" flood-opacity=".12"/></filter>
+  <radialGradient id="ring-base" cx="572.1" cy="296.9" r="109.5" gradientUnits="userSpaceOnUse"><stop stop-color="#232323"/><stop offset=".55" stop-color="#232323"/><stop offset=".72" stop-color="#292929"/><stop offset=".87" stop-color="#343434"/><stop offset="1" stop-color="#494949"/></radialGradient>
+  <radialGradient id="ring-glow" cx="572.1" cy="344" r="84" gradientTransform="translate(0 124.77) scale(1 .64)" gradientUnits="userSpaceOnUse"><stop stop-color="#525252" stop-opacity=".8"/><stop offset=".35" stop-color="#4d4d4d" stop-opacity=".72"/><stop offset=".66" stop-color="#454545" stop-opacity=".36"/><stop offset="1" stop-color="#383838" stop-opacity="0"/></radialGradient>
+  <linearGradient id="ring-directional-shade" x1="572" y1="188" x2="572" y2="406" gradientUnits="userSpaceOnUse"><stop stop-color="#000" stop-opacity="0"/><stop offset=".28" stop-color="#000" stop-opacity=".17"/><stop offset=".5" stop-color="#000" stop-opacity=".43"/><stop offset=".72" stop-color="#000" stop-opacity=".59"/><stop offset="1" stop-color="#000" stop-opacity=".73"/></linearGradient>
+  <radialGradient id="ring-side-fill" cx="572.1" cy="300" r="150" gradientTransform="translate(0 174) scale(1 .42)" gradientUnits="userSpaceOnUse"><stop stop-color="#444444" stop-opacity=".38"/><stop offset=".65" stop-color="#444444" stop-opacity=".3"/><stop offset="1" stop-color="#444444" stop-opacity="0"/></radialGradient>
+  <linearGradient id="ring-edge-reflection" x1="572" y1="188" x2="572" y2="406" gradientUnits="userSpaceOnUse"><stop stop-color="#929292"/><stop offset=".3" stop-color="#626262"/><stop offset=".53" stop-color="#333333"/><stop offset="1" stop-color="#131313"/></linearGradient>
+  <linearGradient id="center-face" x1="572" y1="235" x2="572" y2="358" gradientUnits="userSpaceOnUse"><stop stop-color="#181818"/><stop offset=".25" stop-color="#1d1d1d"/><stop offset=".5" stop-color="#272727"/><stop offset=".78" stop-color="#343434"/><stop offset="1" stop-color="#3e3e3e"/></linearGradient>
+  <linearGradient id="pressed-center-face" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#121314"/><stop offset=".3" stop-color="#1b1c1d"/><stop offset="1" stop-color="#303132"/></linearGradient>
+  <linearGradient id="center-edge-reflection" x1="572" y1="235" x2="572" y2="359" gradientUnits="userSpaceOnUse"><stop stop-color="#151515"/><stop offset=".4" stop-color="#111111"/><stop offset=".68" stop-color="#343434"/><stop offset="1" stop-color="#737373"/></linearGradient>
+<!-- 顶上：链接 / 打字栏、应用、设置、电源 -->
+  <g id="art-field" transform="translate(-120 -210)"><rect x="120" y="210" width="594" height="144" rx="72" fill="url(#power-face)" stroke="url(#silver-edge)" stroke-width="2.73"/><g stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" transform="translate(30 -2281)"><circle cx="142" cy="2559" r="16"/><path d="M154 2571 L165 2583"/></g><text x="231" y="297" fill="#747a80" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="400" text-anchor="start">Open link or type</text></g>
+  <g id="art-field-pressed" transform="translate(-120 -210)"><rect x="120" y="210" width="594" height="144" rx="72" fill="url(#pressed-silver-face)" stroke="url(#pressed-silver-rim)" stroke-width="2.73"/><g stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" transform="translate(30 -2281)"><circle cx="142" cy="2559" r="16"/><path d="M154 2571 L165 2583"/></g><text x="231" y="297" fill="#747a80" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="400" text-anchor="start">Open link or type</text></g>
+  <g id="art-apps" transform="scale(1.0909) translate(-132 -282)"><circle cx="132" cy="282" r="66" fill="url(#power-face)" stroke="url(#silver-edge)" stroke-width="2.5"/><g stroke="#2b2d2f" stroke-width="5" fill="none"><rect x="110" y="260" width="16" height="16" rx="4"/><rect x="138" y="260" width="16" height="16" rx="4"/><rect x="110" y="288" width="16" height="16" rx="4"/><rect x="138" y="288" width="16" height="16" rx="4"/></g></g>
+  <g id="art-apps-pressed" transform="scale(1.0909) translate(-132 -282)"><circle cx="132" cy="282" r="66" fill="url(#pressed-silver-face)" stroke="url(#pressed-silver-rim)" stroke-width="2.5"/><g stroke="#2b2d2f" stroke-width="5" fill="none"><rect x="110" y="260" width="16" height="16" rx="4"/><rect x="138" y="260" width="16" height="16" rx="4"/><rect x="110" y="288" width="16" height="16" rx="4"/><rect x="138" y="288" width="16" height="16" rx="4"/></g></g>
+  <g id="gear-glyph" stroke="#2b2d2f"><path stroke-width="4.5" stroke-linejoin="round" d="M1026 255 C1026.58 255 1027.19 255.19 1027.74 255.51 C1028.29 255.83 1028.82 256.36 1029.3 256.92 C1029.78 257.47 1030.21 258.2 1030.6 258.85 C1031 259.51 1031.33 260.25 1031.67 260.85 C1032.01 261.44 1032.3 262.02 1032.64 262.44 C1032.98 262.86 1033.31 263.17 1033.73 263.34 C1034.15 263.51 1034.6 263.52 1035.14 263.48 C1035.67 263.42 1036.29 263.22 1036.95 263.03 C1037.61 262.85 1038.37 262.56 1039.11 262.38 C1039.85 262.19 1040.67 261.98 1041.4 261.93 C1042.13 261.87 1042.89 261.88 1043.5 262.04 C1044.12 262.21 1044.68 262.5 1045.09 262.91 C1045.5 263.32 1045.79 263.88 1045.96 264.5 C1046.12 265.11 1046.13 265.87 1046.07 266.6 C1046.02 267.33 1045.81 268.15 1045.62 268.89 C1045.44 269.63 1045.15 270.39 1044.97 271.05 C1044.78 271.71 1044.58 272.33 1044.53 272.86 C1044.47 273.4 1044.49 273.85 1044.66 274.27 C1044.84 274.69 1045.14 275.02 1045.56 275.36 C1045.97 275.7 1046.56 275.99 1047.15 276.33 C1047.75 276.67 1048.49 277 1049.15 277.4 C1049.8 277.79 1050.53 278.22 1051.08 278.7 C1051.64 279.18 1052.17 279.71 1052.49 280.26 C1052.81 280.81 1053 281.42 1053 282 C1053 282.58 1052.81 283.19 1052.49 283.74 C1052.17 284.29 1051.64 284.82 1051.08 285.3 C1050.53 285.78 1049.8 286.21 1049.15 286.6 C1048.49 287 1047.75 287.33 1047.15 287.67 C1046.56 288.01 1045.97 288.3 1045.56 288.64 C1045.14 288.98 1044.84 289.31 1044.66 289.73 C1044.49 290.15 1044.47 290.6 1044.53 291.14 C1044.58 291.67 1044.78 292.29 1044.97 292.95 C1045.15 293.61 1045.44 294.37 1045.62 295.11 C1045.81 295.85 1046.02 296.67 1046.07 297.4 C1046.13 298.13 1046.12 298.89 1045.96 299.5 C1045.79 300.12 1045.5 300.68 1045.09 301.09 C1044.68 301.5 1044.12 301.79 1043.5 301.96 C1042.89 302.12 1042.13 302.13 1041.4 302.07 C1040.67 302.02 1039.85 301.81 1039.11 301.62 C1038.37 301.44 1037.61 301.15 1036.95 300.97 C1036.29 300.78 1035.67 300.58 1035.14 300.52 C1034.6 300.48 1034.15 300.49 1033.73 300.66 C1033.31 300.83 1032.98 301.14 1032.64 301.56 C1032.3 301.98 1032.01 302.56 1031.67 303.15 C1031.33 303.75 1031 304.49 1030.6 305.15 C1030.21 305.8 1029.78 306.53 1029.3 307.08 C1028.82 307.64 1028.29 308.17 1027.74 308.49 C1027.19 308.81 1026.58 309 1026 309 C1025.42 309 1024.81 308.81 1024.26 308.49 C1023.71 308.17 1023.18 307.64 1022.7 307.08 C1022.22 306.53 1021.79 305.8 1021.4 305.15 C1021 304.49 1020.67 303.75 1020.33 303.15 C1019.99 302.56 1019.7 301.98 1019.36 301.56 C1019.02 301.14 1018.69 300.83 1018.27 300.66 C1017.85 300.49 1017.4 300.48 1016.86 300.52 C1016.33 300.58 1015.71 300.78 1015.05 300.97 C1014.39 301.15 1013.63 301.44 1012.89 301.62 C1012.15 301.81 1011.33 302.02 1010.6 302.07 C1009.87 302.13 1009.11 302.12 1008.5 301.96 C1007.88 301.79 1007.32 301.5 1006.91 301.09 C1006.5 300.68 1006.21 300.12 1006.04 299.5 C1005.88 298.89 1005.87 298.13 1005.93 297.4 C1005.98 296.67 1006.19 295.85 1006.38 295.11 C1006.56 294.37 1006.85 293.61 1007.03 292.95 C1007.22 292.29 1007.42 291.67 1007.48 291.14 C1007.52 290.6 1007.51 290.15 1007.34 289.73 C1007.16 289.31 1006.86 288.98 1006.44 288.64 C1006.02 288.3 1005.44 288.01 1004.85 287.67 C1004.25 287.33 1003.51 287 1002.85 286.6 C1002.2 286.21 1001.47 285.78 1000.92 285.3 C1000.36 284.82 999.83 284.29 999.51 283.74 C999.19 283.19 999 282.58 999 282 C999 281.42 999.19 280.81 999.51 280.26 C999.83 279.71 1000.36 279.18 1000.92 278.7 C1001.47 278.22 1002.2 277.79 1002.85 277.4 C1003.51 277 1004.25 276.67 1004.85 276.33 C1005.44 275.99 1006.02 275.7 1006.44 275.36 C1006.86 275.02 1007.16 274.69 1007.34 274.27 C1007.51 273.85 1007.52 273.4 1007.48 272.86 C1007.42 272.33 1007.22 271.71 1007.03 271.05 C1006.85 270.39 1006.56 269.63 1006.38 268.89 C1006.19 268.15 1005.98 267.33 1005.93 266.6 C1005.87 265.87 1005.88 265.11 1006.04 264.5 C1006.21 263.88 1006.5 263.32 1006.91 262.91 C1007.32 262.5 1007.88 262.21 1008.5 262.04 C1009.11 261.88 1009.87 261.87 1010.6 261.93 C1011.33 261.98 1012.15 262.19 1012.89 262.38 C1013.63 262.56 1014.39 262.85 1015.05 263.03 C1015.71 263.22 1016.33 263.42 1016.86 263.48 C1017.4 263.52 1017.85 263.51 1018.27 263.34 C1018.69 263.17 1019.02 262.86 1019.36 262.44 C1019.7 262.02 1019.99 261.44 1020.33 260.85 C1020.67 260.25 1021 259.51 1021.4 258.85 C1021.79 258.2 1022.22 257.47 1022.7 256.92 C1023.18 256.36 1023.71 255.83 1024.26 255.51 C1024.81 255.19 1025.42 255 1026 255 Z"/><circle cx="1026" cy="282" r="8" stroke-width="5"/></g>
+  <g id="art-settings" transform="scale(1.0909) translate(-1026 -282)"><circle cx="1026" cy="282" r="66" fill="url(#power-face)" stroke="url(#silver-edge)" stroke-width="2.5"/><use href="#gear-glyph"/></g>
+  <g id="art-settings-pressed" transform="scale(1.0909) translate(-1026 -282)"><circle cx="1026" cy="282" r="66" fill="url(#pressed-silver-face)" stroke="url(#pressed-silver-rim)" stroke-width="2.5"/><use href="#gear-glyph"/></g>
+  <g id="art-power" transform="scale(3.3818) translate(-645.65 -146.1)"><circle cx="645.65" cy="146.1" r="21.29" fill="url(#power-face)" stroke="url(#silver-edge)" stroke-width=".8"/><g stroke="#252627" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 .35)"><path d="M639.8 138.9 A9.1 9.1 0 1 0 651.5 138.9"/><path d="M645.65 135.7 V144.5"/></g></g>
+  <g id="art-power-pressed" transform="scale(3.3818) translate(-645.65 -146.1)"><circle cx="645.65" cy="146.1" r="21.29" fill="url(#pressed-silver-face)" stroke="url(#pressed-silver-rim)" stroke-width=".8"/><g stroke="#252627" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 .35) translate(0 .45)"><path d="M639.8 138.9 A9.1 9.1 0 1 0 651.5 138.9"/><path d="M645.65 135.7 V144.5"/></g></g>
+<!-- 快捷键的底：和顶上的圆键同一种银色（同样的面、同样粗细的边，按下也一样），132 × 57 -->
+  <rect id="art-chip" x=".41" y=".41" width="131.18" height="56.18" rx="28.09" fill="url(#power-face)" stroke="url(#silver-edge)" stroke-width=".81"/>
+  <rect id="art-chip-pressed" x=".41" y=".41" width="131.18" height="56.18" rx="28.09" fill="url(#pressed-silver-face)" stroke="url(#pressed-silver-rim)" stroke-width=".81"/>
+<!-- 点按 / 触控 切换：底槽和滑块 -->
+  <g id="art-mode-track" transform="translate(-120 -476)"><rect x="120" y="476" width="1080" height="120" rx="60" fill="url(#field-bezel)"/><rect x="122" y="478.5" width="1076" height="115.5" rx="57.75" fill="url(#field-inset)"/></g>
+  <g id="art-mode-thumb" transform="translate(-120 -476)"><rect x="129" y="485" width="526" height="102" rx="51" fill="url(#silver-selected)" stroke="url(#selected-edge)" stroke-width="2" filter="url(#selection-relief)"/></g>
+  <g id="art-mode-thumb-pressed" transform="translate(-120 -476)"><rect x="129" y="485" width="526" height="102" rx="51" fill="url(#pressed-silver-face)" stroke="url(#pressed-silver-rim)" stroke-width="2"/></g>
+<!-- 触控板：一整块固定的板（1080 × 775），没有按下的样子 -->
+  <g id="art-touchpad"><path d="M98 0 H982 C1054.52 0 1080 25.48 1080 98 V677 C1080 749.52 1054.52 775 982 775 H98 C25.48 775 0 749.52 0 677 V98 C0 25.48 25.48 0 98 0 Z" fill="url(#rim)" filter="url(#touchpad-contact-shadow)"/><path d="M98 1.5 H982 C1053.41 1.5 1078.5 26.59 1078.5 98 V677 C1078.5 748.41 1053.41 773.5 982 773.5 H98 C26.59 773.5 1.5 748.41 1.5 677 V98 C1.5 26.59 26.59 1.5 98 1.5 Z" fill="url(#dark-face)"/><path d="M98 6 H982 C1050.08 6 1074 29.92 1074 98 V677 C1074 745.08 1050.08 769 982 769 H98 C29.92 769 6 745.08 6 677 V98 C6 29.92 29.92 6 98 6 Z" fill="url(#dark-face)"/><path d="M98 .65 H982 C1054.04 .65 1079.35 25.96 1079.35 98 V677 C1079.35 749.04 1054.04 774.35 982 774.35 H98 C25.96 774.35 .65 749.04 .65 677 V98 C.65 25.96 25.96 .65 98 .65 Z" stroke="url(#rim)" stroke-width=".9" stroke-opacity=".55"/></g>
+<!-- 点按转盘：外圈（正常、八个方向按下）和中间的确认键 -->
+  <path id="ring-shape" fill-rule="evenodd" d="M681.45 296.9 A109.35 109.25 0 1 1 462.75 296.9 A109.35 109.25 0 1 1 681.45 296.9 Z M632.3 296.9 A60.2 60.2 0 1 0 511.9 296.9 A60.2 60.2 0 1 0 632.3 296.9 Z"/>
+  <g id="ring-face"><use href="#ring-shape" fill="url(#ring-base)"/><use href="#ring-shape" fill="url(#ring-directional-shade)"/><use href="#ring-shape" fill="url(#ring-side-fill)"/><use href="#ring-shape" fill="url(#ring-glow)"/><ellipse cx="572.1" cy="296.9" rx="108.9" ry="108.8" stroke="url(#ring-edge-reflection)" stroke-width=".7"/></g>
+  <g id="ring-dots" fill="#eee"><circle cx="572.1" cy="200.5" r="2.35"/><circle cx="475.85" cy="296.9" r="2.35"/><circle cx="668.35" cy="296.9" r="2.35"/><circle cx="572.1" cy="393.1" r="2.35"/></g>
+  <radialGradient id="ring-pressure" r="100" gradientUnits="userSpaceOnUse"><stop stop-color="#000" stop-opacity=".38"/><stop offset=".42" stop-color="#000" stop-opacity=".22"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+  <radialGradient id="ring-counterlight" r="88" gradientUnits="userSpaceOnUse"><stop stop-color="#c1c3c5" stop-opacity=".11"/><stop offset=".55" stop-color="#a5a7a9" stop-opacity=".04"/><stop offset="1" stop-color="#999" stop-opacity="0"/></radialGradient>
+  <g id="art-ring" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-up" href="#ring-pressure" cx="572.1" cy="203.9"/><radialGradient id="ring-counterlight-up" href="#ring-counterlight" cx="572.1" cy="384.9"/>
+  <g id="art-ring-up" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-up)"/><use href="#ring-shape" fill="url(#ring-counterlight-up)"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-up-right" href="#ring-pressure" cx="637.86" cy="231.14"/><radialGradient id="ring-counterlight-up-right" href="#ring-counterlight" cx="509.87" cy="359.13"/>
+  <g id="art-ring-up-right" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-up-right)"/><use href="#ring-shape" fill="url(#ring-counterlight-up-right)"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-right" href="#ring-pressure" cx="665.1" cy="296.9"/><radialGradient id="ring-counterlight-right" href="#ring-counterlight" cx="484.1" cy="296.9"/>
+  <g id="art-ring-right" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-right)"/><use href="#ring-shape" fill="url(#ring-counterlight-right)"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-down-right" href="#ring-pressure" cx="637.86" cy="362.66"/><radialGradient id="ring-counterlight-down-right" href="#ring-counterlight" cx="509.87" cy="234.67"/>
+  <g id="art-ring-down-right" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-down-right)"/><use href="#ring-shape" fill="url(#ring-counterlight-down-right)"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-down" href="#ring-pressure" cx="572.1" cy="389.9"/><radialGradient id="ring-counterlight-down" href="#ring-counterlight" cx="572.1" cy="208.9"/>
+  <g id="art-ring-down" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-down)"/><use href="#ring-shape" fill="url(#ring-counterlight-down)"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-down-left" href="#ring-pressure" cx="506.34" cy="362.66"/><radialGradient id="ring-counterlight-down-left" href="#ring-counterlight" cx="634.33" cy="234.67"/>
+  <g id="art-ring-down-left" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-down-left)"/><use href="#ring-shape" fill="url(#ring-counterlight-down-left)"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-left" href="#ring-pressure" cx="479.1" cy="296.9"/><radialGradient id="ring-counterlight-left" href="#ring-counterlight" cx="660.1" cy="296.9"/>
+  <g id="art-ring-left" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-left)"/><use href="#ring-shape" fill="url(#ring-counterlight-left)"/><use href="#ring-dots"/></g>
+  <radialGradient id="ring-pressure-up-left" href="#ring-pressure" cx="506.34" cy="231.14"/><radialGradient id="ring-counterlight-up-left" href="#ring-counterlight" cx="634.33" cy="359.13"/>
+  <g id="art-ring-up-left" transform="scale(2.98) translate(-572.1 -296.9)"><use href="#ring-face"/><use href="#ring-shape" fill="url(#ring-pressure-up-left)"/><use href="#ring-shape" fill="url(#ring-counterlight-up-left)"/><use href="#ring-dots"/></g>
+  <g id="art-center" transform="scale(2.98) translate(-572.1 -296.9)"><circle cx="572.1" cy="296.9" r="61.7" fill="#080808"/><circle cx="572.1" cy="296.9" r="60.5" fill="url(#center-face)"/><circle cx="572.1" cy="296.9" r="62.05" stroke="url(#center-edge-reflection)" stroke-width=".55"/></g>
+  <g id="art-center-pressed" transform="scale(2.98) translate(-572.1 -296.9)"><circle cx="572.1" cy="296.9" r="61.7" fill="#080808"/><circle cx="572.1" cy="296.9" r="60.5" fill="url(#pressed-center-face)"/><circle cx="572.1" cy="296.9" r="62.05" stroke="url(#center-edge-reflection)" stroke-width=".55"/></g>
+<!-- 按键：返回、电视、播放 / 暂停、静音（圆心在 0,0） -->
+  <g id="art-back" transform="scale(2.27) translate(-519.5 -457.8)"><ellipse cx="519.5" cy="457.8" rx="43.55" ry="43.5" fill="url(#rim)"/><ellipse cx="519.5" cy="458.3" rx="42.6" ry="42.5" fill="url(#back-face)"/><path d="M523.2 446.7 L512.5 457.5 L523.2 468.2" stroke="#efefef" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" transform="translate(1.65 .35)"/></g>
+  <g id="art-back-pressed" transform="scale(2.27) translate(-519.5 -457.8)"><ellipse cx="519.5" cy="457.8" rx="43.55" ry="43.5" fill="url(#pressed-dark-rim)"/><ellipse cx="519.5" cy="458.3" rx="42.6" ry="42.5" fill="url(#pressed-dark-face)"/><path d="M523.2 446.7 L512.5 457.5 L523.2 468.2" stroke="#efefef" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" transform="translate(1.65 .35) translate(0 .45)"/></g>
+  <g id="art-tv" transform="scale(2.27) translate(-624.7 -457.8)"><ellipse cx="624.7" cy="457.8" rx="43.5" ry="43.5" fill="url(#rim)"/><ellipse cx="624.7" cy="458.3" rx="42.55" ry="42.5" fill="url(#dark-face)"/><g stroke="#f0f0f0" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" transform="translate(.07 -.5)"><rect x="612.05" y="448.25" width="25.15" height="17.1" rx="1.55"/><path d="M619.7 468.75 H629.5"/></g></g>
+  <g id="art-tv-pressed" transform="scale(2.27) translate(-624.7 -457.8)"><ellipse cx="624.7" cy="457.8" rx="43.5" ry="43.5" fill="url(#pressed-dark-rim)"/><ellipse cx="624.7" cy="458.3" rx="42.55" ry="42.5" fill="url(#pressed-dark-face)"/><g stroke="#f0f0f0" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" transform="translate(.07 -.5) translate(0 .45)"><rect x="612.05" y="448.25" width="25.15" height="17.1" rx="1.55"/><path d="M619.7 468.75 H629.5"/></g></g>
+  <g id="art-play" transform="scale(2.27) translate(-519.5 -561.25)"><ellipse cx="519.5" cy="561.25" rx="43.55" ry="43.5" fill="url(#rim)"/><ellipse cx="519.5" cy="561.8" rx="42.6" ry="42.5" fill="url(#dark-face)"/><g stroke="#eeeeee" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" transform="translate(.25 .28)"><path d="M505.7 553.15 V568.9 L518.6 561.05 Z"/><path d="M526.1 552.8 V569.15 M532.8 552.8 V569.15"/></g></g>
+  <g id="art-play-pressed" transform="scale(2.27) translate(-519.5 -561.25)"><ellipse cx="519.5" cy="561.25" rx="43.55" ry="43.5" fill="url(#pressed-dark-rim)"/><ellipse cx="519.5" cy="561.8" rx="42.6" ry="42.5" fill="url(#pressed-dark-face)"/><g stroke="#eeeeee" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" transform="translate(.25 .28) translate(0 .45)"><path d="M505.7 553.15 V568.9 L518.6 561.05 Z"/><path d="M526.1 552.8 V569.15 M532.8 552.8 V569.15"/></g></g>
+  <g id="art-mute" transform="scale(2.27) translate(-519.5 -664.9)"><ellipse cx="519.5" cy="664.9" rx="43.55" ry="43.5" fill="url(#rim)"/><ellipse cx="519.5" cy="665.4" rx="42.6" ry="42.5" fill="url(#dark-face)"/><g stroke="#eeeeee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="translate(-.47 -.23)"><path d="M518.7 658.7 L525.55 653.7 V667.8 M511.1 661.9 V668.3 H516.1 L525.55 675.55"/><path d="M508.75 654.1 L531.2 676.55"/></g></g>
+  <g id="art-mute-pressed" transform="scale(2.27) translate(-519.5 -664.9)"><ellipse cx="519.5" cy="664.9" rx="43.55" ry="43.5" fill="url(#pressed-dark-rim)"/><ellipse cx="519.5" cy="665.4" rx="42.6" ry="42.5" fill="url(#pressed-dark-face)"/><g stroke="#eeeeee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="translate(-.47 -.23) translate(0 .45)"><path d="M518.7 658.7 L525.55 653.7 V667.8 M511.1 661.9 V668.3 H516.1 L525.55 675.55"/><path d="M508.75 654.1 L531.2 676.55"/></g></g>
+<!-- 音量：一条竖着的胶囊（198 × 451，中心在 0,0），上半边加、下半边减，中间一道缝。平时两半是同一条胶囊
+     （同一套渐变，各裁一半，在缝那里多叠 2 个单位，免得两条边之间透出底色）；按下的那一半是一个压下去的半边 -->
+  <clipPath id="volume-top"><rect x="-100" y="-227" width="200" height="229"/></clipPath>
+  <clipPath id="volume-bottom"><rect x="-100" y="-2" width="200" height="229"/></clipPath>
+  <g id="volume-body"><rect x="-99" y="-225.5" width="198" height="451" rx="99" fill="url(#rim)"/><rect x="-96.6" y="-222.5" width="193.2" height="446.2" rx="96.6" fill="url(#dark-face)"/></g>
+  <path id="volume-plus" d="M-22.5 -112.75 H22.5 M0 -135.25 V-90.25" stroke="#eee" stroke-width="4.8" stroke-linecap="round"/>
+  <path id="volume-minus" d="M-22.5 112.75 H22.5" stroke="#eee" stroke-width="4.8" stroke-linecap="round"/>
+  <g id="art-volup"><use href="#volume-body" clip-path="url(#volume-top)"/><use href="#volume-plus"/></g>
+  <g id="art-volup-pressed"><path d="M-99 0 V-126.5 A99 99 0 0 1 99 -126.5 V0 Z" fill="url(#pressed-dark-rim)"/><path d="M-96.6 0 V-125.9 A96.6 96.6 0 0 1 96.6 -125.9 V0 Z" fill="url(#pressed-dark-face)"/><use href="#volume-plus" y="1"/></g>
+  <g id="art-voldown"><use href="#volume-body" clip-path="url(#volume-bottom)"/><use href="#volume-minus"/></g>
+  <g id="art-voldown-pressed"><path d="M-99 0 V126.5 A99 99 0 0 0 99 126.5 V0 Z" fill="url(#pressed-dark-rim)"/><path d="M-96.6 0 V127.1 A96.6 96.6 0 0 0 96.6 127.1 V0 Z" fill="url(#pressed-dark-face)"/><use href="#volume-minus" y="1"/></g>
+  <path id="art-volume-seam" d="M-97 0 H97" stroke="#353535" stroke-width="1.1"/>
+<!-- 快捷键和设置里用的小图标（44 见方，#2b2d2f 的 5 粗圆头线） -->
+  <symbol id="icon-shortcut" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 5 37 16.5 22 28 7 16.5z"/><path d="M7 26.5 22 38l15-11.5"/></g></symbol>
+  <symbol id="icon-screensaver" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="36" height="25" rx="5"/><path d="M15 39h14M22 31v8M8 28l9-10 6 6 4-4 9 8"/></g><circle cx="28.5" cy="13.5" r="3" fill="#2b2d2f"/></symbol>
+  <symbol id="icon-sleep" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M37 26.5A16 16 0 1 1 17.5 7a12.5 12.5 0 0 0 19.5 19.5z"/></g></symbol>
+  <symbol id="icon-files" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a4 4 0 0 1 4-4h9l4 5h15a4 4 0 0 1 4 4v15a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z"/></g></symbol>
+  <symbol id="icon-danmaku" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h24a6 6 0 0 1 6 6v13a6 6 0 0 1-6 6H19l-8 7v-7h-1a6 6 0 0 1-6-6V12a6 6 0 0 1 6-6z"/><path d="M12 15h12M29 15h3M12 22h5M22 22h10"/></g></symbol>
+  <symbol id="icon-quality" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="38" height="28" rx="6"/><path d="M11 16v12M11 22h7M18 16v12M25 16v12h2.5a6 6 0 0 0 0-12z" stroke-width="4"/></g></symbol>
+  <symbol id="icon-speed" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 33A17 17 0 1 1 36.5 33"/><path d="M22 25l7-8"/></g></symbol>
+  <symbol id="icon-subtitles" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="36" height="28" rx="6"/><path d="M11 22h7M23 22h10M11 29h14M30 29h3"/></g></symbol>
+  <symbol id="icon-episodes" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 11h21M16 22h21M16 33h21M7 11h0M7 22h0M7 33h0"/></g></symbol>
+  <symbol id="icon-coin" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><circle cx="22" cy="22" r="17"/><path d="M15.5 13.5 22 21l6.5-7.5M22 21v10M16.5 24h11"/></g></symbol>
+  <symbol id="icon-star" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 5.5 26.7 17l12.4.9-9.5 8.1 3 12.1L22 31.5l-10.6 6.6 3-12.1-9.5-8.1L17.3 17z"/></g></symbol>
+  <symbol id="icon-heart" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 37C12.4 30.8 5.5 24.6 5.5 16.6c0-5 3.8-9.1 8.6-9.1 3.4 0 6.3 2 7.9 5 1.6-3 4.5-5 7.9-5 4.8 0 8.6 4.1 8.6 9.1 0 8-6.9 14.2-16.5 20.4z"/></g></symbol>
+  <symbol id="icon-lyrics" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10h17M5 19h13M5 28h9"/><path d="M33 31.5V8.5l6.5 3.5"/><circle cx="28.5" cy="31.5" r="4.5"/></g></symbol>
+  <symbol id="icon-mode" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 20v-3a6 6 0 0 1 6-6h21"/><path d="M29 5.5 34.5 11 29 16.5"/><path d="M37 24v3a6 6 0 0 1-6 6H10"/><path d="M15 38.5 9.5 33l5.5-5.5"/></g></symbol>
+  <symbol id="icon-daily" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="34" height="31" rx="6"/><path d="M5 17h34M14 4v7M30 4v7M15 28h0M22 28h0M29 28h0"/></g></symbol>
+  <symbol id="icon-transcript" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h14l10 10v21a4 4 0 0 1-4 4H11a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4z"/><path d="M25 5v10h10"/><path d="M14 24h14M14 32h9"/></g></symbol>
+  <symbol id="icon-next" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9.5 27 22 9 34.5z"/><path d="M35 9.5v25"/></g></symbol>
+  <symbol id="icon-previous" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M35 9.5 17 22l18 12.5z"/><path d="M9 9.5v25"/></g></symbol>
+</defs></svg>
 
 <script src="remote.js"></script>
 </body>

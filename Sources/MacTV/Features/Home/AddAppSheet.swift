@@ -8,11 +8,11 @@ struct AddAppSheet: View {
     var body: some View {
         let a = tv.adder ?? AppAdder()
         VStack(alignment: .leading, spacing: 26) {
-            Text("Add an app").font(.tv(.title3, emphasized: true))
+            Text("Add App").font(.tv(.title3, emphasized: true))
 
             HStack(spacing: 6) {
                 tab("Website", .website, a)
-                tab("Mac app", .macApp, a)
+                tab("Mac App", .macApp, a)
                 if tv.adderTabs.contains(.steam) { tab("Steam", .steam, a) }
             }
             .padding(6)
@@ -21,22 +21,23 @@ struct AddAppSheet: View {
 
             if a.tab == .website {
                 AdderField(label: "Website", text: a.address, placeholder: "e.g. crunchyroll.com", focused: a.row == 1) { set(row: 1) }
-                AdderField(label: "Name (optional)", text: a.name, placeholder: "Taken from the website", focused: a.row == 2) { set(row: 2) }
+                AdderField(label: "Name", text: a.name, placeholder: "Optional", focused: a.row == 2) { set(row: 2) }
                 ShelfButton(title: "Add to Home Screen", systemImage: "plus", focused: a.row == 3, glass: false) {
                     set(row: 3)
                     tv.submitAdder()
                 }
             } else if a.tab == .macApp {
-                AdderField(label: "Search apps on this Mac", text: a.query, placeholder: "Type to filter", focused: a.row == 1) { set(row: 1) }
+                AdderField(label: "Search", text: a.query, placeholder: "App Name", focused: a.row == 1) { set(row: 1) }
                 macList(a)
             } else {
                 steamList(a)
             }
 
-            Text(a.message ?? (a.tab == .steam ? "Games open through Steam, and Mac TV comes back when you quit. Esc or Back closes."
-                                                : "Type with the keyboard or the remote's typing box. Esc or Back closes."))
-                .font(.tv(.caption2, emphasized: a.message != nil))
-                .foregroundStyle(a.failed ? Color(hex: "#FF8A80") : .white.opacity(a.message == nil ? 0.55 : 0.9))
+            if let message = a.message {
+                Text(message)
+                    .font(.tv(.caption2, emphasized: true))
+                    .foregroundStyle(Color(hex: "#FF8A80"))
+            }
         }
         .padding(56)
         .frame(width: 1100, alignment: .leading)
@@ -88,7 +89,7 @@ struct AddAppSheet: View {
                     .frame(width: 44, height: 44)
                     Text(game.name).font(.tv(.body)).lineLimit(1)
                     Spacer()
-                    if added { Text("On TV").font(.tv(.caption2, emphasized: true)).opacity(0.6) }
+                    if added { Text("Added").font(.tv(.caption2, emphasized: true)).opacity(0.6) }
                 }
                 .padding(.horizontal, 18)
                 .frame(height: 60)
@@ -110,7 +111,7 @@ struct AddAppSheet: View {
                 }
             }
             if games.count == 1 {
-                Text("No Steam games installed yet. Install some in Steam and they'll show up here.")
+                Text("No Steam Games")
                     .font(.tv(.caption2)).opacity(0.6).padding(.top, 6)
             }
         }
@@ -123,7 +124,7 @@ struct AddAppSheet: View {
         let start = min(max(0, a.selected - window / 2), max(0, matches.count - window))
         VStack(spacing: 6) {
             if matches.isEmpty {
-                Text("No apps match.").font(.tv(.caption1)).opacity(0.6)
+                Text("No Results").font(.tv(.caption1)).opacity(0.6)
                     .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
             }
             ForEach(Array(matches.enumerated().dropFirst(start).prefix(window)), id: \.element.bundleID) { index, app in
@@ -135,7 +136,7 @@ struct AddAppSheet: View {
                     Text(app.name).font(.tv(.body)).lineLimit(1)
                     Spacer()
                     if added {
-                        Text("On TV").font(.tv(.caption2, emphasized: true)).opacity(0.6)
+                        Text("Added").font(.tv(.caption2, emphasized: true)).opacity(0.6)
                     }
                 }
                 .padding(.horizontal, 18)

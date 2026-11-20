@@ -48,7 +48,7 @@ struct NeteaseScreen: View {
     /// 歌单页里选中的行尽量停在第 4 行的位置，上面能看到刚过去的几首
     private let pageAnchor = 3
 
-    private static let slide = Animation.spring(response: 0.42, dampingFraction: 0.84)
+    private static let slide = Motion.slide
     private static let lyric = Animation.spring(response: 0.6, dampingFraction: 0.9)
     private static let swap = AnyTransition.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.4).delay(0.12)),
                                                        removal: .opacity.animation(.easeIn(duration: 0.12)))
@@ -215,8 +215,9 @@ struct NeteaseScreen: View {
     /// 搜索：平时是一个小小的"搜索"，选中它按确认才变成输入框
     private var searchField: some View {
         let focused = store.topFocus == .search && !store.editing
-        return HStack(spacing: 14) {
-            Image(systemName: "magnifyingglass").font(.system(size: 26, weight: .semibold))
+        // 字和旁边正在放的那首歌是同一个大小（同一排的几个胶囊要一样）
+        return HStack(spacing: 12) {
+            Image(systemName: "magnifyingglass").font(.system(size: 22, weight: .semibold))
             if store.editing {
                 TextField("搜索歌曲、歌单", text: $store.query)
                     .textFieldStyle(.plain)
@@ -227,7 +228,7 @@ struct NeteaseScreen: View {
                 Text(store.query.isEmpty ? "搜索" : store.query).lineLimit(1)
             }
         }
-        .font(.tv(.callout))
+        .font(.tv(.caption1))
         .foregroundStyle(store.editing || focused ? .black : .white.opacity(0.85))
         .padding(.horizontal, 24)
         .frame(width: store.editing ? 620 : nil, height: 58, alignment: .leading)
@@ -290,7 +291,7 @@ struct NeteaseScreen: View {
                             Image(systemName: item.symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36)
                         }
                         if store.naming == item.action {
-                            TextField("歌单名字", text: $store.newName)
+                            TextField("歌单标题", text: $store.newName)
                                 .textFieldStyle(.plain)
                                 .font(.tv(.callout))
                                 .focused($namingField)
@@ -359,7 +360,9 @@ struct NeteaseScreen: View {
         case .song: CGPoint(x: rect.minX + 70, y: rect.maxY + 4)                                 // 那一行下面
         case .pageButton: CGPoint(x: rect.minX, y: rect.maxY + 16)                               // 按钮下面
         case .card: CGPoint(x: rect.minX + 24, y: rect.minY + 24)                                // 压在卡片左上角里面
-        case .setting: CGPoint(x: rect.maxX - size.width, y: rect.maxY + 8)                      // 那一行下面，右边对齐
+        // 设置那一行：下面放得下就贴在下面，放不下（比如最后一行）就贴在上面，右边对齐，绝不飘到别处
+        case .setting: CGPoint(x: rect.maxX - size.width,
+                               y: rect.maxY + 8 + size.height <= screen.height - 24 ? rect.maxY + 8 : rect.minY - size.height - 8)
         }
         origin.x = min(max(24, origin.x), screen.width - size.width - 24)
         origin.y = min(max(24, origin.y), screen.height - size.height - 24)
@@ -422,7 +425,7 @@ struct NeteaseScreen: View {
         switch list.kind {
         case .artist: "歌手"
         case .album: [list.subtitle, list.count > 0 ? "\(list.count) 首" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
-        case .playlist, .recent: list.count > 0 ? "\(list.count) 首" : nil
+        case .playlist, .recent, .daily: list.count > 0 ? "\(list.count) 首" : nil
         }
     }
 
@@ -584,7 +587,7 @@ struct NeteaseScreen: View {
         switch page.list.kind {
         case .artist: return page.list.subtitle.isEmpty ? "歌手" : page.list.subtitle
         case .album: return [page.list.subtitle, count > 0 ? "\(count) 首" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
-        case .playlist, .recent: return count > 0 ? "\(count) 首" : " "
+        case .playlist, .recent, .daily: return count > 0 ? "\(count) 首" : " "
         }
     }
 
@@ -647,7 +650,7 @@ struct NeteaseScreen: View {
             Spacer(minLength: 20)
             if store.liked.contains(song.id) { Image(systemName: "heart.fill").font(.system(size: 20)).opacity(0.5) }
             if song.duration > 0 {
-                Text(neteaseClockText(Double(song.duration))).font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.55)
+                Text(clockText(Double(song.duration))).font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.55)
             }
         }
         .foregroundStyle(dark ? .black : .white.opacity(current ? 1 : 0.85))
@@ -682,7 +685,13 @@ struct NeteaseScreen: View {
                     .frame(height: settingHeight - 8)
                     .offset(y: highlightY)
                     .opacity(active ? 1 : 0)
+                // 设置菜单从选中的那一行长出来、收回那一行：用一块看不见的、按排版真正挪到那一行的占位来量位置
+                //（上面的白色高亮是用 offset 挪的，量出来永远是第一行"音质"）
+                Color.clear
+                    .frame(height: settingHeight - 8)
                     .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { ["setting": $0] }
+                    .padding(.top, highlightY)
+                    .allowsHitTesting(false)
                 settingRows(dark: false)
                 settingRows(dark: true)
                     .mask(alignment: .topLeading) {
@@ -720,20 +729,22 @@ struct NeteaseScreen: View {
     private func settingRow(_ setting: NeteaseStore.Setting, dark: Bool) -> some View {
         let title = switch setting {
         case .quality: "音质"
-        case .balance: "平衡音量"
+        case .balance: "音量平衡"
         case .background: "后台播放"
         case .resume: "记住播放进度"
         case .history: "同步听歌记录"
+        case .shelf: "主屏幕顶部"
         }
-        let value = setting == .quality ? NeteaseStore.name(of: store.effectiveLevel) : (store.isOn(setting) ? "开" : "关")
+        let value = setting == .quality ? NeteaseStore.name(of: store.effectiveLevel)
+            : setting == .shelf ? NeteaseShelfSource.summary : (store.isOn(setting) ? "打开" : "关闭")
         return HStack(spacing: 18) {
             Text(title).font(.system(size: 30, weight: .semibold))
             Spacer(minLength: 20)
             Text(value).font(.system(size: 28, weight: .medium)).opacity(0.6)
                 .contentTransition(.opacity)
-            if setting == .quality {
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 20, weight: .semibold)).opacity(0.45)
-            }
+            // 弹出一列选项的行带这个记号；开关那几行也留着它的位置，右边的值对在同一条竖线上
+            Image(systemName: "chevron.up.chevron.down").font(.system(size: 20, weight: .semibold))
+                .opacity(setting == .quality || setting == .shelf ? 0.45 : 0)
         }
         .foregroundStyle(dark ? .black : .white.opacity(0.9))
         .padding(.horizontal, 30)
@@ -1042,7 +1053,7 @@ struct NeteaseProgress: View {
             }
             .frame(height: 36)
             HStack {
-                Text(neteaseClockText(clock.time))
+                Text(clockText(clock.time))
                 Spacer()
                 // 中间：一直是这首歌实际在放的音质（暂停图标在封面上）。点它打开音质栏。
                 // 汉字占满整个字框，同样字号比两头的数字看着大一圈：汉字小一号，看起来才一样高（"Hi-Res"是英文，不用）
@@ -1055,7 +1066,7 @@ struct NeteaseProgress: View {
                     .hoverLift(scale: 1.06, brighten: 0.25)
                     .onTapGesture { store.openQualityBar() }
                 Spacer()
-                Text("-" + neteaseClockText(max(0, clock.duration - clock.time)))
+                Text("-" + clockText(max(0, clock.duration - clock.time)))
             }
             .font(.system(size: 24, weight: .medium).monospacedDigit())
             .foregroundStyle(.white.opacity(0.6))
@@ -1071,12 +1082,12 @@ struct NeteaseProgress: View {
 struct NeteaseKaraokeLine: View {
     /// 提前一点点：画面从算出来到真正显示在电视上要两三帧，再加上"涂到一半才看得出在唱这个字"，
     /// 所以整体提前 0.08 秒，字被唱出来的那一刻正好开始涂。以前是开始唱才亮、半秒左右才亮到一半，看着慢半个字
-    static let lead = 0.08
+    nonisolated static let lead = 0.08
     /// 涂到第几成（0 还没开始，1 涂满）。极短的字至少给 0.08 秒涂，不会一闪而过
-    static func progress(at now: Double, start: Double, duration: Double) -> Double {
+    nonisolated static func progress(at now: Double, start: Double, duration: Double) -> Double {
         max(0, min(1, (now + lead - start) / max(0.08, duration)))
     }
-    static let dim = 0.42
+    nonisolated static let dim = 0.42
 
     /// 一个字（词）后面带着的空格、标点不占它唱的时间：字在自己的时长里涂满，后面的标点在它唱完时一下亮起。
     /// 不然"字，"整个按一个字的宽度涂，字涂到一半就唱完了，看着跑在声音前面
@@ -1175,11 +1186,6 @@ struct KaraokeRenderer: TextRenderer {
             }
         }
     }
-}
-
-func neteaseClockText(_ seconds: Double) -> String {
-    let total = max(0, Int(seconds))
-    return String(format: "%d:%02d", total / 60, total % 60)
 }
 
 /// 正在播放的标记：在放的时候是几根上下起伏的竖条（像声波），暂停时是一个暂停图标。

@@ -89,7 +89,7 @@ enum TileArt {
     }
 
     /// The icon's brand colour as hex: the mark's average colour, or the ground's when the
-    /// mark is white, black or grey (Netflix's red, Spotify's green, Prime's blue).
+    /// mark is white, black or grey (a red, green or blue tile with a white logo).
     static func brandColor(from icon: CGImage) -> String? {
         guard let pixels = Pixels(icon, side: 128) else { return nil }
         let opaqueCorners = pixels.alpha(0.06, 0.06) > 0.5 && pixels.alpha(0.94, 0.94) > 0.5

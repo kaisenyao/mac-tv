@@ -113,8 +113,10 @@ extension TVController {
         profile = profiles.current
         library = AppLibrary(profileID: profile.id, folder: library.storageFolder)
         reloadServices()
+        // 哔哩哔哩、主屏顶部按这个人的账号重新来（不留上一个人的登录、关注、观看记录）
+        bilibiliStore.profileChanged()
+        appShelf.reset()
         setFocus(.app(0))
-        showToast("Hi, \(profile.name)")
     }
 
     func handleProfiles(_ command: RemoteCommand) {
@@ -183,7 +185,6 @@ extension TVController {
                 let removed = all[index]
                 profiles.remove(removed.id)
                 if removed.id == profile.id { profile = profiles.current; library = AppLibrary(profileID: profile.id, folder: library.storageFolder); reloadServices() }
-                showToast("Removed \(removed.name)")
                 picker = ProfilePicker(index: max(0, index - 1))
             } else {
                 picker.confirmingRemove = true
@@ -198,7 +199,6 @@ extension TVController {
     private func createProfile() {
         guard let name = profilePicker?.naming?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return }
         let added = profiles.add(named: name)
-        Analytics.send(.profileAdded, ["profiles": String(profiles.all.count)])
         switchProfile(to: added.id)
     }
 }
@@ -227,7 +227,7 @@ struct ProfilesScreen: View {
         let picker = tv.profilePicker ?? ProfilePicker()
         let all = tv.profiles.all
         VStack(spacing: 56) {
-            Text(picker.naming == nil ? "Who's watching?" : "New profile")
+            Text(picker.naming == nil ? "Who’s Watching?" : "New Profile")
                 .font(.tv(.title2, emphasized: true))
             if let name = picker.naming {
                 naming(name)
@@ -278,7 +278,7 @@ struct ProfilesScreen: View {
         if picker.index < all.count, all[picker.index].id != Profile.mainID {
             let name = all[picker.index].name
             Button { tv.activateProfile(picker.index, remove: true) } label: {
-                Text(picker.confirmingRemove ? "Press again to remove \(name) and their sign-ins" : "Remove \(name)")
+                Text(picker.confirmingRemove ? "Press Again to Remove" : "Remove \(name)")
                     .font(.tv(.caption2, emphasized: true))
                     .padding(.horizontal, 30)
                     .frame(height: 58)
@@ -303,9 +303,6 @@ struct ProfilesScreen: View {
             .padding(.horizontal, 36)
             .frame(minWidth: 520, minHeight: 84)
             .tvPanel(in: Capsule())
-            Text("Type a name with the keyboard or the phone remote. Each profile has its own apps and stays signed in separately.")
-                .font(.tv(.caption2)).foregroundStyle(.white.opacity(0.65))
-                .multilineTextAlignment(.center).frame(maxWidth: 820)
             ShelfButton(title: "Create Profile", focused: !name.isEmpty, glass: false) { tv.handle(.select) }
         }
     }

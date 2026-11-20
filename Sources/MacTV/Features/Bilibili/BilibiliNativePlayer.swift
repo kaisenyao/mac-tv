@@ -13,11 +13,17 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published private(set) var paused = false
     /// 画面已经出来了（之前显示封面）
     @Published private(set) var showing = false
+    /// 放的途中在等数据（网慢、刚拖完进度、直播卡了）：画面中间转个圈，知道是在加载、不是卡死了。
+    /// 等了 0.4 秒以上才出来，一闪而过的不显示
+    @Published private(set) var buffering = false
+    private var bufferingSoon: Task<Void, Never>?
     @Published private(set) var time: Double = 0
     @Published private(set) var duration: Double = 0
-    @Published private(set) var quality = ""
     @Published private(set) var controlsVisible = false
     @Published private(set) var failed = false
+    /// 正在放（或者正在缓冲着要放）：这时不让屏保出来、显示器不睡。
+    /// 暂停了、放完停在相关视频上、放不了、直播连不上都不算
+    var blocksScreensaver: Bool { current != nil && !paused && !failed }
     /// 和正在播的视频相关的视频：播放时按下键拉出来，播完自动出现
     @Published private(set) var related: [BiliVideo] = []
     /// 下面拉出来的那一块开着（里面是"选集"和"相关视频"两排，见 shelves）
@@ -74,14 +80,15 @@ final class BilibiliNativePlayer: ObservableObject {
 
     /// 哔哩哔哩网页上的几档倍速（从快到慢，和网页上的排法一样）
     static let speeds: [Double] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
-    /// 2.0× 1.5× 1.25× 1.0× 0.75× 0.5×
-    static func speedName(_ value: Double) -> String {
-        String(format: (value * 10).rounded() == value * 10 ? "%.1f×" : "%.2f×", value)
+    /// 2× 1.5× 1.25× 1× 0.75× 0.5×：不带多余的 0（和得到一样）
+    nonisolated static func speedName(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...2)).locale(Locale(identifier: "en_US_POSIX"))) + "×"
     }
-    /// 倍速：记住上次选的，下一个视频也按它放（设置页里也能改）
+    /// 倍速：记住上次选的，下一个视频也按它放（设置页里也能改）。只管视频，直播一直是 1 倍速
     @Published var speed = UserDefaults.standard.object(forKey: "bilibiliSpeed") as? Double ?? 1.0 {
         didSet {
             UserDefaults.standard.set(speed, forKey: "bilibiliSpeed")
+            guard !isLive else { return }
             player.defaultRate = Float(speed)
             if player.timeControlStatus != .paused, player.rate > 0 { player.rate = Float(speed) }
         }
@@ -90,17 +97,29 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published var subtitlesOn = UserDefaults.standard.object(forKey: "bilibiliSubtitles") as? Bool ?? true {
         didSet { UserDefaults.standard.set(subtitlesOn, forKey: "bilibiliSubtitles") }
     }
-    /// 弹幕开关：记住上次的选择（面板里、设置页里都能改）。打开时这个视频还没取过弹幕就现取
+    /// 弹幕开关：记住上次的选择（面板里、设置页里都能改）。打开时这个视频还没取过弹幕就现取；
+    /// 直播间是打开就连弹幕服务器、关上就断开
     @Published var danmakuOn = UserDefaults.standard.object(forKey: "bilibiliDanmaku") as? Bool ?? true {
         didSet {
+            guard danmakuOn != oldValue else { return }
             UserDefaults.standard.set(danmakuOn, forKey: "bilibiliDanmaku")
-            if danmakuOn, danmakuAll.isEmpty, let video = current, let cid = stream?.cid { loadDanmaku(video, cid: cid) }
+            if let video = current, video.isLive {
+                if danmakuOn { connectLiveDanmaku(video) } else { disconnectLiveDanmaku() }
+            } else if danmakuOn, danmakuAll.isEmpty, let video = current, let cid = stream?.cid {
+                loadDanmaku(video, cid: cid)
+            }
         }
     }
-    /// 这个视频的弹幕，已经按弹幕设置排好了行（见 BiliDanmakuLayout）
-    @Published private(set) var danmaku: [BiliDanmakuLayout.Placed] = []
-    /// 取回来的全部弹幕（改弹幕设置时从它重新排）
+    /// 这个视频的弹幕，已经按弹幕设置排好了行（见 BiliDanmakuLayout）。单独放一个对象里：只有画弹幕的那一层看着它
+    let danmaku = BiliDanmakuTrack()
+    /// 取回来的全部弹幕（改弹幕设置时从它重新排）；直播间是最近一分钟来的
     private var danmakuAll: [BiliDanmaku] = []
+    /// 直播间：连着弹幕服务器的那个任务；一行一行排到哪了（来一条排一条）；画面上这一秒已经放了几条
+    private var liveDanmakuTask: Task<Void, Never>?
+    private var danmakuLanes = BiliDanmakuLayout.Lanes(BiliDanmakuLayout())
+    private var liveDanmakuSecond = (second: -1, shown: 0)
+    /// 直播间一秒最多放几条：热闹的房间一秒来几十条，多的直接扔掉（不攒着）。满屏时一行一秒多也就进一条，十五条够了
+    private static let liveDanmakuPerSecond = 15
     /// 弹幕设置：显示区域、字号、速度、不透明度、固定弹幕、彩色弹幕。改了马上重新排
     @Published var danmakuStyle = BiliDanmakuStyle.load() {
         didSet {
@@ -115,7 +134,7 @@ final class BilibiliNativePlayer: ObservableObject {
     @Published private(set) var subtitleTrack: BiliSubtitleTrack?
     @Published private(set) var subtitleCues: [BiliSubtitleCue] = []
 
-    let player = AVPlayer()
+    let player = PlaybackVolume.attached(AVPlayer())   // 电视的音量调不了时，音量键调它（见 PlaybackVolume）
     var cookie: () async -> String = { "" }
     /// 签名用的密钥（取字幕要用），由外面接上
     var signingKey: () async -> String? = { nil }
@@ -130,6 +149,13 @@ final class BilibiliNativePlayer: ObservableObject {
 
     private var warmed: (video: BiliVideo, item: AVPlayerItem, stream: BiliStream)?
     private var warming: (video: BiliVideo, task: Task<Void, Never>)?
+    /// 正在取流的（点开一个没准备好的视频、换清晰度）、正在连的直播：换片、关掉时取消，免得回来得晚的把别的顶掉
+    private var loading: Task<Void, Never>?
+    private var liveConnect: Task<Void, Never>?
+    /// 放着的时候每 15 秒报一次看到哪
+    private var heartbeat: Timer?
+    /// 这次是不是指定了就放这一集、这一 P（见 play 的 exact）
+    private var exactOpen = false
     private var observers: Set<AnyCancellable> = []
     private var timeObserver: Any?
     private var hideControls: Task<Void, Never>?
@@ -146,15 +172,35 @@ final class BilibiliNativePlayer: ObservableObject {
     private var endHandled = false
     private var stream: BiliStream?
     private var loaders: [ObjectIdentifier: BiliHLS.Loader] = [:]
+    /// 看着直播的那个：画面不动了就重新连（见 watchLive）
+    private var liveWatchdog: Task<Void, Never>?
+    /// 直播比正在直播的地方晚几秒放。实测 CDN 偶尔给 2～3 秒前的旧列表，1 秒一段的片段最慢 0.7 秒才下完，
+    /// 列表本身来回 0.3 秒：最坏差 4 秒左右。晚 6 秒放还剩 2 秒余量；刚连上时列表里就有 6～7 秒，一开始就落在这个位置
+    private static let liveOffset = 6.0
+    /// 直播往前缓冲多少：比落后的秒数多一点，也就是"已经播出来的全缓冲上"（再往前还没有）
+    private static let liveBuffer = 8.0
+    /// 直播的列表经手的那个（系统播放器只弱引用它，要一直留着）、连的是哪台服务器、这次卡了几次（日志用）
+    private var liveLoader: BiliHLS.LiveLoader?
+    private var liveHost = ""
+    private var liveStalls = 0
+    /// 自己按了暂停（看门狗不把它当成卡住）
+    private var userPaused = false
     private let loaderQueue = DispatchQueue(label: "bilibili.playlists")
 
     init() {
         player.automaticallyWaitsToMinimizeStalling = true
         player.defaultRate = Float(speed)   // 按播放就是这个倍速
+        // 只在真的在放时不让显示器睡（见 blocksScreensaver）
+        $current.combineLatest($paused, $failed)
+            .map { current, paused, failed in current != nil && !paused && !failed }
+            .removeDuplicates()
+            .sink { [weak self] on in MainActor.assumeIsolated { self?.keepAwake(on) } }
+            .store(in: &observers)
         player.publisher(for: \.timeControlStatus).receive(on: RunLoop.main).sink { [weak self] status in
             MainActor.assumeIsolated {
                 guard let self, self.current != nil else { return }
                 self.paused = status == .paused
+                self.noteWaiting(status == .waitingToPlayAtSpecifiedRate)
                 self.publishNowPlaying()
                 // 停在了最后（有的视频放完不发通知，只是停住）：和放完一样处理
                 if status == .paused, !self.scrubbing, self.duration > 1, self.displayTime() >= self.duration - 0.6 { self.reachedEnd() }
@@ -177,6 +223,14 @@ final class BilibiliNativePlayer: ObservableObject {
                 self.reachedEnd()
             }
         }.store(in: &observers)
+        // 直播卡了一下：记一笔（缓冲了几秒、哪台服务器），下次知道是哪里不够
+        NotificationCenter.default.publisher(for: AVPlayerItem.playbackStalledNotification).receive(on: RunLoop.main).sink { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, let video = self.current, video.isLive, (note.object as? AVPlayerItem) === self.player.currentItem else { return }
+                self.liveStalls += 1
+                Log.playback.info("bilibili live \(video.liveRoom, privacy: .public): stalled (#\(self.liveStalls, privacy: .public)), \(self.bufferedAhead(), format: .fixed(precision: 1), privacy: .public)s buffered, host \(self.liveHost, privacy: .public)")
+            }
+        }.store(in: &observers)
     }
 
     // MARK: 预加载
@@ -184,7 +238,8 @@ final class BilibiliNativePlayer: ObservableObject {
     /// 焦点停在这个视频上了：提前准备好。换了焦点就丢掉上一个。
     func warm(_ video: BiliVideo?) {
         guard current == nil else { return }
-        guard let video else {
+        // 直播间不提前准备（在播的挂上去就是在拉直播流；没在播的没有东西可放）
+        guard let video, !video.isRoom else {
             // 没有要准备的了：取消正在准备的，也把已经挂上去缓冲的那个摘掉
             warming?.task.cancel()
             warming = nil
@@ -247,49 +302,34 @@ final class BilibiliNativePlayer: ObservableObject {
 
     // MARK: 播放
 
-    /// startPaused：打开后停在那一帧不放（从 UP 主主页返回到刚才那个视频时），按播放才接着放
-    func play(_ video: BiliVideo, startPaused: Bool = false) {
-        if current != nil { report() }   // 从相关视频里直接换片：先把上一个的进度记下
-        stream = nil                      // 上一个视频的流（分 P 编号、清晰度）不能留给这个用
-        qualityMenuVisible = false
-        likeSettle?.cancel()
-        likeConfirmed = nil
-        likeSending = false
-        sending = []
-        self.startPaused = startPaused
-        endHandled = false
+    /// startPaused：打开后停在那一帧不放（从 UP 主主页返回到刚才那个视频时），按播放才接着放。
+    /// exact：就放这一集、这一 P（在选集里挑的、自动接下一集）；不是的话（从卡片点进来）照上次看到哪来：
+    /// 分 P 视频跳到上次看的那一 P，合集跳到上次看的那一集（见 BiliResume）
+    func play(_ video: BiliVideo, startPaused: Bool = false, exact: Bool = false) {
+        // 看过的直播间、现在没在播：没有东西可放（选它是进主播的主页，见 BilibiliStore.perform）
+        guard video.endedRoom == 0 else { return }
+        leaveCurrent()   // 从相关视频里直接换片：先把上一个的进度记下
         // 换到同一个选集里的另一集：选集那一排留着；换到别的视频就清掉，等新视频的信息来了再说
         if !episodes.contains(where: { $0.matches(video) }) { episodes = [] }
-        related = []
-        relatedVisible = false
-        relatedIndex = 0
-        panelVisible = false
-        panelList = nil
-        info = nil
-        relation = BiliRelation()
-        subtitleTracks = []
-        subtitleTrack = nil
-        subtitleCues = []
-        danmaku = []
-        danmakuAll = []
-        loadInfo(video)
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let list = await BiliAPI.related(to: video.bvid, cookie: await self.cookie())
-            if self.current == video { self.related = list }
+        // 历史记录里的那一条本身就是上次看到的地方
+        exactOpen = exact || startPaused || video.progress != nil
+        self.startPaused = startPaused
+        if video.isLive {
+            playLive(video)
+            return
         }
         let alreadyPreparing = warming?.video == video
         if !alreadyPreparing {
             warming?.task.cancel()
             warming = nil
         }
-        current = video
-        failed = false
-        showing = false
-        paused = startPaused
-        time = 0
-        duration = Double(video.duration)
-        keepAwake(true)
+        show(video, paused: startPaused)
+        loadInfo(video)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let list = await BiliAPI.related(to: video.bvid, cookie: await self.cookie())
+            if self.current == video { self.related = list }
+        }
         if let ready = warmed, ready.video == video {
             warmed = nil
             begin(video, stream: ready.stream)
@@ -298,34 +338,109 @@ final class BilibiliNativePlayer: ObservableObject {
         warmed = nil
         player.replaceCurrentItem(with: nil)
         if alreadyPreparing { return }   // 正在准备的就是它，准备好会自己开播，不用重来一遍
-        Task { @MainActor [weak self] in
+        loading = Task { @MainActor [weak self] in
             guard let self else { return }
-            guard let prepared = await self.prepare(video) else {
-                if self.current == video { self.failed = true }
-                return
-            }
-            guard self.current == video else { return }
+            let prepared = await self.prepare(video)
+            guard !Task.isCancelled, self.current == video else { return }
+            guard let prepared else { self.failed = true; return }
             self.player.replaceCurrentItem(with: prepared.item)
             self.begin(video, stream: prepared.stream)
         }
     }
 
+    /// 播放器打开这个视频（画面出来之前先显示封面）。直播按 1 倍速放，视频按选的倍速
+    private func show(_ video: BiliVideo, paused: Bool) {
+        current = video
+        failed = false
+        showing = false
+        noteWaiting(false)
+        self.paused = paused
+        userPaused = false
+        time = 0
+        duration = Double(video.duration)
+        qualityID = 0
+        qualities = []
+        player.defaultRate = video.isLive ? 1 : Float(speed)
+    }
+
+    /// 收起正在放的这个（换片、关掉时）：记下看到哪、把还没发出去的点赞发掉；还在跑的取流、连直播、报进度都停掉；
+    /// 面板、清晰度栏、下面那一块收起；这个视频的信息、字幕、弹幕清掉。选集由调用的地方决定留不留
+    private func leaveCurrent() {
+        report()
+        flushLike()
+        loading?.cancel()
+        loading = nil
+        liveConnect?.cancel()
+        liveConnect = nil
+        liveWatchdog?.cancel()
+        liveWatchdog = nil
+        liveLoader = nil
+        heartbeat?.invalidate()
+        heartbeat = nil
+        stream = nil   // 上一个视频的流（分 P 编号、清晰度）不能留给下一个用
+        endHandled = false
+        qualityMenuVisible = false
+        related = []
+        relatedVisible = false
+        relatedIndex = 0
+        shelfFromPanel = false
+        closePanel()
+        info = nil
+        relation = BiliRelation()
+        likeConfirmed = nil
+        likeSending = false
+        sending = []
+        subtitleTracks = []
+        subtitleTrack = nil
+        subtitleCues = []
+        disconnectLiveDanmaku()
+    }
+
     private func begin(_ video: BiliVideo, stream: BiliStream) {
+        heartbeat?.invalidate()
+        heartbeat = nil
+        // 从卡片点进来（没指定哪一 P、哪一集，也不是历史记录里带着进度的那一条）：照上次看到哪换过去
+        if !exactOpen {
+            // 分 P 视频：哔哩哔哩记着最后看的是哪一 P（网页版的记忆播放）
+            if video.cid == 0, stream.lastPlayCid > 0, stream.lastPlayCid != stream.cid {
+                var part = video
+                part.cid = stream.lastPlayCid
+                play(part, exact: true)
+                return
+            }
+            // 合集：点的这一集没看过（或者早就看完了），上次在看别的集 → 接着看那一集（那一集看完了就是它的下一集）。
+            // 想重看这一集，在选集里挑它（挑的照挑的放）
+            let own = BiliResume.position(bvid: video.bvid, cid: stream.cid)
+            if stream.lastPlayTime == 0, own == nil || own == -1,
+               let episode = BiliResume.continueEpisode(for: video.bvid) {
+                play(episode.video, exact: true)
+                return
+            }
+        }
         self.stream = stream
-        quality = stream.quality
         qualityID = stream.qualityID
         qualities = stream.available
+        noteSeason()   // 上面决定完放哪一集了，才把它记成合集里"上次看的那一集"
         loadSubtitles(video, cid: stream.cid)
         if danmakuOn { loadDanmaku(video, cid: stream.cid) }
         // 继续观看：从上次的位置接着放（快看完的就从头）。
         // 从 UP 主主页回来（startPaused）不一样：回到离开时的那一帧，哪怕快到结尾了（离结尾留一点，免得当成放完了）
-        if let progress = video.progress {
+        // 从哪接着放：历史记录里带着的 > 哔哩哔哩记的（同一 P 才算）> 这台 Mac 上记的这一 P / 这一集
+        let server = stream.lastPlayCid == stream.cid && stream.lastPlayTime > 0 ? stream.lastPlayTime : nil
+        if let progress = video.progress ?? server ?? BiliResume.position(bvid: video.bvid, cid: stream.cid) {
             let total = Double(video.duration > 0 ? video.duration : Int(duration))
             let resumeAt: Double? = startPaused
                 ? (progress > 0 ? (total > 2 ? min(Double(progress), total - 2) : Double(progress)) : nil)
                 : (progress > 5 && video.duration - progress > 15 ? Double(progress) : nil)
             if let resumeAt {
                 player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+        }
+        // 放着的时候每 15 秒把看到哪告诉哔哩哔哩一次（网页版也是这样），中途关掉 Mac TV 也丢不了多少
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.current == video, self.player.timeControlStatus == .playing else { return }
+                self.report()
             }
         }
         if startPaused {
@@ -344,12 +459,230 @@ final class BilibiliNativePlayer: ObservableObject {
         flashControls(seconds: 4)
     }
 
-    /// 把看到哪了告诉哔哩哔哩
+    // MARK: 直播
+
+    var isLive: Bool { current?.isLive == true }
+
+    /// 直播：直接把直播流（HLS）交给系统播放器。没有进度、不能拖；暂停后再放会跳回正在直播的地方。
+    /// 哔哩哔哩给的几条线路里常有连不上的节点：几条同时试，谁先答上来用谁。
+    /// 放着放着画面不动了（网络抖了、节点掉了），一会儿后自己重新连上，从正在直播的地方接着放
+    private func playLive(_ video: BiliVideo) {
+        warming?.task.cancel()
+        warming = nil
+        warmed = nil
+        player.replaceCurrentItem(with: nil)
+        show(video, paused: false)
+        connectLive(video, reconnects: 0)
+        connectLiveDanmaku(video)   // 弹幕另外连，不耽误画面
+        // 进了这个直播间：报给哔哩哔哩，看过的直播记进历史记录（卡住重连不算再进一次）
+        Task { [cookie] in await BiliAPI.enterLiveRoom(video.liveRoom, cookie: await cookie()) }
+    }
+
+    /// 要地址、挑线路、开播。reconnects：这是第几次因为卡住重新连。
+    /// 每一步等完都看一眼还是不是在看这个直播间（换了别的、关掉了，这次连接就取消了）：不然连上得晚的会在后台响，
+    /// 或者把下一个视频的画面顶掉
+    private func connectLive(_ video: BiliVideo, reconnects: Int) {
+        liveWatchdog?.cancel()
+        liveConnect?.cancel()
+        liveConnect = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let room = video.liveRoom
+            let cookie = await self.cookie()
+            var tried: Set<URL> = []
+            var offered = 0
+            // 先用登录的账号要（清晰度高）；要不到、或者那几条线路都放不了，再不带账号要一次（清晰度低一点）。
+            // 卡住后重连时反过来先不带账号要：登录后给的原画常常在国内的节点上，从国外看带宽跟不上，放几秒就卡死
+            let signedIn = cookie.contains("SESSDATA=")
+            let accounts = signedIn ? (reconnects > 0 ? ["", cookie] : [cookie, ""]) : [cookie]
+            for header in accounts {
+                let urls = await BiliAPI.liveStream(room: room, cookie: header)
+                guard self.current == video, !Task.isCancelled else { return }
+                offered += urls.count
+                Log.playback.info("bilibili live \(room, privacy: .public): \(urls.count, privacy: .public) addresses (\(header.isEmpty && signedIn ? "anonymous" : "account", privacy: .public), reconnect \(reconnects, privacy: .public)): \(urls.compactMap(\.host).joined(separator: " "), privacy: .public)")
+                var left = urls.filter { !tried.contains($0) }
+                while !left.isEmpty {
+                    guard let url = await Self.fastest(left) else { break }   // 这一批一条都连不上
+                    guard self.current == video, !Task.isCancelled else { return }
+                    tried.insert(url)
+                    left.removeAll { $0 == url }
+                    if await self.startLive(url, video) {
+                        if self.current == video, !Task.isCancelled { self.watchLive(video, reconnects: reconnects) }
+                        return
+                    }
+                }
+                tried.formUnion(left)
+            }
+            guard self.current == video, !Task.isCancelled else { return }
+            Log.playback.error("bilibili live \(room, privacy: .public): no working address (\(offered, privacy: .public) offered)")
+            if offered == 0 {
+                // 一条地址都不给：主播下播了。关掉播放器回到列表，说一声
+                self.toast?("主播未开播")
+                self.stop()
+            } else {
+                self.failed = true
+                self.disconnectLiveDanmaku()
+                self.toast?("无法连接直播")
+            }
+        }
+    }
+
+    /// 几条线路同时去要播放列表，谁先答上来用谁（一条条试的话，前面一条连不上就要白等好几秒）
+    private nonisolated static func fastest(_ urls: [URL]) async -> URL? {
+        await withTaskGroup(of: URL?.self) { group in
+            for url in urls.prefix(8) { group.addTask { await reachable(url) ? url : nil } }
+            for await found in group {
+                if let found {
+                    group.cancelAll()
+                    return found
+                }
+            }
+            return nil
+        }
+    }
+
+    /// 看着直播：画面五秒没动（又不是自己按的暂停），记下播放器说了什么，重新要地址、从正在直播的地方接着放
+    /// （主播下播了的话，重新要地址时就知道了，见 connectLive）。一分钟里重连超过三次就不再硬撑，告诉人连不上。
+    /// 放着的时候每 30 秒记一笔（见 logLive）
+    private func watchLive(_ video: BiliVideo, reconnects: Int) {
+        liveWatchdog?.cancel()
+        liveWatchdog = Task { @MainActor [weak self] in
+            var last = -1.0, still = 0, ticks = 0
+            let started = Date()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.current == video, !Task.isCancelled else { return }
+                ticks += 1
+                if ticks % 30 == 0 { await self.logLive(video) }
+                // 自己按的暂停不算卡住
+                if self.userPaused { still = 0; continue }
+                let now = self.player.currentTime().seconds
+                if now.isFinite, now > last + 0.2 { last = now; still = 0; continue }
+                still += 1
+                guard still >= 5 else { continue }
+                let item = self.player.currentItem
+                let error = item?.errorLog()?.events.last
+                let access = item?.accessLog()?.events.last
+                Log.playback.error("bilibili live \(video.liveRoom, privacy: .public): stalled at \(now, privacy: .public)s, status \(item?.status.rawValue ?? -1, privacy: .public), waiting \(self.player.reasonForWaitingToPlay?.rawValue ?? "-", privacy: .public), error \(error?.errorStatusCode ?? 0, privacy: .public) \(error?.errorComment ?? "", privacy: .public), host \(self.liveHost, privacy: .public), bitrate \(Int(access?.indicatedBitrate ?? 0), privacy: .public) / observed \(Int(access?.observedBitrate ?? 0), privacy: .public)")
+                let count = Date().timeIntervalSince(started) > 60 ? 1 : reconnects + 1
+                guard count <= 3 else {
+                    self.player.pause()
+                    self.failed = true
+                    self.disconnectLiveDanmaku()
+                    self.toast?("无法连接直播")
+                    return
+                }
+                self.connectLive(video, reconnects: count)
+                return
+            }
+        }
+    }
+
+    /// 直播放着时的一笔记录：卡了几次、网速、往前缓冲了几秒（就是还剩多少余量，平时 5 秒左右）、
+    /// 列表取了几次（几次是旧的）、列表里留了多少秒。只记次数、秒数和服务器的名字，不记地址（地址里带着签名）
+    private func logLive(_ video: BiliVideo) async {
+        guard let item = player.currentItem else { return }
+        let events = item.accessLog()?.events ?? []
+        let stalls = events.reduce(0) { $0 + max(0, $1.numberOfStalls) }
+        let observed = Int(events.last?.observedBitrate ?? 0), indicated = Int(events.last?.indicatedBitrate ?? 0)
+        let ahead = bufferedAhead()
+        let stats = await liveLoader?.stats() ?? BiliHLS.LiveStats()
+        Log.playback.info("bilibili live \(video.liveRoom, privacy: .public): \(stalls, privacy: .public) stalls (\(self.liveStalls, privacy: .public) notified), bitrate observed \(observed, privacy: .public) / indicated \(indicated, privacy: .public), \(ahead, format: .fixed(precision: 1), privacy: .public)s buffered, host \(self.liveHost, privacy: .public), playlists \(stats.fetched, privacy: .public) fetched / \(stats.stale, privacy: .public) stale / \(stats.keptPrevious, privacy: .public) kept previous / \(stats.failed, privacy: .public) failed, window \(stats.segments, privacy: .public) segments \(stats.seconds, format: .fixed(precision: 0), privacy: .public)s")
+    }
+
+    /// 从现在放到的地方往后，已经缓冲了几秒
+    private func bufferedAhead() -> Double {
+        let now = player.currentTime()
+        guard let range = player.currentItem?.loadedTimeRanges.map(\.timeRangeValue).first(where: { $0.containsTime(now) }) else { return 0 }
+        return max(0, (range.end - now).seconds)
+    }
+
+    /// 把这条线路交给播放器，等它准备好（最多 8 秒）。播放器说放不了就返回 false，换下一条线路；
+    /// 8 秒还在缓冲的（网慢）就让它接着缓冲。等的途中换了别的、关掉了，返回 true（不用再试），也不再碰播放器
+    /// 列表经过 BiliHLS.LiveLoader（不让 CDN 给旧的、多留 30 秒刚滑出去的段），段由播放器直接去 CDN 取
+    /// （带着来源页和浏览器标识）。落后正在直播的地方 liveOffset 秒放，卡过之后也回到这个距离
+    private func startLive(_ url: URL, _ video: BiliVideo) async -> Bool {
+        let loader = BiliHLS.LiveLoader(source: url)
+        let asset = AVURLAsset(url: BiliHLS.LiveLoader.entry,
+                               options: ["AVURLAssetHTTPHeaderFieldsKey": ["Referer": "https://live.bilibili.com/"],
+                                         AVURLAssetHTTPUserAgentKey: UserAgent.safari])
+        asset.resourceLoader.setDelegate(loader, queue: loaderQueue)
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = Self.liveBuffer
+        item.configuredTimeOffsetFromLive = CMTime(seconds: Self.liveOffset, preferredTimescale: 600)
+        item.automaticallyPreservesTimeOffsetFromLive = true
+        liveLoader = loader   // 播放器只弱引用它，要一直留着
+        liveHost = url.host ?? ""
+        liveStalls = 0
+        clearDanmaku()   // 换了线路、重新连：时间轴是新的，排好的弹幕对不上了（弹幕服务器接着连着）
+        player.replaceCurrentItem(with: item)
+        player.play()
+        for _ in 0..<32 {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard current == video, !Task.isCancelled, player.currentItem === item else { return true }
+            switch item.status {
+            case .readyToPlay:
+                Log.playback.info("bilibili live \(video.liveRoom, privacy: .public): playing from \(url.host ?? "", privacy: .public)")
+                flashControls(seconds: 4)
+                return true
+            case .failed:
+                Log.playback.error("bilibili live \(video.liveRoom, privacy: .public): \(url.host ?? "", privacy: .public) failed: \(item.error?.localizedDescription ?? "", privacy: .public)")
+                player.replaceCurrentItem(with: nil)
+                return false
+            default: continue
+            }
+        }
+        return true
+    }
+
+    /// 试线路、取直播列表（BiliHLS.LiveLoader）用的连接：不存任何东西。
+    /// 直播的播放列表回复里写着"可以存 300 秒"：用系统共用的连接去试，这份列表就被存进共用的缓存，
+    /// 播放器之后每次刷新列表拿到的都是这份存着的旧列表——放完开头几秒就卡死（系统报 -12888
+    /// "播放列表超过 1.5 倍片段时长没变"），重连也一样。试线路必须用这个单独的、不存东西的连接
+    nonisolated static let probeSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        return URLSession(configuration: configuration)
+    }()
+
+    /// 这条直播线路几秒内答得上来吗（拿到播放列表就算）
+    private nonisolated static func reachable(_ url: URL) async -> Bool {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 4)
+        request.setValue(UserAgent.safari, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://live.bilibili.com/", forHTTPHeaderField: "Referer")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        guard let (data, response) = try? await probeSession.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+        return String(decoding: data.prefix(16), as: UTF8.self).hasPrefix("#EXTM3U")
+    }
+
+    /// 暂停 / 接着放（确认键、播放键、媒体键、点画面、面板开着时按播放键，都走这里）。
+    /// 直播接着放时跳回正在直播的地方（不然停了多久就落后多久）。放不了的不理
+    private func togglePause() {
+        guard current != nil, !failed else { return }
+        if player.timeControlStatus != .paused { userPaused = true; player.pause(); report(); return }
+        userPaused = false
+        if isLive, let edge = player.currentItem?.seekableTimeRanges.last?.timeRangeValue.end, edge.seconds.isFinite {
+            player.seek(to: edge - CMTime(seconds: Self.liveOffset, preferredTimescale: 600))
+        }
+        player.play()
+    }
+
+    /// 同上，顺便把控制条露出来（画面上没有别的东西盖着时）
+    private func togglePauseShowingControls() {
+        guard current != nil, !failed else { return }
+        togglePause()
+        flashControls()
+    }
+
+    /// 把看到哪了告诉哔哩哔哩，这台 Mac 上也记一份（每一 P、每一集各记各的；直播没有进度，不记）
     private func report() {
-        guard let video = current else { return }
+        guard let video = current, !video.isLive else { return }
         let seconds = Int(time), cid = stream?.cid ?? video.cid
         let finished = duration > 0 && duration - time < 5
         if seconds > 3 || finished {
+            BiliResume.save(bvid: video.bvid, cid: cid, seconds: finished ? -1 : seconds)
             Task { [cookie] in
                 await BiliAPI.reportProgress(bvid: video.bvid, cid: cid, seconds: finished ? -1 : seconds, cookie: await cookie())
             }
@@ -387,9 +720,7 @@ final class BilibiliNativePlayer: ObservableObject {
         closePanel()               // 放完时面板、清晰度栏开着：先收起来，再接下一集或摆出相关视频
         qualityMenuVisible = false
         if let index = episodeIndex, episodes.indices.contains(index + 1) {
-            let next = episodes[index + 1]
-            toast?("接着放 \(next.label)" + (next.title.isEmpty || next.title == next.label ? "" : " · \(next.title)"))
-            play(next.video)
+            play(episodes[index + 1].video, exact: true)
         } else if related.isEmpty {
             stop()
         } else {
@@ -401,29 +732,27 @@ final class BilibiliNativePlayer: ObservableObject {
     private func playEpisode(_ index: Int) {
         guard episodes.indices.contains(index) else { return }
         if index == episodeIndex { relatedVisible = false; return }
-        play(episodes[index].video)
+        play(episodes[index].video, exact: true)   // 挑的就是这一集：放它（从它自己上次停的地方接着）
     }
 
     func stop() {
-        guard current != nil else { return }
-        report()
-        relatedVisible = false
-        qualityMenuVisible = false
-        panelVisible = false
-        panelList = nil
-        subtitleCues = []
-        danmaku = []
-        danmakuAll = []
+        guard current != nil else {
+            // 播放器没开：挂着的只该是提前准备的那个。别的（比如关掉的途中才连上的直播）摘掉，免得在后台响
+            if let item = player.currentItem, item !== warmed?.item {
+                player.pause()
+                player.replaceCurrentItem(with: nil)
+            }
+            return
+        }
+        leaveCurrent()
         episodes = []
-        related = []
         player.pause()
         player.replaceCurrentItem(with: nil)
         current = nil
-        stream = nil
         showing = false
+        noteWaiting(false)
         controlsVisible = false
         hideControls?.cancel()
-        keepAwake(false)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         MPNowPlayingInfoCenter.default().playbackState = .stopped
     }
@@ -431,6 +760,25 @@ final class BilibiliNativePlayer: ObservableObject {
     // MARK: 键盘上的媒体键（播放 / 暂停、上一首 / 下一首）
 
     /// 正在看的视频告诉系统：键盘上的媒体键、控制中心都会找到这里
+    /// 播放器说在等数据 / 不等了（见 buffering）
+    private func noteWaiting(_ waiting: Bool) {
+        guard waiting else {
+            bufferingSoon?.cancel()
+            bufferingSoon = nil
+            if buffering { withAnimation(.easeOut(duration: 0.2)) { buffering = false } }
+            return
+        }
+        guard bufferingSoon == nil, !buffering else { return }
+        bufferingSoon = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled else { return }
+            self.bufferingSoon = nil
+            if self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+                withAnimation(.easeOut(duration: 0.2)) { self.buffering = true }
+            }
+        }
+    }
+
     private func publishNowPlaying() {
         guard let current else { return }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
@@ -438,7 +786,8 @@ final class BilibiliNativePlayer: ObservableObject {
             MPMediaItemPropertyArtist: current.owner,
             MPMediaItemPropertyPlaybackDuration: duration > 0 ? duration : Double(current.duration),
             MPNowPlayingInfoPropertyElapsedPlaybackTime: displayTime(),
-            MPNowPlayingInfoPropertyPlaybackRate: paused ? 0.0 : speed,
+            MPNowPlayingInfoPropertyPlaybackRate: paused ? 0.0 : Double(player.defaultRate),
+            MPNowPlayingInfoPropertyIsLiveStream: current.isLive,
         ]
         MPNowPlayingInfoCenter.default().playbackState = paused ? .paused : .playing
     }
@@ -455,28 +804,14 @@ final class BilibiliNativePlayer: ObservableObject {
                 return .success
             }
         }
-        on(center.togglePlayPauseCommand) { $0.mediaToggle() }
-        on(center.playCommand) { if $0.player.timeControlStatus == .paused { $0.mediaToggle() } }
-        on(center.pauseCommand) { if $0.player.timeControlStatus != .paused { $0.mediaToggle() } }
+        on(center.togglePlayPauseCommand) { $0.togglePauseShowingControls() }
+        on(center.playCommand) { if $0.player.timeControlStatus == .paused { $0.togglePauseShowingControls() } }
+        on(center.pauseCommand) { if $0.player.timeControlStatus != .paused { $0.togglePauseShowingControls() } }
         on(center.nextTrackCommand) { $0.seek(by: 10) }
         on(center.previousTrackCommand) { $0.seek(by: -10) }
     }
 
-    private func mediaToggle() {
-        if failed { return }
-        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
-        flashControls()
-    }
-
     // MARK: 按键
-
-    private var lastStep = Date.distantPast
-    /// 单按一下用平常的动画；连着走（按住方向键、双指一甩）时换一条短的，不然每一下都重新起一段弹簧，忽快忽慢
-    private func stepMotion() -> Animation {
-        let now = Date()
-        defer { lastStep = now }
-        return now.timeIntervalSince(lastStep) < 0.2 ? .smooth(duration: 0.16) : Motion.focus
-    }
 
     func handle(_ command: RemoteCommand) -> Outcome {
         if scrubbing { endScrub() }   // 拖进度时按了别的键：先在拖到的地方落下
@@ -492,8 +827,7 @@ final class BilibiliNativePlayer: ObservableObject {
             case .select: if qualities.indices.contains(qualityIndex) { switchQuality(to: qualities[qualityIndex]) }
             // 清晰度栏是往下拉出来的：往上推回去（或返回）才收起；再往下拉不动
             case .back, .move(.down): qualityMenuVisible = false
-            case .playPause:
-                if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+            case .playPause: togglePause()
             default: break
             }
             return .stay
@@ -504,11 +838,11 @@ final class BilibiliNativePlayer: ObservableObject {
             let rows = shelves, row = rows.firstIndex(of: shelf) ?? 0
             switch command {
             case .move(.left):
-                if shelf == .episodes { withAnimation(stepMotion()) { episodeFocus = max(0, episodeFocus - 1) } }
-                else { withAnimation(stepMotion()) { relatedIndex = max(0, relatedIndex - 1) } }
+                if shelf == .episodes { withAnimation(BiliMotion.step()) { episodeFocus = max(0, episodeFocus - 1) } }
+                else { withAnimation(BiliMotion.step()) { relatedIndex = max(0, relatedIndex - 1) } }
             case .move(.right):
-                if shelf == .episodes { withAnimation(stepMotion()) { episodeFocus = min(episodes.count - 1, episodeFocus + 1) } }
-                else { withAnimation(stepMotion()) { relatedIndex = min(related.count - 1, relatedIndex + 1) } }
+                if shelf == .episodes { withAnimation(BiliMotion.step()) { episodeFocus = min(episodes.count - 1, episodeFocus + 1) } }
+                else { withAnimation(BiliMotion.step()) { relatedIndex = min(related.count - 1, relatedIndex + 1) } }
             case .select:
                 if shelf == .episodes { playEpisode(episodeFocus) }
                 else if related.indices.contains(relatedIndex) { play(related[relatedIndex]) }
@@ -518,28 +852,18 @@ final class BilibiliNativePlayer: ObservableObject {
                 // 从右边面板的"选集"进来的：回到面板；播完后摆出来的：返回就是回列表；播放中拉出来的：返回只是收起
                 if !shelfFromPanel, duration > 0, duration - time < 2 { return .close }
                 leaveShelf()
-            case .playPause:
-                if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+            case .playPause: togglePause()
             default: break
             }
             return .stay
         }
         switch command {
         case .back: return .close
-        case .select, .playPause:
-            if failed { return .stay }
-            if player.timeControlStatus == .paused { player.play() } else { player.pause() }
-            flashControls()
+        case .select, .playPause: togglePauseShowingControls()
         case .move(.left), .seek(forward: false): seek(by: -10)
         case .move(.right), .seek(forward: true): seek(by: 10)
         case .move(.down): if shelves.isEmpty { flashControls() } else { showShelf(.episodes) }   // 有选集先停在选集上
-        case .move(.up):
-            if qualities.count > 1 {
-                qualityIndex = qualities.firstIndex(of: qualityID) ?? 0
-                controlsVisible = false
-                hideControls?.cancel()
-                qualityMenuVisible = true
-            } else { flashControls() }
+        case .move(.up): if !openQualityMenu() { flashControls() }
         default: break
         }
         return .stay
@@ -552,16 +876,15 @@ final class BilibiliNativePlayer: ObservableObject {
         preferredQuality = id
         let position = time, wasPaused = player.timeControlStatus == .paused
         warmed = nil
-        Task { @MainActor [weak self] in
-            guard let self, let prepared = await self.prepare(video), self.current == video else { return }
+        loading?.cancel()   // 连着换了两次：只要最后选的那一档
+        loading = Task { @MainActor [weak self] in
+            guard let self, let prepared = await self.prepare(video), !Task.isCancelled, self.current == video else { return }
             self.player.replaceCurrentItem(with: prepared.item)
             self.stream = prepared.stream
-            self.quality = prepared.stream.quality
             self.qualityID = prepared.stream.qualityID
             self.qualities = prepared.stream.available
             await self.player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
             if !wasPaused { self.player.play() }
-            self.toast?("已切换至「\(BiliStream.name(of: prepared.stream.qualityID))」")
             self.flashControls()
         }
     }
@@ -600,7 +923,7 @@ final class BilibiliNativePlayer: ObservableObject {
 
     /// 开始拖：画面先停住，控制条一直露着。还没准备好的视频不能拖
     private func startScrubbing() -> Bool {
-        guard let item = player.currentItem, item.status == .readyToPlay, duration > 0 else { return false }
+        guard !isLive, let item = player.currentItem, item.status == .readyToPlay, duration > 0 else { return false }
         if !scrubbing {
             scrubWasPlaying = player.timeControlStatus != .paused
             scrubTarget = displayTime()
@@ -646,12 +969,11 @@ final class BilibiliNativePlayer: ObservableObject {
             closePanel()
             return
         }
-        if failed || current == nil { return }
-        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
-        flashControls()
+        togglePauseShowingControls()
     }
 
     private func seek(by delta: Double) {
+        guard !isLive else { flashControls(); return }   // 直播不能快进快退
         guard let item = player.currentItem, item.status == .readyToPlay else { return }
         let total = item.duration.seconds.isFinite ? item.duration.seconds : duration
         let target = max(0, min(total - 2, time + delta))
@@ -681,6 +1003,7 @@ extension BilibiliNativePlayer {
     var panelRows: [PanelRow] {
         var rows: [PanelRow] = []
         if (info?.owner.mid ?? current?.ownerMid ?? 0) > 0 { rows.append(.up) }
+        guard !isLive else { return rows + [.danmaku] }   // 直播间：主播的主页和弹幕（没有点赞投币、倍速、字幕）
         if accountMid() > 0 { rows += [.like, .coin, .favorite] }
         if !episodes.isEmpty { rows.append(.episodes) }   // 分 P、合集才有
         rows += [.speed, .subtitles, .danmaku]   // 字幕一直在（这个视频没有时写着"无"），弹幕开关一直在
@@ -736,7 +1059,7 @@ extension BilibiliNativePlayer {
             case .select: choose(in: list, panelListIndex)
             case .back: panelList = nil
             case .move(.left): closePanel()
-            case .playPause: togglePlayback()
+            case .playPause: togglePause()
             default: break
             }
             return
@@ -747,7 +1070,7 @@ extension BilibiliNativePlayer {
         case .move(.down): panelRow = rows[min(rows.count - 1, index + 1)]
         case .select: if rows.indices.contains(index) { activate(rows[index]) }
         case .back, .move(.left): closePanel()
-        case .playPause: togglePlayback()
+        case .playPause: togglePause()
         default: break
         }
     }
@@ -780,10 +1103,6 @@ extension BilibiliNativePlayer {
         openUp?(owner, video)
     }
 
-    private func togglePlayback() {
-        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
-    }
-
     private var aid: Int { info?.aid ?? current?.aid ?? 0 }
 
     private func activate(_ row: PanelRow) {
@@ -793,7 +1112,7 @@ extension BilibiliNativePlayer {
         case .like:
             toggleLike()
         case .coin:
-            guard !coinChoices.isEmpty else { toast?("这个视频已经投过 \(relation.coins) 个硬币了"); return }
+            guard !coinChoices.isEmpty else { return }   // 投满了：面板上那一格已经写着"已投"
             panelListIndex = 0
             panelList = .coins
         case .favorite:
@@ -803,7 +1122,7 @@ extension BilibiliNativePlayer {
             panelListIndex = Self.speeds.firstIndex(of: speed) ?? 3
             panelList = .speed
         case .subtitles:
-            guard !subtitleTracks.isEmpty else { toast?("这个视频没有字幕"); return }
+            guard !subtitleTracks.isEmpty else { return }   // 没有字幕：面板上那一格写着"无"
             panelListIndex = subtitleTrack.flatMap { subtitleTracks.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
             panelList = .subtitles
         case .danmaku:
@@ -856,14 +1175,24 @@ extension BilibiliNativePlayer {
             if let found {
                 self.info = found
                 if !found.episodes.isEmpty { self.episodes = found.episodes }
+                self.noteSeason()
             }
             if let relation, self.relationEdits == edits { self.relation = relation; self.likeConfirmed = relation.liked }
         }
     }
 
+    /// 合集：记下这一集属于哪个合集、正在看的是哪一集（下次从合集里别的入口进来接着看它）。
+    /// 要等两样都有了才记：视频的信息（有哪几集）和 begin 定下来的流（begin 先决定要不要"接着看上次那一集"，
+    /// 在它之前记的话，点进来的这一集先被记成了"上次看的"，就永远接不上了）。两样谁后到谁来记
+    private func noteSeason() {
+        guard var watching = current, let stream, let episodes = info?.episodes, !episodes.isEmpty else { return }
+        if stream.cid > 0 { watching.cid = stream.cid }
+        BiliResume.noteSeason(episodes.map(\.video), watching: watching)
+    }
+
     /// 打开面板时再问一次（可能刚在手机上点过赞）
     private func refreshRelation() {
-        guard let video = current, accountMid() > 0 else { return }
+        guard let video = current, !video.isLive, accountMid() > 0 else { return }
         let edits = relationEdits
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -882,8 +1211,20 @@ extension BilibiliNativePlayer {
         likeSettle = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard let self, !Task.isCancelled else { return }
+            self.likeSettle = nil
             self.syncLike()
         }
+    }
+
+    /// 离开这个视频（换片、关掉）时还有点赞没落定（在等手停下来，或者发出去的途中又按了）：现在就把最后的样子发过去。
+    /// 结果不再显示（人已经走了）
+    private func flushLike() {
+        let pending = likeSettle != nil || likeSending
+        likeSettle?.cancel()
+        likeSettle = nil
+        let want = relation.liked, id = aid
+        guard pending, id > 0, want != likeConfirmed else { return }
+        Task { [cookie] in _ = await BiliAPI.setLiked(aid: id, want, cookie: await cookie()) }
     }
 
     /// 把面板上的点赞样子同步到账号上：已经一样就不发；在路上时不再发，等它回来再看要不要补一次
@@ -900,8 +1241,7 @@ extension BilibiliNativePlayer {
             self.likeSending = false
             if reply.ok {
                 self.likeConfirmed = want
-                if self.relation.liked != want { self.syncLike(); return }   // 发的途中又按了：把最新的补发过去
-                self.toast?(want ? "已点赞" : "已取消点赞")
+                if self.relation.liked != want { self.syncLike() }   // 发的途中又按了：把最新的补发过去
             } else {
                 // 没成功：面板回到账号上的样子，把哔哩哔哩的原话告诉人
                 let back = self.likeConfirmed ?? !want
@@ -910,7 +1250,7 @@ extension BilibiliNativePlayer {
                     self.info?.likes += back ? 1 : -1
                 }
                 self.relationEdits += 1
-                self.toast?(reply.message.map { "点赞没成功：\($0)" } ?? "点赞没成功，稍后再试")
+                self.toast?(reply.message.map { "点赞失败：\($0)" } ?? "点赞失败")
             }
         }
     }
@@ -928,8 +1268,9 @@ extension BilibiliNativePlayer {
                 self.relationEdits += 1
                 self.relation.coins += count
                 self.info?.coins += count
+            } else {
+                self.toast?(reply.message ?? "投币失败")
             }
-            self.toast?(reply.ok ? "已投 \(count) 个硬币" : (reply.message ?? "投币失败"))
         }
     }
 
@@ -949,8 +1290,9 @@ extension BilibiliNativePlayer {
                 self.relationEdits += 1
                 self.relation.favorited = on
                 self.info?.favorites += on ? 1 : -1
+            } else {
+                self.toast?("收藏失败")
             }
-            self.toast?(ok ? (on ? "已收藏" : "已取消收藏") : "操作失败")
         }
     }
 
@@ -964,26 +1306,79 @@ extension BilibiliNativePlayer {
             guard self.current == video, self.danmakuOn else { return }
             self.danmakuAll = all
             self.relayoutDanmaku()
-            Log.playback.info("bilibili danmaku: \(all.count, privacy: .public) loaded, \(self.danmaku.count, privacy: .public) placed")
+            Log.playback.info("bilibili danmaku: \(all.count, privacy: .public) loaded, \(self.danmaku.placed.count, privacy: .public) placed")
         }
     }
 
-    /// 按现在的弹幕设置把取回来的弹幕重新排一遍（几千条也只要一眨眼）
+    /// 按现在的弹幕设置把取回来的弹幕重新排一遍（几千条也只要一眨眼）。直播间接着从排到的地方往后排
     private func relayoutDanmaku() {
         let style = danmakuStyle
-        danmaku = danmakuLayout.place(danmakuAll.filter { style.keeps($0) })
+        danmakuLanes = BiliDanmakuLayout.Lanes(danmakuLayout)
+        danmaku.placed = danmakuAll.filter { style.keeps($0) }.compactMap { danmakuLanes.place($0) }
+    }
+
+    /// 清掉这个视频（直播间）的弹幕
+    private func clearDanmaku() {
+        danmakuAll = []
+        danmaku.placed = []
+        danmakuLanes = BiliDanmakuLayout.Lanes(danmakuLayout)
+    }
+
+    // MARK: 直播间的弹幕
+
+    /// 连上这个直播间的弹幕服务器（BiliLiveDanmakuConnection）。不等它：连不上画面照放，只是没有弹幕
+    private func connectLiveDanmaku(_ video: BiliVideo) {
+        disconnectLiveDanmaku()
+        guard danmakuOn, video.isLive else { return }
+        let uid = accountMid()
+        liveDanmakuTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cookie = await self.cookie()
+            guard let key = await self.signingKey(), !Task.isCancelled, self.current == video else { return }
+            let connection = BiliLiveDanmakuConnection(room: video.liveRoom, uid: cookie.contains("SESSDATA=") ? uid : 0, cookie: cookie, key: key) {
+                [weak self] item in self?.showLive(item, in: video)
+            }
+            await connection.run()
+        }
+    }
+
+    /// 断开直播间的弹幕（离开、换房间、关了弹幕、直播结束、连不上了），屏幕上的也清掉
+    private func disconnectLiveDanmaku() {
+        liveDanmakuTask?.cancel()
+        liveDanmakuTask = nil
+        clearDanmaku()
+    }
+
+    /// 直播间来了一条弹幕：按画面现在的时间排上（晚 0.3 秒，从屏幕右边进来）。暂停着、画面还没出来时不攒着；
+    /// 一秒最多放 liveDanmakuPerSecond 条，一行都放不下的也不显示（和视频弹幕一样，宁可少几条也不叠在一起）
+    private func showLive(_ incoming: BiliDanmaku, in video: BiliVideo) {
+        guard current == video, danmakuOn, showing, !paused, let item = player.currentItem else { return }
+        let now = item.currentTime().seconds
+        guard now.isFinite else { return }
+        if Int(now) != liveDanmakuSecond.second { liveDanmakuSecond = (Int(now), 0) }
+        guard liveDanmakuSecond.shown < Self.liveDanmakuPerSecond else { return }
+        let timed = BiliDanmaku(time: now + 0.3, kind: incoming.kind, size: incoming.size, color: incoming.color, text: incoming.text)
+        danmakuAll.append(timed)
+        if danmakuAll.count > 400 { danmakuAll.removeFirst(danmakuAll.count - 300) }   // 改设置时重新排用的，留最近的就够
+        guard danmakuStyle.keeps(timed), let placed = danmakuLanes.place(timed) else { return }
+        liveDanmakuSecond.shown += 1
+        var list = danmaku.placed
+        list.append(placed)
+        // 飘出屏幕的不要了（攒够一批再丢，不用每来一条都挪一次）
+        if list.count > 200 { list.removeAll { $0.item.time < now - danmakuLayout.scrollDuration - 2 } }
+        danmaku.placed = list
     }
 
     /// 弹幕设置的几项和现在的值（设置页、右边面板里的"弹幕"列表都用它）。按确认换到下一个值
     var danmakuOptions: [(title: String, value: String)] {
         let style = danmakuStyle
-        return [("弹幕", danmakuOn ? "开" : "关"),
+        return [("弹幕", danmakuOn ? "打开" : "关闭"),
                 ("显示区域", style.area.title),
                 ("字号", style.size.title),
                 ("速度", style.speed.title),
                 ("不透明度", style.opacity.title),
-                ("固定弹幕（顶部、底部）", style.fixed ? "显示" : "不显示"),
-                ("彩色弹幕", style.colored ? "显示" : "不显示")]
+                ("顶部/底部弹幕", style.fixed ? "打开" : "关闭"),
+                ("彩色弹幕", style.colored ? "打开" : "关闭")]
     }
 
     func cycleDanmakuOption(_ index: Int) {
@@ -1035,6 +1430,79 @@ extension BilibiliNativePlayer {
     }
 }
 
+// MARK: - 手机遥控器上的快捷键（见 RemoteShortcuts）：和按上键、面板、选集里的是同一些动作
+
+extension BilibiliNativePlayer {
+    /// 开着一个视频、没放坏：面板里的那些能用
+    var remoteReady: Bool { current != nil && !failed }
+
+    /// 弹幕开 / 关（同面板"弹幕"那一列的第一项）。开没开，手机上的按钮和屏幕上的弹幕已经看得出
+    func toggleDanmaku() {
+        danmakuOn.toggle()
+    }
+
+    /// 清晰度的简写（手机上的快捷键写得下）：4K、1080P60、1080P+（高码率）、720P；还没取到流时 nil
+    var qualityShortName: String? {
+        guard qualityID > 0 else { return nil }
+        return BiliStream.name(of: qualityID).replacingOccurrences(of: " 60 帧", with: "60").replacingOccurrences(of: " 高码率", with: "+")
+    }
+
+    /// 不止一档清晰度可选（直播、还没取到流时没有）
+    var canOpenQualityMenu: Bool { current != nil && qualities.count > 1 }
+
+    /// 从上面拉下清晰度栏，停在现在这一档上（同播放时按上键）。面板、下面那一块开着就先收起
+    @discardableResult
+    func openQualityMenu() -> Bool {
+        guard canOpenQualityMenu else { return false }
+        if scrubbing { endScrub() }
+        closePanel()
+        relatedVisible = false
+        shelfFromPanel = false
+        qualityIndex = qualities.firstIndex(of: qualityID) ?? 0
+        controlsVisible = false
+        hideControls?.cancel()
+        qualityMenuVisible = true
+        return true
+    }
+
+    /// 面板里现在有这一行（直播只有 UP 主和弹幕，没登录没有点赞投币收藏）
+    func panelOffers(_ row: PanelRow) -> Bool { remoteReady && panelRows.contains(row) }
+
+    /// 拉出右边的面板，停在这一行上按一下确认：倍速、字幕、投币展开它们的小列表，收藏过的是"取消收藏？"
+    /// （默认停在"取消"上）——和在面板里选它一模一样
+    @discardableResult
+    func openPanel(at row: PanelRow) -> Bool {
+        guard panelOffers(row) else { return false }
+        if scrubbing { endScrub() }
+        if !panelVisible { openPanel() }
+        panelList = nil
+        panelRow = row
+        activate(row)
+        return true
+    }
+
+    /// 收藏：没收藏的直接收藏（同面板里选"收藏"）；收藏过的拉出面板问一次，不会一按就取消
+    @discardableResult
+    func favoriteFromRemote() -> Bool {
+        guard panelOffers(.favorite) else { return false }
+        if relation.favorited { return openPanel(at: .favorite) }
+        setFavorite(true)
+        return true
+    }
+
+    /// 分了好几 P、在合集里：有选集可挑
+    var canShowEpisodes: Bool { current != nil && episodes.count > 1 }
+
+    /// 拉出下面那一块，停在选集那一排正在放的这一集上（同播放时按下键）
+    @discardableResult
+    func showEpisodes() -> Bool {
+        guard canShowEpisodes else { return false }
+        if scrubbing { endScrub() }
+        showShelf(.episodes)
+        return true
+    }
+}
+
 /// 系统播放器的画面
 private struct PlayerSurface: NSViewRepresentable {
     let player: AVPlayer
@@ -1074,9 +1542,6 @@ struct BilibiliPlayerScreen: View {
     }
 
     @Namespace private var glass
-
-    /// 面板滑入 / 滑出用的曲线：和哔哩哔哩页面的侧边栏是同一条，带一点弹性
-    private static let slide = Animation.spring(response: 0.42, dampingFraction: 0.84)
 
     /// 托字用的暗角：靠边最深，按缓出曲线很快衰减，尾部淡得看不出边界。
     /// 普通的线性渐变中段偏重、收尾拖得长，看起来就是"一大片阴影"；这条曲线同样的深度下显得轻得多。
@@ -1182,8 +1647,8 @@ struct BilibiliPlayerScreen: View {
                 }
             }
             .padding(.leading, w * 0.05)
+            // 走一格的动画由按键那里给（BiliMotion.step：连着走时短一些），和列表页的卡片排一样
             .offset(x: -CGFloat(max(0, focus - 1)) * (cardWidth + gap))
-            .animation(Motion.focus, value: focus)
         }
     }
 
@@ -1193,15 +1658,17 @@ struct BilibiliPlayerScreen: View {
             && (player.controlsVisible || player.paused) && player.showing
     }
 
-    private func clock(_ seconds: Double) -> String {
-        let s = max(0, Int(seconds)), h = s / 3600, m = s % 3600 / 60, x = s % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, x) : String(format: "%d:%02d", m, x)
-    }
-
     @ViewBuilder private var overlay: some View {
         GeometryReader { geo in
             let w = geo.size.width, h = geo.size.height
             ZStack {
+                // 放的途中在等数据：画面正中一个转圈（和开头加载时同一个），数据一来就收起
+                if player.showing, player.buffering, !player.paused, !player.failed {
+                    ProgressView().controlSize(.large)
+                        .padding(30)
+                        .background(.black.opacity(0.4), in: Circle())
+                        .transition(.opacity)
+                }
                 // 画面出来之前：封面放大模糊 + 标题
                 if !player.showing {
                     ZStack {
@@ -1277,8 +1744,8 @@ struct BilibiliPlayerScreen: View {
                 }
                 .offset(y: player.qualityMenuVisible ? 0 : -210)
                 .opacity(player.qualityMenuVisible ? 1 : 0)
-                .animation(Self.slide, value: player.qualityMenuVisible)
-                .animation(Self.slide, value: player.qualityIndex)
+                .animation(BiliMotion.slide, value: player.qualityMenuVisible)
+                .animation(BiliMotion.slide, value: player.qualityIndex)
 
                 // 下面拉出来的一块（从屏幕下方滑上来）：上面一排"选集"（分 P、合集才有），下面一排"相关视频"。
                 // 一次露一排：焦点所在的那一排停在屏幕下方，在两排之间换时整块上下滑，上面那排淡出、下面那排在屏幕外
@@ -1297,7 +1764,7 @@ struct BilibiliPlayerScreen: View {
                 .offset(y: CGFloat(max(0, shelves.count - 1 - focusRow)) * (Self.shelfHeight + Self.shelfGap))
                 .padding(.bottom, 50)
                 .frame(width: w, height: h, alignment: .bottomLeading)
-                .animation(Self.slide, value: player.shelf)
+                .animation(BiliMotion.slide, value: player.shelf)
                 .background(alignment: .bottom) {
                     // 同样往屏幕下方多延伸一截，回弹时底下不露缝
                     VStack(spacing: 0) {
@@ -1309,7 +1776,7 @@ struct BilibiliPlayerScreen: View {
                 }
                 .offset(y: player.relatedVisible ? 0 : 500)
                 .opacity(player.relatedVisible ? 1 : 0)
-                .animation(Self.slide, value: player.relatedVisible)
+                .animation(BiliMotion.slide, value: player.relatedVisible)
 
                 if barsShown || !player.showing && !player.panelVisible {
                     VStack(alignment: .leading, spacing: 0) {
@@ -1336,6 +1803,20 @@ struct BilibiliPlayerScreen: View {
                             }
                         }
                         .padding(.top, 10)
+                        if video.isLive {
+                            // 直播没有进度条：一个"直播"标记，分区和看过的人数
+                            HStack(spacing: 18) {
+                                HStack(spacing: 8) {
+                                    Circle().fill(.white).frame(width: 10, height: 10)
+                                    Text("直播").font(.system(size: 25, weight: .bold))
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 6)
+                                .background(Color(hex: "#FB7299"), in: Capsule())
+                                if let area = video.note { Text(area).font(.system(size: 25, weight: .semibold)).opacity(0.75) }
+                                if video.views > 0 { Text("\(biliCount(video.views)) 人看过").font(.system(size: 25, weight: .semibold)).opacity(0.75) }
+                            }
+                            .padding(.top, 26)
+                        } else {
                         // 进度条和时间每一帧直接问播放器，走得平滑；拖进度时跟着手走，进度条加粗一点
                         TimelineView(.animation(minimumInterval: nil, paused: player.paused && !player.scrubbing)) { _ in
                             let now = player.displayTime()
@@ -1359,15 +1840,16 @@ struct BilibiliPlayerScreen: View {
                                 .frame(height: 40)
                                 .padding(.top, 19)
                                 HStack {
-                                    Text(clock(now))
+                                    Text(clockText(now))
                                     Spacer()
-                                    Text(clock(player.duration))
+                                    Text(clockText(player.duration))
                                 }
                                 .font(.system(size: 25, weight: .semibold).monospacedDigit())
                                 .padding(.top, 11)
                             }
                         }
                         .animation(.easeOut(duration: 0.15), value: player.scrubbing)
+                        }
                     }
                     .padding(.horizontal, w * 0.05)
                     .padding(.bottom, 62)

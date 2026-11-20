@@ -30,6 +30,32 @@ final class RemoteCoordinator: ObservableObject {
     private var startupPairingVisible = false
     private var phoneConnectedThisLaunch = false
 
+    // MARK: Shortcuts (see RemoteShortcuts)
+
+    /// Where the shortcut choice is kept; tests use their own.
+    var shortcutDefaults = UserDefaults.standard {
+        didSet { savedShortcuts = nil }
+    }
+    private var savedShortcuts: RemoteShortcutChoice?
+    /// The owner's shortcut choice, read once and saved on every change. `/state` reads it every few seconds.
+    var shortcutChoice: RemoteShortcutChoice {
+        get {
+            if let savedShortcuts { return savedShortcuts }
+            let loaded = RemoteShortcutChoice.load(from: shortcutDefaults)
+            savedShortcuts = loaded
+            return loaded
+        }
+        set {
+            savedShortcuts = newValue
+            newValue.save(to: shortcutDefaults)
+        }
+    }
+    /// Lists and runs the owner's Apple Shortcuts; tests stand in for the Shortcuts app.
+    var listAppleShortcuts: @Sendable () async -> [String]? = { await AppleShortcuts.names() }
+    var runAppleShortcutNamed: @Sendable (String) async -> AppleShortcuts.Outcome = { await AppleShortcuts.run($0) }
+    /// An Apple Shortcut started from the phone hasn't finished yet.
+    var appleShortcutRunning = false
+
     var phonePaired: Bool {
         get { UserDefaults.standard.bool(forKey: "phonePaired") }
         set { UserDefaults.standard.set(newValue, forKey: "phonePaired") }
@@ -124,6 +150,7 @@ final class RemoteCoordinator: ObservableObject {
             "audioDevice": tv.currentAudioDevice?.name ?? "",
             "apps": tv.arrangedServices.map { service -> [String: Any] in
                 ["id": service.id, "name": service.name, "icon": Icons.image(for: service) != nil,
+                 "playing": playingAudio(service.id, tv),
                  "pinned": tv.isPinned(service.id), "canMoveEarlier": tv.canMoveApp(service.id, by: -1),
                  "canMoveLater": tv.canMoveApp(service.id, by: 1)]
             },
@@ -143,6 +170,7 @@ final class RemoteCoordinator: ObservableObject {
         state["displaysSleeping"] = tv.displaysSleeping
         state["websitePlayer"] = tv.browserPreferences.choice(for: tv.profile.id).rawValue
         state["braveInstalled"] = tv.braveInstalled
+        state["shortcuts"] = tv.shortcutState()
 
         if tv.externalBrowser != nil {
             state["externalBrowser"] = [
@@ -174,12 +202,21 @@ final class RemoteCoordinator: ObservableObject {
         return state
     }
 
+    /// The apps that keep playing sound in the background (the phone's Apps sheet marks them).
+    private func playingAudio(_ id: String, _ tv: TVController) -> Bool {
+        switch id {
+        case "netease": tv.neteaseStore.current != nil && !tv.neteaseStore.paused
+        case "dedao": !tv.dedaoStore.player.paused
+        default: false
+        }
+    }
+
     // MARK: - Remote Routing
 
     @discardableResult
     func handleGuestCommand(_ command: RemoteCommand) -> Bool {
         switch command {
-        case .home, .playPause, .seek, .volume, .mute, .activateBrowser, .browserFullscreen:
+        case .home, .playPause, .volume, .mute, .activateBrowser, .browserFullscreen:
             tv?.handle(command, from: .remote)
             return true
         default: return false
@@ -188,6 +225,7 @@ final class RemoteCoordinator: ObservableObject {
 
     func handleAppsRequest(_ request: HTTPRequest) -> HTTPResponse? {
         guard let tv else { return nil }
+        if request.path == "/shortcuts" || request.path.hasPrefix("/shortcuts/") { return handleShortcutsRequest(request) }
         if let response = tv.handleSharesRequest(request) { return response }
         if let response = tv.handleJellyfinRequest(request) { return response }
         if request.method == "POST", request.path == "/display/select" {
@@ -198,14 +236,24 @@ final class RemoteCoordinator: ObservableObject {
             return .json(["ok": true])
         }
         if request.method == "POST", request.path == "/browser/open" {
-            guard let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
-                  let address = body["url"] as? String, let url = WebsiteAddress.url(from: address) else {
-                return .json(["error": "Enter an HTTP or HTTPS website address, such as youtube.com."], status: "400 Bad Request")
+            // 手机上粘贴的链接（或 App 分享出来的一整段文字）：哔哩哔哩、网易云、YouTube 的交给对应的应用打开；
+            // 普通网页照旧在网页播放器里打开（下面），分享文字里夹着的网址也找出来
+            var address = ((try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any])?["url"] as? String ?? ""
+            if let reading = PhoneLink.read(address) {
+                if case .ready(.web(let found)) = reading {
+                    // 本来就是一个网址（比如 youtube.com）就照原样用（会补成 https）；是一段夹着网址的文字才换成找出来的那个
+                    if WebsiteAddress.url(from: address) == nil { address = found.absoluteString }
+                } else if let opened = tv.openPhoneLink(address) {
+                    return .json(["ok": true, "opened": opened])
+                }
+            }
+            guard let url = WebsiteAddress.url(from: address) else {
+                return .json(["error": "Paste a Bilibili, NetEase Cloud Music or YouTube link, or enter a website address such as youtube.com."], status: "400 Bad Request")
             }
             guard !tv.externalBrowserOpening else {
                 return .json(["error": "Wait for the website to open, then try again."], status: "409 Conflict")
             }
-            let service = Service(id: "browser-session", name: url.host ?? "Website", kind: .web(url))
+            let service = Service.website(url)
             if tv.browserPreferences.choice(for: tv.profile.id) == .brave, tv.externalBrowser != nil {
                 do {
                     try tv.playbackCoordinator.navigateExternalBrowser(service: service, url: url)
@@ -215,7 +263,7 @@ final class RemoteCoordinator: ObservableObject {
             } else {
                 tv.open(service)
             }
-            return .json(["ok": true])
+            return .json(["ok": true, "opened": "website"])
         }
         if request.method == "POST", request.path == "/browser/preference" {
             guard let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
@@ -258,7 +306,7 @@ final class RemoteCoordinator: ObservableObject {
                   CFGetTypeID(value) == CFBooleanGetTypeID(), tv.arrangedServices.contains(where: { $0.id == id }) else {
                 return .json(["error": "Choose an app and whether to pin it."], status: "400 Bad Request")
             }
-            guard tv.setPinned(id, value.boolValue) else { return .json(["error": "Couldn't save favourites. Check storage and folder permissions on the Mac."], status: "500 Internal Server Error") }
+            guard tv.setPinned(id, value.boolValue) else { return .json(["error": "Couldn’t save favorites. Check storage and folder permissions on the Mac."], status: "500 Internal Server Error") }
             return .json(["ok": true])
         case ("POST", "/apps/move"):
             guard let id = body["id"] as? String, let value = body["offset"] as? NSNumber,

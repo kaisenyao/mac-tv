@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 /// The TV's Settings: a list of sections, each opening a page of its own, with the focused
@@ -16,7 +17,7 @@ struct SettingsPanel: Equatable {
         case wallpaper, aerialCategory, saverDelay, saverClock, saverPreview
         case audioOutput, feedback
         case keepMacAwake, lidOverride, screenOff, sleepMac
-        case version, update, autoUpdate, source, report, analytics
+        case version, update, autoUpdate, source, report
     }
 
     var section: Section = .profiles
@@ -25,6 +26,8 @@ struct SettingsPanel: Equatable {
     var row = 0
     /// Sleep Mac asks for a second press, like the phone remote's double tap.
     var confirmingSleep = false
+    /// 左右调了几次设置（真变了的才算）：焦点没动，但要和走一格一样响一声、震一下
+    var changes = 0
 }
 
 extension SettingsPanel.Section {
@@ -32,7 +35,7 @@ extension SettingsPanel.Section {
         switch self {
         case .profiles: "Profiles"
         case .remotes: "Remotes and Devices"
-        case .watching: "Watching"
+        case .watching: "Playback"
         case .screenSaver: "Screen Saver"
         case .sounds: "Sounds and Haptics"
         case .apps: "Apps"
@@ -58,34 +61,22 @@ extension SettingsPanel.Section {
         }
     }
 
-    var blurb: String {
-        switch self {
-        case .profiles: "Everyone gets their own apps and stays signed in separately."
-        case .remotes: "Use your phone as a remote, and see your game controllers."
-        case .watching: "Skip intros and recaps, play the next episode, and set a sleep timer."
-        case .screenSaver: "Shown after a few idle minutes on the home screen. Any press brings you back."
-        case .sounds: "Quiet clicks as you move around, and a tap on the trackpad or controller."
-        case .apps: "Add any website, Mac app or Steam game to the home screen."
-        case .movies: "Play the video files in your folders, MKV included."
-        case .dedicatedTV: "Choose a display and start Mac TV automatically."
-        case .power: "Keep the Mac awake for the remote, and choose what closing the lid does."
-        case .about: "Mac TV is free and open source."
-        }
-    }
-
     /// The rows on its page; empty for sections that open somewhere else.
     @MainActor var rows: [SettingsPanel.Row] {
         switch self {
         case .remotes: [.phoneRemote, .pairingCode, .controller]
         case .watching: [.sleepTimer, .autoSkip, .autoNext, .playbackCheck, .websitePlayer]
-        case .screenSaver: ScreenSaverSettings.wallpaper == .aerials && !Aerials.categories.isEmpty
-            ? [.wallpaper, .aerialCategory, .saverDelay, .saverClock, .saverPreview]
-            : [.wallpaper, .saverDelay, .saverClock, .saverPreview]
+        case .screenSaver:
+            switch ScreenSaverSettings.wallpaper {
+            case .aerials where !Aerials.categories.isEmpty: [.wallpaper, .aerialCategory, .saverDelay, .saverClock, .saverPreview]
+            case .flipClock: [.wallpaper, .saverDelay, .saverPreview]   // 翻页时钟自己就是钟，没有"显示时钟"
+            default: [.wallpaper, .saverDelay, .saverClock, .saverPreview]
+            }
         case .sounds: [.audioOutput, .feedback]
         case .apps: [.addApp, .arrangeApps, .topShelfPreferences]
         case .dedicatedTV: [.dedicatedTV, .preferredDisplay, .launchAtLogin]
         case .power: [.keepMacAwake, .lidOverride, .screenOff, .sleepMac]
-        case .about: [.version, .update, .autoUpdate, .source, .report] + (Analytics.available ? [.analytics] : [])
+        case .about: [.version, .update, .autoUpdate, .source, .report]
         case .profiles, .movies: []
         }
     }
@@ -132,7 +123,7 @@ extension TVController {
         // Left steps or switches off a row that has a value; on any other row it goes back.
         let adjustable: Set<String> = ["sleepTimer", "wallpaper", "aerialCategory", "saverDelay", "saverClock", "feedback",
                                        "autoSkip", "autoNext", "websitePlayer", "dedicatedTV", "preferredDisplay", "launchAtLogin",
-                                       "keepMacAwake", "lidOverride", "analytics", "autoUpdate"]
+                                       "keepMacAwake", "lidOverride", "autoUpdate"]
         switch command {
         case .back:
             panel.open = false
@@ -146,7 +137,10 @@ extension TVController {
             panel.row = min(rows.count - 1, panel.row + 1)
         case .move(let direction) where direction == .left || direction == .right:
             settings = panel
+            let before = adjustableValues
             adjustSetting(rows[panel.row], forward: direction == .right)
+            // 值真变了才响（到头了、开关本来就是这样、没装 Brave 换不过去的，不响）
+            if adjustableValues != before { settings?.changes += 1 }
             return
         case .select:
             settings = panel
@@ -160,7 +154,6 @@ extension TVController {
 
     /// Opens a section's page, or goes where the section lives.
     func openSection(_ section: SettingsPanel.Section) {
-        Analytics.send(.settingsOpened, ["section": String(describing: section)])
         switch section {
         case .profiles:
             openProfiles()
@@ -172,6 +165,15 @@ extension TVController {
             settings?.open = true
             settings?.row = 0
         }
+    }
+
+    /// 左右能调的那些设置现在的值，调之前和调之后比一比
+    private var adjustableValues: String {
+        let prefs = Preferences.shared
+        return String(describing: (ScreenSaverSettings.wallpaper, ScreenSaverSettings.aerialCategory, ScreenSaverSettings.delayMinutes,
+                                   ScreenSaverSettings.showClock, feedback.enabled, autoSkip, autoNext, keepMacAwake, lidOverride,
+                                   updater.automatic, sleepMinutesLeft, websitePlayerName, prefs.dedicatedTVMode, prefs.preferredTVDisplay,
+                                   SMAppService.mainApp.status.rawValue))
     }
 
     /// Left and right: step a value, or switch a setting off and on.
@@ -191,7 +193,6 @@ extension TVController {
         case .autoNext: autoNext = forward
         case .keepMacAwake: keepMacAwake = forward
         case .lidOverride: lidOverride = forward
-        case .analytics: Analytics.setConsent(forward, context: analyticsContext)
         case .autoUpdate: updater.automatic = forward
         default: return
         }
@@ -201,9 +202,7 @@ extension TVController {
         if let index = settings?.section.rows.firstIndex(of: row) { settings?.row = index }
         switch row {
         case .phoneRemote: pairing = true
-        case .pairingCode: break
-        case .controller:
-            showToast(controller == nil ? "Pair a controller in System Settings › Bluetooth" : "Press its Menu button any time to come home")
+        case .pairingCode, .controller: break
         case .addApp:
             settings = nil
             adder = AppAdder()
@@ -243,7 +242,6 @@ extension TVController {
         case .report: DiagnosticReport.copy(from: self)
         case .update: updater.activate()
         case .autoUpdate: updater.automatic.toggle()
-        case .analytics: Analytics.setConsent(!Analytics.enabled, context: analyticsContext)
         }
     }
 
@@ -263,19 +261,19 @@ extension TVController {
         case .profiles: return profiles.all.map(\.name).joined(separator: ", ")
         case .remotes:
             let parts = [phonePaired ? "Phone" : nil, controller?.name].compactMap { $0 }
-            return parts.isEmpty ? "Set up" : parts.joined(separator: " · ")
-        case .watching: return autoSkip ? "Skips intros" : "Intros play"
+            return parts.isEmpty ? "Not Set Up" : parts.joined(separator: " · ")
+        case .watching: return autoSkip ? "On" : "Off"
         case .screenSaver: return "\(ScreenSaverSettings.wallpaper.title) · \(ScreenSaverSettings.delayMinutes) min"
         case .sounds: return feedback.enabled ? "On" : "Off"
-        case .apps: return "\(services.filter { $0.kind != .settings && $0.kind != .addApp }.count) on Home"
+        case .apps: return "\(services.filter { $0.kind != .settings && $0.kind != .addApp }.count) on Home Screen"
         case .movies:
             let count = movieLibrary.folders.count
             return "\(count) folder\(count == 1 ? "" : "s")"
         case .dedicatedTV: return dedicatedTVMode ? "On · \(preferredTVDisplayName)" : "Off"
-        case .power: return keepMacAwake ? "Keeps Mac awake" : "Sleeps as usual"
+        case .power: return keepMacAwake ? "On" : "Off"
         case .about:
-            if let version = updater.availableVersion { return "Update to \(version)" }
-            return "Version \(Updater.currentVersion)"
+            if updater.availableVersion != nil { return "Update Available" }
+            return "Version \(AppVersion.current)"
         }
     }
 }
@@ -325,13 +323,9 @@ struct SettingsSheet: View {
                 // A plain tile, not glass: Settings sits on a frosted backdrop, and glass there would read flat.
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 72, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 72, style: .continuous).strokeBorder(.white.opacity(0.14)))
-            VStack(alignment: .leading, spacing: 14) {
-                Text(section.title).font(.tv(.title2, emphasized: true))
-                Text(section.blurb).font(.tv(.caption1)).foregroundStyle(.white.opacity(0.68))
-                    .lineSpacing(5).frame(maxWidth: 560, alignment: .leading)
-            }
-            .id(section)
-            .transition(.opacity)
+            Text(section.title).font(.tv(.title2, emphasized: true))
+                .id(section)
+                .transition(.opacity)
         }
         .animation(Motion.appear, value: section)
     }
@@ -359,10 +353,6 @@ struct SettingsSheet: View {
     private func page(_ panel: SettingsPanel) -> some View {
         let rows = panel.section.rows
         VStack(alignment: .leading, spacing: 10) {
-            if panel.section == .power {
-                Text(tv.lidStatus).font(.tv(.caption2)).foregroundStyle(.white.opacity(0.6))
-                    .padding(.horizontal, 6).padding(.bottom, 6)
-            }
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 let focused = panel.row == index
                 if row == .wallpaper {
@@ -388,7 +378,7 @@ struct SettingsSheet: View {
             title("Show QR Code")
             chevron
         case .pairingCode:
-            title("Pairing code")
+            title("Pairing Code")
             value(tv.remoteToken)
         case .controller:
             if let controller = tv.controller {
@@ -396,8 +386,8 @@ struct SettingsSheet: View {
                 value(controller.battery.map { "Battery \(Int($0 * 100))%" } ?? "Connected")
                 Image(systemName: controller.batterySymbol).font(.system(size: 26))
             } else {
-                title("Game controller")
-                value("Not connected")
+                title("Game Controller")
+                value("Not Connected")
             }
         case .addApp:
             title("Add App")
@@ -409,99 +399,79 @@ struct SettingsSheet: View {
             title("Top Shelf")
             chevron
         case .playbackCheck:
-            title("Playback check")
+            title("Playback Check")
             chevron
         case .dedicatedTV:
-            title(tv.dedicatedTVMode ? "Exit TV mode" : "Enter TV mode")
+            title("TV Mode")
             SettingSwitch(on: tv.dedicatedTVMode)
         case .preferredDisplay:
-            title("Preferred display")
+            title("Preferred Display")
             stepper(tv.preferredTVDisplayName, active: panel.section.rows[panel.row] == .preferredDisplay)
         case .launchAtLogin:
-            title("Launch at login")
-            if tv.loginNeedsApproval { value("Approval needed") }
+            title("Open at Login")
+            if tv.loginNeedsApproval { value("Approval Needed") }
             else { SettingSwitch(on: tv.launchAtLogin) }
         case .sleepTimer:
-            title("Sleep timer")
+            title("Sleep Timer")
             let minutes = tv.sleepMinutesLeft
             stepper(minutes == 0 ? "Off" : "\(minutes) min left", active: panel.row == 0)
         case .websitePlayer:
-            title("Website player")
+            title("Website Player")
             stepper(tv.websitePlayerName, active: panel.section.rows[panel.row] == .websitePlayer)
         case .autoSkip:
-            title("Skip intros and recaps")
+            title("Skip Intros, Recaps and Ads")
             SettingSwitch(on: tv.autoSkip)
         case .autoNext:
-            title("Play next episode automatically")
+            title("Autoplay Next Episode")
             SettingSwitch(on: tv.autoNext)
         case .saverDelay:
-            title("Start after")
-            stepper("\(ScreenSaverSettings.delayMinutes) minutes", active: tv.settings?.section.rows[panel.row] == .saverDelay)
+            title("Start After")
+            stepper("\(ScreenSaverSettings.delayMinutes) Minutes", active: tv.settings?.section.rows[panel.row] == .saverDelay)
         case .saverClock:
-            title("Show clock")
+            title("Show Clock")
             SettingSwitch(on: ScreenSaverSettings.showClock)
         case .saverPreview:
             title("Preview")
             chevron
         case .audioOutput:
-            title("Audio output")
+            title("Audio Output")
             value(tv.currentAudioDevice?.name ?? "Speakers")
             chevron
         case .feedback:
-            title("Sounds and haptics")
+            title("Sounds and Haptics")
             SettingSwitch(on: tv.feedback.enabled)
         case .keepMacAwake:
-            title("Keep Mac awake while Mac TV is open")
+            title("Keep Mac Awake")
             SettingSwitch(on: tv.keepMacAwake)
         case .lidOverride:
-            title("Stay awake with lid closed")
+            title("Stay Awake With Lid Closed")
             SettingSwitch(on: tv.lidOverride)
         case .screenOff:
-            title("Turn screen off")
+            title("Turn Off Display")
         case .sleepMac:
-            title(panel.confirmingSleep ? "Press again to sleep the Mac" : "Sleep Mac")
+            title(panel.confirmingSleep ? "Press Again to Sleep" : "Sleep Now")
         case .version:
             title("Version")
-            value(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+            value(AppVersion.current)
         case .update:
+            title("Software Update")
             switch updater.state {
-            case .failed(let message):
-                title("Software update")
-                value(message)
-            case .available(let version, _):
-                title("Software update")
-                value("Install \(version)")
-            case .ready(let version, _):
-                title("Software update")
-                value("Install \(version)")
-            case .downloading(let fraction):
-                title("Software update")
-                value("Downloading \(Int(fraction * 100))%")
-            case .installing:
-                title("Software update")
-                value("Installing…")
-            case .checking:
-                title("Software update")
-                value("Checking…")
-            case .upToDate:
-                title("Software update")
-                value("Up to date")
-            case .idle:
-                title("Software update")
-                value("Check now")
+            case .failed(let message): value(message)
+            case .available(let version, _), .ready(let version, _): value("Install \(version)")
+            case .downloading(let fraction): value("Downloading \(Int(fraction * 100))%")
+            case .installing: value("Installing…")
+            case .checking: value("Checking…")
+            case .upToDate: value("Up to Date")
+            case .idle: value("Check Now")
             }
         case .autoUpdate:
-            title("Automatic updates")
+            title("Automatic Updates")
             SettingSwitch(on: updater.automatic)
         case .source:
-            title("Source code")
-            value("github.com/Arunprakaash/mac-tv")
+            title("Source Code")
+            value("github.com/kaisenyao/mac-tv")
         case .report:
-            title("Copy diagnostics report")
-            value("Copy")
-        case .analytics:
-            title("Share anonymous usage")
-            SettingSwitch(on: Analytics.enabled)
+            title("Copy Diagnostics Report")
         case .wallpaper, .aerialCategory:
             EmptyView()
         }
@@ -511,7 +481,7 @@ struct SettingsSheet: View {
     private func wallpapers(focused: Bool) -> some View {
         let chosen = ScreenSaverSettings.wallpaper
         return VStack(alignment: .leading, spacing: 12) {
-            Text("WALLPAPER").font(.tv(.caption2, emphasized: true)).tracking(1.4).opacity(0.5).padding(.leading, 6)
+            Text("TYPE").font(.tv(.caption2, emphasized: true)).tracking(1.4).opacity(0.5).padding(.leading, 6)
             HStack(spacing: 18) {
                 ForEach(ScreenSaverSettings.Wallpaper.allCases, id: \.self) { wallpaper in
                     let selected = wallpaper == chosen
@@ -560,7 +530,7 @@ struct SettingsSheet: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Color.clear
                         .overlay {
-                            if let thumb = Aerials.thumbnail(forCategory: choice.id), let image = ScreenImages.image(thumb, maxPixels: 400) {
+                            if let thumb = Aerials.thumbnail(forCategory: choice.id), let image = ScreenImages.thumbnail(thumb) {
                                 Image(nsImage: image).resizable().scaledToFill()
                             }
                         }

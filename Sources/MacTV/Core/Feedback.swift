@@ -96,31 +96,47 @@ final class Feedback: ObservableObject {
         }
     }
 
-    private var lastMoveSound = Date.distantPast
+    /// 下一格最早什么时候响（系统开机以来的秒数）
+    private var nextMoveAt: TimeInterval = 0
+    /// 走一格的两声之间至少隔多久；排在后面等着响的最多能晚多少（再晚就不响了）
+    static let moveSpacing: TimeInterval = 0.045
+    static let moveBacklog: TimeInterval = 0.06
 
     func play(_ cue: Cue, from source: Source) {
         guard enabled else { return }
-        // 连着走很多格（按住方向键、双指一甩）时，两次之间至少隔 45 毫秒：像拨滚轮，声音和震动都不糊成一片
+        // 走一格：两声之间至少隔 45 毫秒，像拨滚轮，不糊成一片。一下来了好几格（按住方向键、双指一甩，
+        // 或者 App 正忙、几次按键挤在一起才处理）时不是只响第一声，而是一格一声往后排开；
+        // 排得太远（按得比 45 毫秒还密）的那一格才不响，免得手停了声音还在响
+        var delay: TimeInterval = 0
         if cue == .move || cue == .step {
-            let now = Date()
-            if now.timeIntervalSince(lastMoveSound) < 0.045 { return }
-            lastMoveSound = now
+            let now = ProcessInfo.processInfo.systemUptime
+            let at = max(now, nextMoveAt)
+            if at - now > Self.moveBacklog { return }
+            nextMoveAt = at + Self.moveSpacing
+            delay = at - now
         }
-        if source != .pointer { sound(cue) }
-        haptic(cue, from: source)
+        // 声音一律从 Mac 出，不管是键盘、触控板、鼠标、手柄还是手机遥控器，响的都是同一套
+        // （手机遥控器自己只震、不出声，和 Apple TV 的遥控器一样）
+        sound(cue, after: delay)
+        if delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.haptic(cue, from: source) }
+        } else {
+            haptic(cue, from: source)
+        }
     }
 
     // MARK: Sound
 
-    private func sound(_ cue: Cue) {
+    private func sound(_ cue: Cue, after delay: TimeInterval = 0) {
         guard let buffer = buffers[cue] else { return }
         if !engine.isRunning {
             do { try engine.start() } catch { return }
         }
         let player = players[nextPlayer]
         nextPlayer = (nextPlayer + 1) % players.count
-        player.scheduleBuffer(buffer, at: nil, options: .interrupts)
         player.play()
+        let when = delay > 0 ? AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: delay)) : nil
+        player.scheduleBuffer(buffer, at: when, options: .interrupts)
         // An open audio stream keeps the Mac from idling to sleep; close it once things go quiet.
         idleTask?.cancel()
         idleTask = Task { [weak self] in

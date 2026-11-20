@@ -19,8 +19,7 @@ final class Preferences: ObservableObject {
         lidOverride = defaults.bool(forKey: Key.lidOverride)
         navigationSounds = defaults.object(forKey: Key.navigationSounds) as? Bool ?? true
         navigationSoundVolume = defaults.object(forKey: Key.navigationSoundVolume) as? Float ?? 0.7
-        automaticUpdates = defaults.object(forKey: Key.automaticUpdates) as? Bool ?? false // 自用分支：默认不自动更新
-        analyticsConsent = defaults.string(forKey: Key.analyticsConsent)
+        automaticUpdates = defaults.object(forKey: Key.automaticUpdates) as? Bool ?? false // 默认不自动装，等你在设置里按
         saverWallpaper = defaults.string(forKey: Key.saverWallpaper)
         saverDelay = defaults.object(forKey: Key.saverDelay) as? Int
         saverClock = defaults.object(forKey: Key.saverClock) as? Bool ?? true
@@ -51,11 +50,9 @@ final class Preferences: ObservableObject {
     /// 0 to 1.
     @Published var navigationSoundVolume: Float { didSet { save(navigationSoundVolume, Key.navigationSoundVolume) } }
 
-    // MARK: Updates and analytics
+    // MARK: Updates
 
     @Published var automaticUpdates: Bool { didSet { save(automaticUpdates, Key.automaticUpdates) } }
-    /// `Analytics.Consent`'s raw value; nil until the viewer has been asked.
-    @Published var analyticsConsent: String? { didSet { save(analyticsConsent, Key.analyticsConsent) } }
 
     // MARK: Screen saver
 
@@ -92,7 +89,6 @@ final class Preferences: ObservableObject {
         static let navigationSounds = "uiFeedback"
         static let navigationSoundVolume = "uiFeedbackVolume"
         static let automaticUpdates = "automaticUpdates"
-        static let analyticsConsent = "analyticsConsent"
         static let saverWallpaper = "saverWallpaper"
         static let saverDelay = "saverDelay"
         static let saverClock = "saverClock"

@@ -43,7 +43,6 @@ struct ControlCenterPanel: Equatable {
 extension TVController {
     func openControlCenter() {
         controlCenter = ControlCenterPanel()
-        Analytics.send(.controlCenterOpened)
     }
 
     func handleControlCenter(_ command: RemoteCommand) {
@@ -77,7 +76,6 @@ extension TVController {
 
     func activateControl(_ item: ControlCenterPanel.Item) {
         controlCenter?.item = item
-        Analytics.send(.controlUsed, ["control": String(describing: item)])
         switch item {
         case .sleepMac:
             if controlCenter?.confirmingSleep == true {
@@ -95,9 +93,7 @@ extension TVController {
             pairing = true
         case .sleepTimer: stepSleepTimer(by: 1, wrap: true)
         case .skipIntros: autoSkip.toggle()
-        case .controller:
-            showToast(controller.map { "\($0.name)\($0.battery.map { ", battery \(Int($0 * 100))%" } ?? "")" }
-                      ?? "Pair a controller in System Settings › Bluetooth")
+        case .controller: break
         case .screenOff: SystemControl.displayOff()
         case .lid: lidOverride.toggle()
         case .settings:
@@ -127,14 +123,14 @@ struct ControlCenterView: View {
                             tile(.audio, panel, symbol: tv.currentAudioDevice?.symbol ?? "speaker.wave.2.fill",
                                  title: "Audio", detail: tv.currentAudioDevice?.name ?? "Speakers", on: true)
                             tile(.phone, panel, symbol: "iphone", title: "Phone",
-                                 detail: tv.phonePaired ? "Connected" : "Set up", on: tv.phonePaired)
+                                 detail: tv.phonePaired ? "Connected" : "Not Set Up", on: tv.phonePaired)
                         }
                     }
                     HStack(spacing: Self.gap) {
                         let minutes = tv.sleepMinutesLeft
                         tile(.sleepTimer, panel, symbol: minutes > 0 ? "moon.zzz.fill" : "timer", title: "Sleep Timer",
                              detail: minutes > 0 ? "\(minutes) min" : "Off", on: minutes > 0)
-                        tile(.skipIntros, panel, symbol: tv.autoSkip ? "forward.end.fill" : "forward.end", title: "Skip Intros",
+                        tile(.skipIntros, panel, symbol: tv.autoSkip ? "forward.end.fill" : "forward.end", title: "Skip Intros and Ads",
                              detail: tv.autoSkip ? "On" : "Off", on: tv.autoSkip)
                     }
                     HStack(spacing: Self.gap) {
@@ -162,11 +158,13 @@ struct ControlCenterView: View {
     /// What the focused round button does, shown under the cluster since those buttons have no label.
     private func caption(_ panel: ControlCenterPanel) -> String {
         switch panel.item {
-        case .controller: tv.controller?.name ?? "No controller connected"
-        case .screenOff: "Turn Screen Off"
-        case .lid: tv.lidOverride ? "Stays awake with the lid closed" : "Sleeps when the lid closes"
-        case .settings: "All Settings"
-        case .sleepMac: panel.confirmingSleep ? "Press again to sleep the Mac" : "Sleep Mac"
+        case .controller:
+            tv.controller.map { controller in
+                controller.battery.map { "\(controller.name) · \(Int($0 * 100))%" } ?? controller.name
+            } ?? "No Controller"
+        case .screenOff: "Turn Off Display"
+        case .lid: tv.lidOverride ? "Lid Closed: Stay Awake" : "Lid Closed: Sleep"
+        case .settings: "Settings"
         default: " "
         }
     }
@@ -178,7 +176,7 @@ struct ControlCenterView: View {
             Image(systemName: "power")
                 .font(.system(size: 78, weight: .regular))
                 .symbolEffect(.bounce, value: warning)
-            Text(warning ? "Press Again" : "Sleep Mac").font(.tv(.caption1))
+            Text(warning ? "Press Again" : "Sleep Now").font(.tv(.caption1))
         }
         .foregroundStyle(focused && !warning ? .black : .white)
         .frame(width: Self.column, height: Self.row * 2 + Self.gap)

@@ -8,7 +8,7 @@ extension TVController {
 
     @discardableResult
     func setPinned(_ id: String, _ pinned: Bool) -> Bool {
-        guard library.setPinned(id, pinned) else { showToast("Couldn't save favourites. Check available storage and folder permissions."); return false }
+        guard library.setPinned(id, pinned) else { showToast("Couldn’t save favorites. Check available storage and folder permissions."); return false }
         reloadServices()
         return true
     }
@@ -38,7 +38,6 @@ extension TVController {
         let trimmed = name?.trimmingCharacters(in: .whitespaces) ?? ""
         let app = library.add(name: trimmed.isEmpty ? fallbackName : trimmed, url: url, bundleID: nil)
         reloadServices()
-        showToast("Added \(app.name)")
         let origin = library
         Task { [weak self] in
             let png = await IconFinder.icon(forSite: url, name: app.name)
@@ -55,7 +54,6 @@ extension TVController {
         }
         let app = library.add(name: installed.name, url: nil, bundleID: bundleID)
         useIcon(IconFinder.icon(forAppAt: installed.path), for: app.id)
-        showToast("Added \(app.name)")
         return app
     }
 
@@ -67,7 +65,6 @@ extension TVController {
         }
         let app = library.add(name: game.name, url: nil, bundleID: nil, steamID: game.appID)
         reloadServices()
-        showToast("Added \(app.name)")
         if game == SteamLibrary.bigPicture {
             useIcon(SteamLibrary.appURL.flatMap { IconFinder.icon(forAppAt: $0.path) }, for: app.id)
         } else {
@@ -134,7 +131,6 @@ extension TVController {
         library.remove(id)
         Icons.forget(id)
         reloadServices()
-        showToast("Removed \(service.name)")
     }
 
     func restoreBuiltInApps() {

@@ -93,6 +93,7 @@ final class MatroskaPlayback: NSObject, @unchecked Sendable {
         videoLayer.backgroundColor = CGColor.black
         clock.addRenderer(videoRenderer)
         clock.addRenderer(audioRenderer)
+        PlaybackVolume.shared.attach(audioRenderer)   // 电视的音量调不了时，音量键调它
         reader.wanted = wantedTracks()
     }
 

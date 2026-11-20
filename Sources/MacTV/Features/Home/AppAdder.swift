@@ -14,8 +14,8 @@ struct AppAdder: Equatable {
     var query = ""
     /// The highlighted app in the Mac app or Steam list.
     var selected = 0
+    /// Why the website couldn't be added.
     var message: String?
-    var failed = false
 }
 
 extension TVController {
@@ -95,55 +95,37 @@ extension TVController {
     func submitAdder() {
         guard var a = adder else { return }
         guard let app = addWebsite(name: a.name, address: a.address) else {
-            a.message = a.address.isEmpty ? "Type a website address first." : "That doesn't look like a website address."
-            a.failed = true
+            a.message = a.address.isEmpty ? "Enter a website address." : "Not a valid website address."
             adder = a
             return
         }
-        finishAdding(app, message: "Added \(app.name). Finding its icon…")
+        finishAdding(app)
     }
 
+    /// An app that's already on the home screen is dimmed and marked On TV, so selecting it does nothing.
     func addSelectedMacApp() {
-        guard var a = adder else { return }
+        guard let a = adder else { return }
         let matches = adderMatches
         guard matches.indices.contains(a.selected) else { return }
         let pick = matches[a.selected]
-        if isOnHomeScreen(pick) {
-            a.message = "\(pick.name) is already on the home screen."
-            a.failed = true
-            adder = a
-            return
-        }
-        guard let app = addMacApp(bundleID: pick.bundleID) else { return }
-        finishAdding(app, message: "Added \(app.name).")
+        guard !isOnHomeScreen(pick), let app = addMacApp(bundleID: pick.bundleID) else { return }
+        finishAdding(app)
     }
 
     func addSelectedSteamGame() {
-        guard var a = adder else { return }
+        guard let a = adder else { return }
         let games = adderSteamGames
         guard games.indices.contains(a.selected) else { return }
         let pick = games[a.selected]
-        if isOnHomeScreen(pick) {
-            a.message = "\(pick.name) is already on the home screen."
-            a.failed = true
-            adder = a
-            return
-        }
-        guard let app = addSteamGame(pick) else { return }
-        finishAdding(app, message: pick == SteamLibrary.bigPicture ? "Added Steam Big Picture." : "Added \(app.name). Getting its artwork from Steam…")
+        guard !isOnHomeScreen(pick), let app = addSteamGame(pick) else { return }
+        finishAdding(app)
     }
 
-    /// Shows the confirmation, then closes the sheet with the new tile focused.
-    private func finishAdding(_ app: AddedApp, message: String) {
-        adder?.message = message
-        adder?.failed = false
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
-            guard let self, self.adder != nil else { return }
-            self.adder = nil
-            if let index = self.services.firstIndex(where: { $0.id == app.id }) {
-                self.setFocus(.app(index))
-            }
+    /// Closes the sheet with the new tile focused.
+    private func finishAdding(_ app: AddedApp) {
+        adder = nil
+        if let index = services.firstIndex(where: { $0.id == app.id }) {
+            setFocus(.app(index))
         }
     }
 }

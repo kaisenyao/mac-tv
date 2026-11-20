@@ -29,8 +29,8 @@ Requires macOS 14 or later, on an Apple silicon or Intel Mac.
 
 ## What it does
 
-- **Apple TV's home screen:** a Top Shelf of the latest shows on each app, a dock of app tiles and the full grid below, in Liquid Glass.
-- **Your streaming apps:** Netflix, YouTube, Prime Video, JioHotstar, Apple TV, Spotify and YouTube Music in their official web players, with DRM. Add any website, Mac app or Steam game as a tile.
+- **Apple TV's home screen:** a Top Shelf for each app (Bilibili: the latest from people you follow; NetEase Cloud Music: your playlists on a spinning record), a dock of app tiles and the full grid below, in Liquid Glass.
+- **Your apps:** native Bilibili (videos, live streams, search) and NetEase Cloud Music, plus YouTube's TV interface. Add any website, Mac app or Steam game as a tile.
 - **Phone remote:** scan a QR code, no app to install. Clickpad, touchpad, typing, volume and haptics; wake the screen, choose the display, or open a website. Works away from home over Tailscale.
 - **Game controllers:** PlayStation, Xbox, Switch Pro and other controllers drive it like an Apple TV controller.
 - **Movies:** plays your own video files, including MKV, with subtitles and Continue Watching, from the Mac, drives, a NAS (network shares stay connected) or a Jellyfin server you sign in to. Browse them from your phone.
@@ -38,12 +38,12 @@ Requires macOS 14 or later, on an Apple silicon or Intel Mac.
 - **Screen saver:** Apple's live aerial wallpapers, show art, your photos, or drifting colour, with a clock.
 - **Profiles:** each person gets their own apps and sign-ins.
 - **Power:** keeps the Mac awake for the remote, and can stay awake with the lid closed.
-- **Updates:** installs new versions by itself while nothing is playing, or when you choose in Settings › About.
+- **Updates:** from this fork's own [GitHub releases](https://github.com/kaisenyao/mac-tv/releases), when you choose in Settings › About, or by itself while nothing is playing if Automatic updates is on.
 - **Brave (optional):** open websites in Brave instead of the built-in player, with Brave's sign-ins and Shields.
 
 ## Privacy
 
-Mac TV has no account and no servers of its own, and never records what you watch. It asks once whether to share anonymous usage (which features you use) through [TelemetryDeck](https://telemetrydeck.com), and sends nothing unless you say yes. Every event is in [`Analytics.swift`](Sources/MacTV/Core/Analytics.swift). Details: [privacy policy](https://arunprakaash.github.io/mac-tv/privacy.html).
+Mac TV has no account and no servers of its own, never records what you watch, and sends no usage analytics.
 
 ## Contributing
 
@@ -55,4 +55,4 @@ Mac TV is made by Arunprakaash ([LinkedIn](https://www.linkedin.com/in/Arunpraka
 
 ## License
 
-MIT. See [LICENSE](LICENSE). "Mac" is an Apple trademark. This is a personal project, not affiliated with Apple, Netflix, Google, Amazon, JioStar, Spotify or Brave. App icons and service names belong to their owners and aren't covered by the license.
+MIT. See [LICENSE](LICENSE). "Mac" is an Apple trademark. This is a personal project, not affiliated with Apple, Bilibili, NetEase, Google or Brave. App icons and service names belong to their owners and aren't covered by the license.

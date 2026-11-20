@@ -244,18 +244,42 @@ final class RemoteServer {
                         let keepAlive = request.keepAlive && buffer.isEmpty
                         self.armCloseDeadline(client)
                         let remaining = buffer
-                        client.connection.send(content: response.serialized(keepAlive: keepAlive), completion: .contentProcessed { [weak self, weak client] sendError in
-                            MainActor.assumeIsolated {
-                                guard let self, let client else { return }
-                                if !keepAlive || sendError != nil { self.discard(client) }
-                                else { self.read(client, buffer: remaining) }
-                            }
-                        })
+                        guard let pending = response.pending else {
+                            self.send(response, to: client, keepAlive: keepAlive, then: remaining)
+                            return
+                        }
+                        // The answer needs work off the main thread: send it when it's ready, unless the
+                        // connection has closed by then (the close deadline above still applies).
+                        Task { @MainActor [weak self, weak client] in
+                            var answer = await pending()
+                            answer.headers += response.headers
+                            guard let self, let client, self.clients[ObjectIdentifier(client.connection)] != nil else { return }
+                            self.send(answer, to: client, keepAlive: keepAlive, then: remaining)
+                        }
                         return
                     }
                 }
             }
         }
+    }
+
+    private func send(_ response: HTTPResponse, to client: Client, keepAlive: Bool, then remaining: Data) {
+        client.connection.send(content: response.serialized(keepAlive: keepAlive), completion: .contentProcessed { [weak self, weak client] sendError in
+            MainActor.assumeIsolated {
+                guard let self, let client else { return }
+                if !keepAlive || sendError != nil { self.discard(client) }
+                else { self.read(client, buffer: remaining) }
+            }
+        })
+    }
+
+    /// Answers a request, waiting for one whose answer comes later (see HTTPResponse.pending).
+    func answer(_ request: HTTPRequest) async -> HTTPResponse {
+        let response = respond(to: request)
+        guard let pending = response.pending else { return response }
+        var answer = await pending()
+        answer.headers += response.headers
+        return answer
     }
 
     /// Answers a request. The phone page may ask from another of this Mac's addresses (moving to one
@@ -287,11 +311,17 @@ final class RemoteServer {
            let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"), let png = try? Data(contentsOf: url) {
             return HTTPResponse(contentType: "image/png", body: png)
         }
+        // 遥控页的图标和按键声音：和应用图标一样是公开的，配对之前也给
+        if request.method == "GET", request.path.hasPrefix("/page/"), let asset = RemotePage.asset(String(request.path.dropFirst(6))) {
+            var response = HTTPResponse(contentType: asset.type, body: asset.data)
+            response.headers.append(("Cache-Control", "public, max-age=86400"))
+            return response
+        }
         if request.method == "GET", request.path == "/manifest.webmanifest" {
             let manifest: [String: Any] = [
                 "name": "Mac TV Remote", "short_name": "Mac TV", "display": "standalone",
-                "background_color": "#0a0b0e", "theme_color": "#0a0b0e", "start_url": "/",
-                "icons": [["src": "/appicon.png", "sizes": "1024x1024", "type": "image/png"]],
+                "background_color": "#f2f3f6", "theme_color": "#f2f3f6", "start_url": "/",
+                "icons": [["src": "/page/touch-icon.png", "sizes": "512x512", "type": "image/png"]],
             ]
             var response = HTTPResponse.json(manifest)
             response.contentType = "application/manifest+json"
@@ -372,6 +402,7 @@ final class RemoteServer {
                 if let current = snapshot["current"] as? [String: Any], current["id"] as? String == "movies" {
                     snapshot["current"] = ["id": "movies", "name": "Movie"]
                 }
+                if let shortcuts = snapshot["shortcuts"] as? [String: Any] { snapshot["shortcuts"] = RemoteShortcuts.forGuest(shortcuts) }
             }
             return .json(snapshot)
         case ("POST", "/cmd"):
@@ -402,16 +433,17 @@ final class RemoteServer {
     }
     private static func guestAllowsWithoutContext(_ command: RemoteCommand) -> Bool {
         switch command {
-        case .home, .playPause, .seek, .volume, .mute, .activateBrowser, .browserFullscreen:
+        case .home, .playPause, .volume, .mute, .activateBrowser, .browserFullscreen:
             return true
         default: return false
         }
     }
 
+    /// Shortcuts aren't here: they run the owner's own Apple Shortcut and open the owner's app menus.
     private static func guestAllows(_ command: RemoteCommand) -> Bool {
         switch command {
-        case .move, .select, .back, .home, .playPause, .seek, .volume, .mute,
-             .text, .deleteBackward, .pointer, .click, .scroll, .nextControl, .previousControl,
+        case .move, .select, .longSelect, .press, .back, .home, .playPause, .volume, .mute,
+             .text, .deleteBackward, .pointer, .click, .pointerHold, .swipe, .scroll, .nextControl, .previousControl,
              .activateBrowser, .browserFullscreen, .retryBrowser:
             return true
         default: return false
@@ -479,9 +511,17 @@ struct HTTPResponse {
     var contentType = "application/json"
     var body = Data()
     var headers: [(String, String)] = []
+    /// Set when the answer needs work off the main thread (like asking the Shortcuts app for its list): the server
+    /// waits for it and sends that instead, with this response's headers added.
+    var pending: (@MainActor () async -> HTTPResponse)?
 
     static func json(_ object: Any, status: String = "200 OK") -> HTTPResponse {
         HTTPResponse(status: status, body: (try? JSONSerialization.data(withJSONObject: object)) ?? Data())
+    }
+
+    /// An answer that comes later (see pending).
+    static func deferred(_ work: @escaping @MainActor () async -> HTTPResponse) -> HTTPResponse {
+        HTTPResponse(pending: work)
     }
 
     func serialized(keepAlive: Bool) -> Data {

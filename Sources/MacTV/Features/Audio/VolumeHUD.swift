@@ -26,7 +26,8 @@ struct VolumeHUD: View {
                 }
                 .frame(width: 260, height: 8)
             } else {
-                Text("Volume is set on the TV").font(.tv(.caption2))
+                // 显示器不回 DDC、放着的又是别的应用：Mac TV 够不着。用 Apple 控制中心的说法
+                Text("Not Available").font(.tv(.caption2))
             }
         }
         .foregroundStyle(.white)

@@ -36,6 +36,23 @@ enum ScreenImages {
         if order.count > limit { cache[order.removeFirst()] = nil }
         return image
     }
+
+    /// 设置里的小预览图：单独留着（几十张以内），不和屏保正在放的那几张大图挤。
+    /// 不然来回切换时小图被挤掉、重新解码成一张"新图"，切换动画会把它当成内容变了淡出淡入，看着就是在闪
+    private static var thumbnails: [URL: NSImage] = [:]
+    static func thumbnail(_ url: URL) -> NSImage? {
+        if let cached = thumbnails[url] { return cached }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceShouldCacheImmediately: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: 400]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        if thumbnails.count > 40 { thumbnails.removeAll() }
+        thumbnails[url] = image
+        return image
+    }
 }
 
 /// A picture filling its frame that slowly zooms and drifts left (Apple TV's Top Shelf), from `since`.

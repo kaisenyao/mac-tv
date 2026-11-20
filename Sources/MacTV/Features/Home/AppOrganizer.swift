@@ -86,8 +86,6 @@ struct AppOrganizerSheet: View {
                     .padding(.horizontal, 26).padding(.vertical, 14)
                     .background(.white.opacity(0.12), in: Capsule())
             }
-            Text("Favourites stay first. The first six apps appear in the dock.")
-                .font(.system(size: 23)).foregroundStyle(.white.opacity(0.7))
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -97,7 +95,7 @@ struct AppOrganizerSheet: View {
                                 .id(service.id)
                         }
                         if apps.isEmpty {
-                            Text("Add an app to start arranging your home screen.")
+                            Text("No Apps")
                                 .font(.system(size: 26)).padding(40)
                         }
                     }
@@ -107,13 +105,6 @@ struct AppOrganizerSheet: View {
                 .onAppear { scrollToSelection(proxy) }
                 .onChange(of: tv.organizer?.selectedID) { _, _ in scrollToSelection(proxy) }
                 .onChange(of: apps.map(\.id)) { _, _ in scrollToSelection(proxy) }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("↑ ↓ Choose app    ← → Choose action    OK Apply    Back Close")
-                    .font(.system(size: 22, weight: .medium))
-                Text("Move apps within Favourites or Other Apps. Changes save automatically.")
-                    .font(.system(size: 20)).foregroundStyle(.white.opacity(0.65))
             }
         }
         .padding(48)
@@ -148,11 +139,11 @@ struct AppOrganizerSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            actionButton(.pin, title: pinned ? "Unpin" : "Pin", symbol: pinned ? "star.slash" : "star",
+            actionButton(.pin, title: pinned ? "Unfavorite" : "Favorite", symbol: pinned ? "star.slash" : "star",
                          service: service, enabled: true)
-            actionButton(.earlier, title: "Earlier", symbol: "arrow.up", service: service,
+            actionButton(.earlier, title: "Move Up", symbol: "arrow.up", service: service,
                          enabled: tv.canMoveApp(service.id, by: -1))
-            actionButton(.later, title: "Later", symbol: "arrow.down", service: service,
+            actionButton(.later, title: "Move Down", symbol: "arrow.down", service: service,
                          enabled: tv.canMoveApp(service.id, by: 1))
         }
         .padding(.horizontal, 20).padding(.vertical, 18)
@@ -173,7 +164,7 @@ struct AppOrganizerSheet: View {
         } label: {
             Label(title, systemImage: symbol)
                 .font(.system(size: 22, weight: .semibold))
-                .frame(width: 146, height: 54)
+                .frame(width: 190, height: 54)
                 .foregroundStyle(focused ? .black : .white)
                 .background(focused ? .white : .white.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
                 .opacity(enabled ? 1 : 0.35)

@@ -64,15 +64,56 @@ async function run() {
       keepMacAwake: false, lidOverride: false, displaySetup: { displays: [] } };
     window.sentCommands = [];
     window.fetch = async (path, options) => {
-      if (path === '/cmd') window.sentCommands.push(JSON.parse(options.body).a);
+      if (path === '/cmd') {
+        const body = JSON.parse(options.body);
+        window.sentCommands.push(body.a === 'press' ? 'press:' + body.k + ':' + body.p : body.a);
+      }
       return { status: 200, ok: true, json: async () => path === '/state' ? window.testState : [] };
     };
   ` });
   await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
   await delay(500);
+  // A real finger-like tap (pointer events with a live pointer id), and what the page sent for it.
+  const tapAt = async (x, y) => {
+    const before = await evaluate('sentCommands.length');
+    await call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    await delay(30);
+    return evaluate(`sentCommands.slice(${before}).join(' ')`);
+  };
   const sizes = [[320,568],[375,667],[390,844],[430,932],[568,320],[844,390]];
   for (const [width, height] of sizes) {
     await call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
+    // The clickpad is one ring: a finger is placed by position (centre = OK, the ring's four sides = arrows,
+    // outside the ring = nothing). The five buttons on it are for the keyboard and VoiceOver only.
+    const pad = await evaluate(`(() => {
+      const ring = document.querySelector('#clickpad .ring');
+      ring.scrollIntoView({ block: 'center' });
+      const r = ring.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+      return { x, y, radius: r.width / 2, proxies: [...document.querySelectorAll('#clickpad .chev, #clickpad .ok')].map(b => {
+        const p = b.getBoundingClientRect();
+        return { label: b.getAttribute('aria-label') || '', pointer: getComputedStyle(b).pointerEvents,
+          off: Math.hypot(p.left + p.width / 2 - x, p.top + p.height / 2 - y) };
+      }) };
+    })()`);
+    const size = `${width}x${height}`;
+    assert.equal(pad.proxies.length, 5, `${size}: four arrows and OK for the keyboard`);
+    for (const proxy of pad.proxies) assert.ok(proxy.label && proxy.pointer === 'none' && proxy.off <= pad.radius, `${size}: labelled keyboard proxy on the ring`);
+    assert.equal(await tapAt(pad.x, pad.y), 'press:select:tap', `${size}: centre is OK`);
+    for (const [dx, dy] of [[-22, 0], [22, 0], [0, -22], [0, 22]]) {
+      assert.equal(await tapAt(pad.x + dx, pad.y + dy), 'press:select:tap', `${size}: OK takes a 44px finger`);
+    }
+    for (const [dir, angle] of [['right', 0], ['down', Math.PI / 2], ['left', Math.PI], ['up', -Math.PI / 2]]) {
+      const along = 0.8 * pad.radius, turn = 22 / along;   // 22px either side along the ring
+      for (const a of [angle, angle - turn, angle + turn]) {
+        assert.equal(await tapAt(pad.x + Math.cos(a) * along, pad.y + Math.sin(a) * along), `press:${dir}:tap`, `${size}: ${dir} side of the ring, 44px wide`);
+      }
+    }
+    assert.equal(await tapAt(pad.x + pad.radius + 15, pad.y), '', `${size}: a tap outside the ring does nothing`);
+    assert.equal(await evaluate(`(async () => { const before = sentCommands.length;
+      document.querySelector('#clickpad .chev.up').click(); document.querySelector('#clickpad .ok').click();
+      await new Promise(resolve => setTimeout(resolve, 30)); return sentCommands.slice(before).join(' '); })()`),
+      'press:up:tap press:select:tap', `${size}: keyboard reaches the arrows and OK`);
     for (const mode of ['none', 'embedded', 'brave', 'iina']) {
       const geometry = await evaluate(`(async () => {
         testState.mode = ${mode === 'none' ? "'launcher'" : "'player'"};
@@ -80,33 +121,45 @@ async function run() {
         testState.externalPlayer = ${mode === 'iina' ? "{name:'IINA',status:'Playing'}" : 'null'};
         await refresh();
         const r = e => { const x=e.getBoundingClientRect(); return {w:x.width,h:x.height,top:x.top,bottom:x.bottom}; };
+        scrollTo(0, 0);
         return { ring:r(document.querySelector('#clickpad .ring')), keys:[...document.querySelectorAll('.key')].map(r),
-          arrows:[...document.querySelectorAll('#clickpad .chev, #clickpad .ok')].map(r),
-          tool:r(document.querySelector('#open-text')), scroll:document.documentElement.scrollWidth,
+          tool:r(document.querySelector('.controls')), scroll:document.documentElement.scrollWidth,
           viewport:innerWidth, height:innerHeight, page:document.documentElement.scrollHeight,
           controls: ${mode === 'brave' ? "!document.querySelector('#browser-controls').hidden" : mode === 'iina' ? "!document.querySelector('#iina-controls').hidden" : 'true'} };
       })()`);
       const label = `${width}x${height} ${mode}`;
       assert.ok(Math.abs(geometry.ring.w - geometry.ring.h) < 1 && geometry.ring.w >= 100, `${label}: circular D-pad`);
       for (const key of geometry.keys) assert.ok(Math.abs(key.w-key.h) < 1 && key.w >= 44 && key.h >= 44, `${label}: circular 44px media key`);
-      for (const arrow of geometry.arrows) assert.ok(arrow.w >= 44 && arrow.h >= 44, `${label}: 44px D-pad target`);
       assert.ok(geometry.scroll <= geometry.viewport + 1, `${label}: no horizontal overflow`);
       assert.ok(geometry.controls, `${label}: active controls visible`);
+      // The TV key is Home: drawn as a TV, named for VoiceOver, sent on a tap and from the keyboard.
       const home = await evaluate(`(async () => {
-        const button = document.querySelector('[data-a="home"]');
-        const before = sentCommands.length;
-        const rect = button.getBoundingClientRect();
+        const button = document.querySelector('[data-press="home"]');
+        button.scrollIntoView({ block: 'center' });
+        const rect = button.getBoundingClientRect(), before = sentCommands.length;
         button.click();
-        await new Promise(resolve => setTimeout(resolve, 0));
-        return { label: button.textContent.trim(), width: rect.width, height: rect.height,
-          displayed: getComputedStyle(button).display !== 'none', action: sentCommands[before] };
+        await new Promise(resolve => setTimeout(resolve, 30));
+        return { label: button.getAttribute('aria-label') || '', width: rect.width, height: rect.height,
+          x: rect.left + rect.width / 2, y: rect.top + rect.height / 2,
+          displayed: getComputedStyle(button).display !== 'none', keyboard: sentCommands.slice(before).join(' ') };
       })()`);
-      assert.equal(home.label, 'Home', `${label}: Home is visibly labeled`);
+      assert.match(home.label, /\bHome\b/, `${label}: Home is labeled`);
       assert.ok(home.displayed && home.width >= 44 && home.height >= 44, `${label}: Home stays available`);
-      assert.equal(home.action, 'home', `${label}: Home sends its command`);
+      assert.equal(home.keyboard, 'home', `${label}: Home sends its command from the keyboard`);
+      assert.equal(await tapAt(home.x, home.y), 'home', `${label}: Home sends its command on a tap`);
+      await evaluate('scrollTo(0, 0)');
       if (width === 320 && height === 568 && (mode === 'none' || mode === 'brave')) await screenshot(`320x568-${mode}.png`);
-      if (mode === 'none' && height > width) assert.ok(geometry.tool.bottom <= geometry.height + 1, `${label}: portrait controls fit`);
-      if (mode === 'none' && height < width) assert.ok(geometry.page >= geometry.tool.bottom, `${label}: landscape controls scroll into view`);
+      if (mode === 'none' && height > width) assert.ok(geometry.tool.bottom <= geometry.height + 1, `${label}: portrait remote fits one screen`);
+      // Whatever scrolls (the page in landscape, the column when Brave's or IINA's keys don't fit), the last
+      // control can be brought into view.
+      const reach = await evaluate(`(() => {
+        const last = [...document.querySelectorAll('.controls, #browser-controls, #iina-controls')].filter(e => !e.hidden).pop();
+        last.scrollIntoView({ block: 'end' });
+        const r = last.getBoundingClientRect();
+        document.querySelector('main').scrollTop = 0; scrollTo(0, 0); document.body.scrollTop = 0;
+        return { top: r.top, bottom: r.bottom };
+      })()`);
+      assert.ok(reach.top >= -1 && reach.bottom <= geometry.height + 1, `${label}: controls scroll into view`);
     }
     const sheet = await evaluate(`(() => {
       document.querySelector('#open-text').click();
@@ -119,10 +172,60 @@ async function run() {
     })()`);
     assert.ok(sheet.visible && sheet.website && sheet.typing && sheet.websiteLabel && sheet.typingLabel, `${width}x${height}: accessible text sheet`);
     assert.ok(sheet.width <= sheet.viewport + 1, `${width}x${height}: sheet does not overflow`);
+    // It slides up and settles, and Done slides it away and then hides it.
+    await delay(700);
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('#text-sheet .sheet')).transform`), 'none', `${width}x${height}: sheet settles open`);
     if (width === 390 && height === 844) await screenshot('390x844-text-sheet.png');
     await evaluate(`document.querySelector('#text-sheet [data-close]').click()`);
+    assert.equal(await evaluate(`document.querySelector('#text-sheet').className`), 'scrim closing', `${width}x${height}: sheet slides away`);
+    await delay(500);
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('#text-sheet')).display`), 'none', `${width}x${height}: sheet hidden after closing`);
     console.log(`PASS remote layout ${width}x${height}`);
   }
+
+  // Lists in sheets scroll under a finger that starts on a row, as on iOS. The page as an iPhone gets it (with
+  // the invisible system switch over every button that gives the haptic) and real touches: a drag scrolls the
+  // list and neither opens the row nor flips a switch; a tap opens it once and flips one switch; pulling the
+  // header down still puts the sheet away.
+  await call('Emulation.setUserAgentOverride', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1' });
+  await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  await call('Emulation.setDeviceMetricsOverride', { width: 375, height: 667, deviceScaleFactor: 2, mobile: true });
+  await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
+  await delay(700);
+  const touch = async (x, ys) => {
+    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: ys[0] }] });
+    for (const y of ys.slice(1)) { await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] }); await delay(16); }
+    await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await delay(450);
+  };
+  const look = () => evaluate(`(() => {
+    const sheet = document.querySelector('#settings-sheet .sheet'), row = document.querySelector('[data-page="page-display"]'), r = row.getBoundingClientRect();
+    return { scroll: sheet.scrollTop, room: sheet.scrollHeight - sheet.clientHeight, x: r.left + 60, y: r.top + r.height / 2,
+      overlay: !!row.querySelector(':scope > .haptic'), page: [...document.querySelectorAll('#settings-sheet .page')].find(p => !p.hidden && !p.classList.contains('leaving')).id,
+      open: document.querySelector('#settings-sheet').classList.contains('show'),
+      switches: [...document.querySelectorAll('.haptic input')].filter(i => i.checked).length,
+      head: (h => ({ left: h.left, top: h.top }))(document.querySelector('#settings-main h2').getBoundingClientRect()) };
+  })()`);
+  await evaluate(`openSettings()`); await delay(700);
+  let s = await look();
+  assert.ok(s.overlay && s.room > 100, 'an iPhone gets the haptic switches; Settings is longer than the screen');
+  const switches = s.switches;
+  // (the finger rests before it lifts, so the list doesn't fling on: a tap during a fling only stops it)
+  await touch(s.x, [...Array.from({ length: 11 }, (_, i) => s.y - i * 15), ...Array(12).fill(s.y - 150)]);
+  const scrolled = await look();
+  assert.ok(scrolled.scroll > 60, `a drag that starts on a row scrolls the list (${scrolled.scroll}px)`);
+  assert.equal(scrolled.page, 'settings-main', 'the drag does not open the row');
+  assert.equal(scrolled.switches, switches, 'the drag does not flip a haptic switch');
+  await touch(scrolled.x, [scrolled.y]);
+  await delay(300);                              // the push to the next page finishes
+  const tapped = await look();
+  assert.equal(tapped.page, 'page-display', 'a tap opens the row');
+  assert.equal(tapped.switches, switches + 1, 'a tap flips one haptic switch');
+  await evaluate(`goBack(); document.querySelector('#settings-sheet .sheet').scrollTop = 0`); await delay(600);
+  s = await look();
+  await touch(s.head.left + 20, Array.from({ length: 12 }, (_, i) => s.head.top + 10 + i * 30));
+  assert.equal((await look()).open, false, 'pulling the header down puts the sheet away');
+  console.log('PASS sheet lists scroll under a finger on a row; taps and pull-down still work');
 }
 (async () => {
   try { await run(); }

@@ -1,183 +1,351 @@
   :root {
-    --bg:#07080b; --glass:rgba(255,255,255,.09); --line:rgba(255,255,255,.14);
-    /* Apple TV's Liquid Glass: blur and saturate what's behind, with a bright top edge. */
-    --blur:blur(28px) saturate(170%); --sheen:inset 0 1px 0 rgba(255,255,255,.28), inset 0 -1px 1px rgba(255,255,255,.05);
-    /* Soft colour behind everything, so the glass has something to show. */
-    --ambient:radial-gradient(70vmax 60vmax at 10% 0%, rgba(70,110,255,.30), transparent 70%),
-              radial-gradient(60vmax 60vmax at 100% 55%, rgba(170,80,255,.20), transparent 70%),
-              radial-gradient(60vmax 50vmax at 20% 100%, rgba(0,190,170,.14), transparent 70%), #07080b;
-    --fg:#fff; --dim:rgba(255,255,255,.62); --ok:#3ddc84; --warn:#ff6b6b;
-    /* Settings: grouped cards of 52px rows, 16px insets, 8px inside a group and 24px between groups. */
-    --card:rgba(255,255,255,.07); --divider:rgba(255,255,255,.08); --on:#30d158; --danger:#ff6961;
-    /* Controls size with the phone: round keys from 52 to 68px, spacing from the screen height. */
-    --key:clamp(52px, 16vw, 68px); --gap:clamp(10px, 1.7dvh, 16px);
+    /* Mac TV 手机遥控器，照主人的单手设计稿做：一块 390 宽的 iPhone 屏幕，银白的底，最上面链接 / 打字栏和三个银色
+       圆键，下面点按 / 触控切换条、黑色的点按转盘（或触控板），再下面左边一列四个银色快捷键、右边黑色圆键和一条
+       竖着的音量。
+       尺寸全照设计稿，乘上 --k（设计稿的 1 像素在这台手机上是多长）：按手机的宽缩放，矮的手机（或 Safari 的
+       工具栏占了地方）按高缩放，整页永远一屏放下；平板、电脑上最大和 440 宽的 iPhone 一样 */
+    color-scheme: light;
+    --safe-t: env(safe-area-inset-top); --safe-r: env(safe-area-inset-right);
+    --safe-b: env(safe-area-inset-bottom); --safe-l: env(safe-area-inset-left);
+    /* 设计稿从顶栏上沿到按键下沿一共 723 高；上面另留 8 像素、下面 16 像素 */
+    --k: min(calc((100vw - var(--safe-l) - var(--safe-r)) / 390),
+             calc((100dvh - var(--safe-t) - var(--safe-b) - 24px) / 723),
+             calc(440px / 390));
+    /* 遥控器的底：上浅下深一点（theme-color 和状态栏是上面那个颜色） */
+    --page:#f2f3f6; --page-low:#e6e8eb;
+    --ink:#272a2d; --ink-dim:#686d73;
+    /* 弹出页：iOS 设置那样的分组 */
+    --sheet:#f2f2f7; --label:#1c1c1e; --secondary:#6c6c70; --separator:#e5e5ea; --chevron:#c4c4c9; --fill:#e3e3e8;
+    --blue:#0a84ff; --blue-text:#0a60d0; --green:#34c759; --red:#ff3b30; --danger:#d70015; --warn:#d93a32; --ok:#1f9d55;
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none; }
-  html, body { margin:0; height:100%; color:var(--fg); font:16px/1.3 -apple-system, system-ui, Roboto, sans-serif; background:var(--bg); overscroll-behavior:none; }
-  body { background:var(--ambient); background-attachment:fixed; }
-  main { width:100%; max-width:460px; min-height:100dvh; margin:0 auto; padding:calc(env(safe-area-inset-top) + 14px) clamp(14px, 5vw, 22px) calc(env(safe-area-inset-bottom) + 18px); display:flex; flex-direction:column; gap:var(--gap); touch-action:manipulation; }
-  button { font:inherit; color:inherit; cursor:pointer; transition:transform .08s, background-color .08s; }
-  .pressed { transform:scale(.93); }
-  .round { width:44px; height:44px; border-radius:50%; border:1px solid var(--line); background:var(--glass); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); box-shadow:var(--sheen); display:grid; place-items:center; }
-  /* tvOS focus: a press lights the control up as a white platter. */
-  .round.pressed, .key.pressed, .pill.pressed, .row-btn.pressed { background:#fff; color:#000; }
-  header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  header h1 { margin:0; font-size:20px; font-weight:800; letter-spacing:-.02em; line-height:0; }
-  /* The app icon stands in for the name at the top of the remote. */
-  header h1 img { width:44px; height:44px; display:block; filter:drop-shadow(0 4px 8px rgba(0,0,0,.35)); }
-  .status[hidden] { display:none; }
-  .status { display:flex; align-items:flex-start; gap:6px; font-size:12px; line-height:1.35; font-weight:500; color:var(--dim); margin-top:2px; }
-  .status .dot { margin-top:4px; }
-  .dot { width:7px; height:7px; border-radius:50%; background:var(--warn); flex:none; }
-  .actions { display:flex; gap:10px; flex:none; }
-  /* A segmented pill: the selected pill sits inside the track with the same inset on every side. */
-  .tabs { display:grid; grid-template-columns:1fr 1fr; gap:4px; padding:4px; height:46px; flex:none; border-radius:999px; background:var(--glass); border:1px solid var(--line); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); box-shadow:var(--sheen); }
-  .tabs button { height:100%; padding:0; border:0; border-radius:999px; background:transparent; color:rgba(255,255,255,.75); font-size:14px; font-weight:600; transition:background-color .2s, color .2s; }
-  .tabs button.on { background:#fff; color:#000; box-shadow:0 1px 3px rgba(0,0,0,.3); }
-  /* The touch surface takes whatever height is left, so the remote fills any phone. */
-  .surface { position:relative; flex:1 1 auto; min-height:210px; max-height:440px; border-radius:34px; background:rgba(255,255,255,.06); border:1px solid var(--line); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); box-shadow:var(--sheen); overflow:hidden; touch-action:none; }
-  /* The ring is centred and sized to fit the surface; arrows and OK sit on it. */
-  #clickpad .ring { position:absolute; left:50%; top:50%; height:min(260px, 70vw, 86%); aspect-ratio:1; transform:translate(-50%, -50%); border-radius:50%; border:1.5px solid rgba(255,255,255,.14); pointer-events:none; }
-  #clickpad .chev { background:none; border:0; padding:0; min-width:44px; min-height:44px; position:absolute; width:40px; height:40px; display:grid; place-items:center; color:rgba(255,255,255,.55); transition:color .12s, scale .12s; }
-  #clickpad .chev.hit { color:#fff; scale:1.25; }
-  #clickpad .up { left:50%; top:4%; translate:-50% 0; } #clickpad .down { left:50%; bottom:4%; translate:-50% 0; }
-  #clickpad .left { top:50%; left:4%; translate:0 -50%; } #clickpad .right { top:50%; right:4%; translate:0 -50%; }
-  #clickpad .ok { position:absolute; left:50%; top:50%; width:38%; aspect-ratio:1; translate:-50% -50%; border-radius:50%; border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.1); box-shadow:inset 0 1px 0 rgba(255,255,255,.18), 0 10px 24px rgba(0,0,0,.35); display:grid; place-items:center; font-weight:700; font-size:15px; transition:background .12s, scale .12s; }
-  #clickpad .ok.hit { background:#fff; color:#000; scale:.94; }
-  /* 转盘：转起来时圆环稍微亮一点 */
-  #clickpad .ring { transition:border-color .15s; }
-  #clickpad.turning .ring { border-color:rgba(255,255,255,.32); }
-  #touchpad { display:none; }
-  #touchpad .hint { position:absolute; left:0; right:0; bottom:18px; text-align:center; font-size:13px; font-weight:500; color:rgba(255,255,255,.55); pointer-events:none; padding:0 16px; }
-  .keys { display:grid; grid-template-columns:repeat(4, 1fr); gap:var(--gap) 8px; justify-items:center; flex:none; }
-  .key { width:var(--key); height:var(--key); border-radius:50%; border:1px solid var(--line); background:var(--glass); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); display:grid; place-items:center; box-shadow:var(--sheen); }
-  .key.home { display:flex; flex-direction:column; justify-content:center; gap:1px; }
-  .key.home svg { width:20px; height:20px; }
-  .key.home span { font-size:10px; font-weight:700; line-height:1; }
-  .key.primary { background:#fff; color:#000; }
-  .key.primary.pressed { background:#d9d9d9; }
-  .key svg, .round svg { width:22px; height:22px; }
-  .type { display:flex; align-items:center; gap:8px; height:52px; flex:none; padding:0 6px 0 16px; border-radius:999px; background:var(--glass); border:1px solid var(--line); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); box-shadow:var(--sheen); color:var(--dim); }
-  .type input { flex:1; min-width:0; border:0; outline:0; background:transparent; color:#fff; font:500 16px -apple-system, system-ui, sans-serif; -webkit-user-select:text; user-select:text; }
-  .type button { width:44px; height:44px; border:0; border-radius:12px; background:transparent; display:grid; place-items:center; color:#fff; }
-  .text-tools { min-height:44px; width:100%; text-align:center; }
-  .website-form button { width:auto; min-width:48px; padding:0 12px; font-weight:700; }
-  .website-form button:disabled { opacity:.45; }
-  /* Short phones: a smaller touch surface so the controls fit without scrolling. */
-  @media (max-height: 640px) { .surface { min-height:180px; } }
+  /* 整页一屏：不滚动、不会出现第二页。底色铺到状态栏和 Safari 底部工具栏后面 */
+  html { height:100%; background:var(--page-low); }
+  body { margin:0; height:100%; overflow:hidden; overscroll-behavior:none; color:var(--ink); background:var(--page) linear-gradient(180deg, var(--page), var(--page-low));
+         font:16px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, Roboto, sans-serif; -webkit-font-smoothing:antialiased; }
+  html, body { overscroll-behavior:none; }
+  /* 顶上不模糊：iOS 26 起，主屏幕网页贴着状态栏的内容会被系统模糊（WebKit 的 scroll pocket）。顶边有一条宽度
+     超过九成、高过 10 像素、不透明的固定元素时，系统改用纯色填状态栏、不模糊（和 PianaSoul 的 #top-band 一样）。
+     这一条的颜色跟着页面，自己不画出来，也不挡手指 */
+  #top-band { position:fixed; z-index:2147483647; top:0; left:0; right:0; height:12px; pointer-events:none; background-color:inherit; -webkit-background-clip:text; background-clip:text; }
 
-  .scrim { position:fixed; inset:0; background:rgba(0,0,0,.5); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); display:none; flex-direction:column; justify-content:flex-end; z-index:5; }
-  .scrim.show { display:flex; }
-  .sheet { max-width:460px; width:100%; max-height:88dvh; overflow-y:auto; margin:0 auto; padding:20px 18px calc(env(safe-area-inset-bottom) + 24px); border-radius:28px 28px 0 0; background:rgba(28,30,40,.86); -webkit-backdrop-filter:blur(40px) saturate(180%); backdrop-filter:blur(40px) saturate(180%); border-top:1px solid rgba(255,255,255,.18); box-shadow:var(--sheen); display:flex; flex-direction:column; gap:14px; }
-  .sheet > * { flex-shrink:0; }
-  .sheet-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-  .sheet-head > span { font-size:18px; font-weight:800; }
-  .sheet-head > div { display:flex; gap:8px; }
-  .pill { height:44px; padding:0 14px; border:0; border-radius:999px; background:rgba(255,255,255,.12); font-size:14px; font-weight:600; }
-  .pill.on { background:#fff; color:#000; }
-  .apps { display:grid; grid-template-columns:repeat(auto-fill, minmax(72px, 1fr)); gap:16px 12px; }
-  .app { position:relative; border:0; background:none; padding:0; display:flex; flex-direction:column; gap:6px; align-items:center; font-size:12px; font-weight:600; color:var(--dim); text-align:center; }
-  .app .art { width:100%; aspect-ratio:1; border-radius:23%; background:#2a2d36; display:grid; place-items:center; font-size:26px; font-weight:800; color:#fff; overflow:hidden; box-shadow:0 0 0 1px rgba(255,255,255,.08); }
+  /* 遥控器这一列：设计稿的 390 宽，两边各留 20；从上往下照设计稿的间距排，手机比设计稿高出来的地方留在最下面 */
+  main { width:calc(var(--k) * 390); height:100dvh; margin:0 auto; padding:calc(var(--safe-t) + 8px) calc(var(--k) * 20) calc(var(--safe-b) + 16px);
+         display:flex; flex-direction:column; overflow:hidden; touch-action:manipulation; -webkit-touch-callout:none; font-family:Arial, Helvetica, sans-serif; }
+  /* 按下（像 iOS）：手指一按，按下的样子马上出来；松手时缩小的弹回来（带一点点回弹），变暗、变灰的慢慢淡回去 */
+  button { position:relative; font:inherit; color:inherit; cursor:pointer;
+           transition:transform .22s cubic-bezier(.25,1.35,.5,1), opacity .25s ease-out, background-color .3s ease-out, color .3s ease-out; }
+  button:focus-visible, input:focus-visible { outline:3px solid #438eff; outline-offset:3px; }
+  .pressed { transform:scale(.95); transition:transform .1s cubic-bezier(.2,.8,.2,1); }
+
+  /* 画出来的键：样子全在 <svg class="art"> 里（正常 / 按下两套，脚本按手指换），按钮本身透明。
+     --slop：手指点偏一点也算（只往没有别的键的方向放大） */
+  .drawn { display:block; width:100%; height:100%; padding:0; border:0; background:none; touch-action:none; transition:none; }
+  .drawn::before { content:""; position:absolute; inset:var(--slop, 0); border-radius:inherit; }
+  svg.art { display:block; width:100%; height:100%; overflow:visible; fill:none; pointer-events:none; }
+  .sprite { position:absolute; width:0; height:0; overflow:hidden; }
+  /* 质感：光从正上方来，每个键在页面上落两层影子（银色的浅、黑色的深一点）：贴着键的一层一直在；柔和的一层
+     （::after）按下去时马上收起来，像键沉了下去，松手时再淡回来。键都是圆的或胶囊形，影子照按钮的圆角画 */
+  .drawn { box-shadow:0 calc(var(--k) * .4) calc(var(--k) * .6) var(--contact, transparent); }
+  .drawn::after { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+                  box-shadow:0 calc(var(--k) * 1.3) calc(var(--k) * 2.4) var(--lift, transparent); transition:opacity .2s cubic-bezier(.2,.8,.2,1); }
+  .drawn.down::after { opacity:0; transition:none; }
+  .field, .round, .chip { --contact:rgba(40, 46, 54, .15); --lift:rgba(40, 46, 54, .15); }
+  .key, .volume .drawn { --contact:rgba(0, 0, 0, .18); --lift:rgba(0, 0, 0, .2); }
+  .ring .art { filter:drop-shadow(0 calc(var(--k) * 3) calc(var(--k) * 4) rgba(0, 0, 0, .24)); }
+
+  /* 顶上：链接 / 打字栏（177 宽），三个银色圆键（43），圆键之间隔 8 */
+  header { flex:none; display:flex; justify-content:space-between; align-items:center; height:calc(var(--k) * 43); }
+  header .drawn { --slop:-8px 0; }
+  .field { width:calc(var(--k) * 177); border-radius:999px; }
+  .rounds { display:flex; gap:calc(var(--k) * 8); height:100%; }
+  .round { width:calc(var(--k) * 43); border-radius:50%; }
+
+  /* 顶栏和切换条中间（36 高的空）：连接状态 / 访客的一行小字 */
+  .status-line { flex:none; height:calc(var(--k) * 36); display:flex; align-items:center; justify-content:center; text-align:center; }
+  .status-line p { margin:0; font:500 max(11px, calc(var(--k) * 12))/1.3 -apple-system, system-ui, sans-serif; color:var(--ink-dim); }
+  .status[hidden] { display:none; }
+  .status { display:flex; align-items:flex-start; gap:6px; }
+  .dot { flex:none; width:7px; height:7px; margin-top:4px; border-radius:50%; background:var(--warn); }
+
+  /* 点按 / 触控 切换条（350 × 39）：底槽、银色滑块（左右走 536 个单位）、两个字；字的颜色跟着选中的那边 */
+  .mode { position:relative; flex:none; height:calc(var(--k) * 39); touch-action:none; }
+  .mode .art { position:absolute; inset:0; }
+  .mode text { font:700 42px Arial, Helvetica, sans-serif; text-anchor:middle; fill:#686d73; transition:fill .25s ease-out; }
+  .mode text.on { fill:#272a2d; }
+  /* 滑块：iOS 的曲线，起步快、落地轻（拖着走时不动画，松手从手指那儿接着滑过去） */
+  .thumb { transition:transform .34s cubic-bezier(.32,.72,0,1); }
+  .mode.dragging .thumb, .mode.still .thumb { transition:none; }
+  .mode button { position:absolute; top:-6px; bottom:-6px; width:50%; padding:0; border:0; border-radius:999px; background:none; color:transparent; font-size:0; touch-action:none; }
+  #tab-click { left:0; } #tab-touch { right:0; }
+
+  /* 遥控区：切换条下面空 36、251 高、再空 36。转盘 210 放在正中；触控板 350 × 251 铺满。屏幕放不下时
+     （比如下面多出 Brave 的控制键）只把这一块缩小，按键不缩：先把上下的空一起收到 20，再缩转盘。转盘最小 100 宽
+     （触控板 167 × 120）：小手机上开着 Brave / IINA 的控制键还放不下时，整页可以上下滚，不再缩 */
+  .pad-area { flex:0 1 calc(var(--k) * 323); min-height:calc(120px + var(--k) * 20); container-type:size; display:grid; place-items:center; }
+  .pad { position:relative; width:min(100cqw, calc((100cqh - var(--k) * 20) * 350 / 251)); aspect-ratio:350 / 251; touch-action:none; }
+  main:has(.browser-controls:not([hidden])) { overflow-y:auto; }
+  .surface { position:absolute; inset:0; touch-action:none; }
+  #clickpad .ring { position:absolute; left:50%; top:50%; width:60%; aspect-ratio:1; translate:-50% -50%; border-radius:50%; }
+  #clickpad .chev, #clickpad .ok { position:absolute; padding:0; border:0; border-radius:50%; background:transparent; pointer-events:none; translate:-50% -50%; }
+  #clickpad .chev { width:22%; aspect-ratio:1; }
+  #clickpad .chev.up { left:50%; top:11%; } #clickpad .chev.down { left:50%; top:89%; }
+  #clickpad .chev.left { left:11%; top:50%; } #clickpad .chev.right { left:89%; top:50%; }
+  #clickpad .ok { left:50%; top:50%; width:56.7%; aspect-ratio:1; }
+  #touchpad { display:none; border-radius:9.07% / 12.65%; }
+
+  /* 下面一排：左边快捷键（132 宽），右边按键（193 宽，两列 76 的圆键居中） */
+  .shortcuts-label { flex:none; height:calc(var(--k) * 18); margin-bottom:calc(var(--k) * 6); padding-left:calc(var(--k) * 4);
+                     font:700 calc(var(--k) * 13)/calc(var(--k) * 18) Arial, Helvetica, sans-serif; color:#686d73; }
+  .controls { flex:none; display:flex; justify-content:space-between; align-items:flex-start; }
+
+  /* 快捷键：四格 132 × 57、隔 10；少于四个时空着的格子留着，别的不挪。一行字：粗的名字和灰的值，
+     放不下时像 iPod 那样停一下、往左滚、隔 28 接着循环，右边 10 像素淡出（只有放不下的才滚） */
+  .chips { width:calc(var(--k) * 132); display:flex; flex-direction:column; gap:calc(var(--k) * 10); }
+  .chip { display:flex; height:calc(var(--k) * 57); align-items:center; gap:calc(var(--k) * 9); padding:0 0 0 calc(var(--k) * 15); border-radius:999px;
+          color:#272a2d; text-align:left; font:calc(var(--k) * 13)/calc(var(--k) * 15) Arial, Helvetica, sans-serif; }
+  .chip .art { position:absolute; inset:0; }
+  .chip .icon { position:relative; flex:none; width:calc(var(--k) * 18); height:calc(var(--k) * 18); overflow:visible; }
+  .chip.no-icon .icon { display:none; }
+  .chip .text { position:relative; flex:1; min-width:0; margin-right:calc(var(--k) * 10); overflow:hidden; white-space:nowrap; }
+  .chip b { font-weight:700; }
+  .chip .value { color:#686d73; }
+  .run, .copy { display:inline-block; }
+  .chip.overflow .text { -webkit-mask-image:linear-gradient(90deg, #000 calc(100% - var(--k) * 10), transparent); mask-image:linear-gradient(90deg, #000 calc(100% - var(--k) * 10), transparent); }
+  .chip.empty { visibility:hidden; }
+  .chip:disabled { opacity:.45; cursor:default; }
+  /* 快捷键换了（主屏 ↔ 应用自己的、值变了）：旧的字和图标复制一份盖在上面淡出去，新的淡进来（脚本里），格子不动；
+     空出来的格子淡掉，用不了的慢慢暗下去 */
+  .chips .chip { transition:opacity .18s ease-out, visibility 0s; }
+  .chips .chip.empty { opacity:0; transition:opacity .18s ease-out, visibility 0s .18s; }
+  .chip-ghost { position:absolute; inset:0; display:flex; align-items:center; gap:calc(var(--k) * 9); padding-left:calc(var(--k) * 15); pointer-events:none; }
+  .chip .chip-ghost .icon { display:block; }
+  .chip .chip-ghost .text { -webkit-mask-image:none; mask-image:none; }
+  .chip .chip-ghost.overflowed .text { -webkit-mask-image:linear-gradient(90deg, #000 calc(100% - var(--k) * 10), transparent); mask-image:linear-gradient(90deg, #000 calc(100% - var(--k) * 10), transparent); }
+
+  /* 按键：返回、电视；播放 / 暂停、静音在左；音量（73 × 167）竖着占右边两行 */
+  .keys { width:calc(var(--k) * 193); display:grid; justify-content:center; grid-template-columns:repeat(2, calc(var(--k) * 76));
+          grid-template-rows:repeat(3, calc(var(--k) * 76)); column-gap:calc(var(--k) * 17); row-gap:calc(var(--k) * 15); }
+  .key { border-radius:50%; }
+  .key.mute { grid-column:1; grid-row:3; }
+  .volume { grid-column:2; grid-row:2 / span 2; justify-self:center; width:calc(var(--k) * 73); display:flex; flex-direction:column; }
+  .volume .drawn { height:50%; }
+  .volume .drawn:first-child { border-radius:999px 999px 0 0; }
+  .volume .drawn:last-child { border-radius:0 0 999px 999px; }
+
+  /* iPhone 震动用的系统开关：盖满整个键、看不见；手指点在键上就切换它，系统就震一下 */
+  .haptic { position:absolute; inset:var(--slop, 0); border-radius:inherit; touch-action:none; -webkit-tap-highlight-color:transparent; cursor:inherit; }
+  .haptic input { position:absolute; width:1px; height:1px; margin:0; visibility:hidden; pointer-events:none; }
+  button:disabled > .haptic { pointer-events:none; }
+  /* 弹出页里的行、按钮、图标和盖着的开关：手指按在上面也能上下滚动列表。滚起来时系统把这一下收走，
+     不算点、不震；真点了一下还是一下震、一下动作。外面的遥控器（转盘、触控板、键、快捷键、切换条）不变 */
+  .sheet button, .sheet .haptic { touch-action:pan-y; }
+
+  /* 横着拿的手机：高度不够一屏放下，按宽排、整页可以上下滚（转盘、触控板和键上不会滚） */
+  @media (orientation:landscape) and (max-height:540px) {
+    :root { --k:min(calc((100vw - var(--safe-l) - var(--safe-r)) / 390), calc(440px / 390)); }
+    html, body { overflow-y:auto; }
+    main { height:auto; min-height:100dvh; overflow:visible; }
+    .pad-area { flex-shrink:0; }
+  }
+  @media (prefers-reduced-motion:reduce) { .thumb, .mode text { transition:none; } }
+  /* 页面看不见的时候（切到了后台）什么都不慢慢变：回来时已经是变好的样子 */
+  .unseen *, .unseen *::before, .unseen *::after { transition:none !important; }
+
+  .browser-controls { display:flex; gap:8px; flex-wrap:wrap; flex:none; margin-top:calc(var(--k) * 16); font-family:-apple-system, system-ui, sans-serif; }
+  .browser-controls[hidden] { display:none; }
+  .browser-controls button { flex:1; min-width:100px; min-height:44px; padding:8px; border:0; border-radius:14px; background:#fff; color:var(--label);
+                             box-shadow:0 1px 2px rgba(30, 34, 40, .14), 0 0 0 .5px rgba(30, 34, 40, .08); font-size:13px; font-weight:600; }
+  .browser-controls button.pressed { transform:none; background:#e8e9ec; }
+  .note { flex-basis:100%; margin:0; padding:0 4px; font-size:13px; line-height:1.4; color:var(--ink-dim); }
+  .note:empty { display:none; }
+  .note.err { color:var(--warn); }
+
+  /* 弹出页（应用、设置、文件、链接和打字、睡眠定时）：从下面升起，iOS 设置那样的分组。底下暗的一层（.dim，脚本加的）
+     和弹出页怎么动都在脚本里（只动位置和透明度）；收起时（.closing）还看得见、但手指已经能按后面的遥控器 */
+  .scrim { position:fixed; inset:0; z-index:5; display:none; flex-direction:column; justify-content:flex-end;
+           color:var(--label); font-family:-apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; }
+  .scrim.show, .scrim.closing { display:flex; }
+  .scrim.show { z-index:6; }
+  .scrim.closing { pointer-events:none; }
+  /* 后面不压暗、改成模糊（顶上状态栏那条是页面的白，压暗了上下就不一样）：只在弹出页开着时才有，淡入淡出只动透明度 */
+  .dim { position:absolute; inset:0; background:rgba(242, 243, 246, .28); -webkit-backdrop-filter:blur(18px) saturate(1.2); backdrop-filter:blur(18px) saturate(1.2); }
+  /* 影子像 iOS 的弹出页：上沿一道很淡的边，加两层由近到远、越来越淡的影子 */
+  .sheet { position:relative; width:100%; max-width:460px; max-height:calc(100dvh - var(--safe-t) - 17px); margin:0 auto; overflow-y:auto; overscroll-behavior:contain;
+           padding:22px 16px calc(var(--safe-b) + 28px); border-radius:28px 28px 0 0; background:var(--sheet);
+           box-shadow:0 -.5px 0 rgba(0, 0, 0, .05), 0 -2px 10px rgba(0, 0, 0, .05), 0 -10px 36px rgba(0, 0, 0, .09);
+           display:flex; flex-direction:column; }
+  .sheet > *, .page > * { flex-shrink:0; }
+  /* 设置里一页推到下一页（像 iOS）：两页叠在弹出页里，上面那页从右边盖过来、带一点影子，下面那页往左挪一点、暗下去
+     （::after 是那层暗）；回上一页倒过来。弹出页的高度跟着慢慢变 */
+  .sheet.paging { overflow:hidden; }
+  .sheet.paging > .page { position:absolute; top:0; left:0; right:0; min-height:100%; padding:inherit; background:var(--sheet); }
+  .sheet.paging > .page::after { content:""; position:absolute; inset:0; background:#000; opacity:0; pointer-events:none; }
+  .sheet.paging > .page.upper { z-index:1; box-shadow:-1px 0 14px rgba(0, 0, 0, .07); }
+  .sheet.paging > .page.leaving { pointer-events:none; }
+  .sheet-head { display:flex; align-items:center; gap:8px; min-height:36px; padding:0 4px; }
+  .sheet-head h2 { flex:1; min-width:0; margin:0; font-size:22px; font-weight:700; letter-spacing:-.3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sheet-head .back:not([hidden]) + h2 { text-align:center; }
+  .sheet-head + .group { margin-top:22px; }
+  .pill { flex:none; height:36px; padding:0 16px; border:0; border-radius:18px; background:var(--fill); color:var(--label); font-size:15px; font-weight:600; }
+  .pill[hidden] { display:none; }
+  .pill.back { max-width:40%; padding:0 14px 0 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pill.back::before { content:"‹ "; }
+  .pill.on { background:var(--label); color:#fff; }
+  .pill.pressed { opacity:.6; }
+  .pill:disabled { opacity:.4; cursor:default; }
+  .page { display:flex; flex-direction:column; }
+  .page[hidden] { display:none; }
+  .section-label { margin:26px 0 8px 16px; font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--secondary); }
+  .page:not(#settings-main) .section-label { margin-top:22px; }
+  .section-head { display:flex; align-items:baseline; justify-content:space-between; margin:22px 16px 8px; }
+  .page .section-head .section-label { margin:0; }
+  .section-head span { font-size:13px; color:var(--secondary); }
+  .footnote { margin:8px 16px 0; font-size:13px; line-height:18px; color:var(--secondary); overflow-wrap:anywhere; }
+  .footnote[hidden], .footnote:empty { display:none; }
+  .footnote.err { color:var(--warn); } .footnote.ok { color:var(--ok); }
+
+  /* 分组和行：白底圆角 14，行高 50，行之间一道左边缩进的细线 */
+  .group { display:flex; flex-direction:column; border-radius:14px; background:#fff; overflow:hidden; --inset:16px; }
+  .group[hidden] { display:none; }
+  .group.icons { --inset:48px; } .group.apps-rows { --inset:58px; } .group.picks { --inset:84px; }
+  .group > * { position:relative; }
+  .group > * + *::before { content:""; position:absolute; top:0; left:var(--inset); right:0; height:1px; background:var(--separator); }
+  .row { display:flex; align-items:center; gap:12px; width:100%; min-height:50px; margin:0; padding:0 16px; border:0; background:transparent; color:var(--label);
+         font-size:16px; font-weight:400; text-align:left; }
+  /* 一行里没有 class 的那段字是名字：占满中间；图标、加减号、值和把手照自己的宽 */
+  .row > span:not([class]), .row > .grow, .pick-body > span:not([class]) { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .row .value { flex:none; max-width:55%; color:var(--secondary); font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row.nav::after { content:"›"; flex:none; margin:-2px 0 0 -4px; color:var(--chevron); font-size:22px; line-height:1; }
+  .row.pressed { transform:none; background:#e9e9ee; }
+  .row:disabled { color:var(--secondary); cursor:default; }
+  .row[hidden] { display:none; }
+  .row.empty { color:var(--secondary); }
+  .row .glyph { flex:none; width:20px; height:20px; }
+  .switch { flex:none; position:relative; width:51px; height:31px; border-radius:16px; background:var(--separator); transition:background-color .25s ease-out; }
+  .switch::after { content:""; position:absolute; top:2px; left:2px; width:27px; height:27px; border-radius:50%; background:#fff;
+                   box-shadow:0 0 0 .5px rgba(0, 0, 0, .04), 0 2px 6px rgba(0, 0, 0, .15), 0 1px 1px rgba(0, 0, 0, .08); transition:transform .3s cubic-bezier(.32,.72,0,1); }
+  [aria-checked="true"] > .switch { background:var(--green); }
+  [aria-checked="true"] > .switch::after { transform:translateX(20px); }
+  .choices .row[aria-pressed="true"]::after { content:""; flex:none; width:12px; height:6px; margin:-4px 2px 0 0; border-left:2.5px solid var(--blue); border-bottom:2.5px solid var(--blue); transform:rotate(-45deg); }
+  .choices .row .value { max-width:45%; }
+  .segmented { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:4px; padding:4px; border-radius:14px; background:#fff; }
+  .sheet-head + .segmented { margin-top:22px; }
+  .segmented.two { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  .segmented button { height:40px; border:0; border-radius:10px; background:transparent; color:var(--label); font-size:15px; font-weight:600; transition:background-color .25s ease-out, color .25s ease-out; }
+  .segmented button.on { background:var(--label); color:#fff; }
+  .segmented button.pressed { transform:none; background:#ececf0; transition:none; }
+  .segmented button.on.pressed { background:#3a3a3c; }
+  .action { margin-top:26px; height:50px; border:0; border-radius:14px; background:#fff; color:var(--blue-text); font-size:16px; font-weight:600; }
+  .action.primary { margin-top:16px; background:var(--label); color:#fff; }
+  .action.danger { color:var(--danger); }
+  .action.armed { background:#fde6e8; }
+  .action.pressed { transform:none; background:#e9e9ee; }
+  .action.primary.pressed { background:#3a3a3c; }
+  .action.armed.pressed { background:#f8d5d9; }
+  .action[hidden] { display:none; }
+
+  /* 应用：四列，72 的图标；电视上正开着的那个一圈蓝、字是 "On TV"；在放声音的右下角一个小黑块 */
+  .apps { margin-top:22px; display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:18px 10px; }
+  .app { display:flex; flex-direction:column; align-items:center; gap:7px; min-width:0; padding:0; border:0; background:none; color:#3a3a3c; font-size:12px; text-align:center; }
+  .app .tile { position:relative; width:100%; max-width:72px; aspect-ratio:1; }
+  .app .art { width:100%; height:100%; border-radius:17px; background:#2c2c2e; box-shadow:0 0 0 1px rgba(0, 0, 0, .06); display:grid; place-items:center; overflow:hidden; color:#fff; font-size:30px; font-weight:700; }
   .app .art img { width:100%; height:100%; display:block; object-fit:cover; }  /* 不是正方形的图（比如网易云 3:2）按比例铺满、裁掉两边，不压扁 */
-  .app .favourite { position:absolute; top:-6px; right:-6px; width:24px; height:24px; border-radius:50%; background:#ffd60a; color:#241d00; display:grid; place-items:center; font-size:15px; line-height:1; box-shadow:0 2px 6px rgba(0,0,0,.4); }
+  .app .name { max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* 按着一个应用：图标暗一点（像 iOS），松手慢慢亮回来；不缩 */
+  .app.pressed { transform:none; }
+  .app .tile::after { content:""; position:absolute; inset:0; border-radius:17px; background:rgba(0, 0, 0, .2); opacity:0; pointer-events:none; transition:opacity .3s ease-out; }
+  .app.pressed .tile::after { opacity:1; transition:none; }
+  .app.current .art { box-shadow:0 0 0 3px var(--sheet), 0 0 0 5px var(--blue); overflow:visible; }
+  .app.current .art img { border-radius:17px; }
+  .app.current .name { color:var(--blue-text); font-weight:600; }
+  .app.files .art { background:#fff; box-shadow:0 0 0 1px #e0e0e5; }
+  .app.files .art svg { width:34px; height:34px; }
+  .app.add .art { background:transparent; border:2px dashed #b8b8be; color:#8e8e93; font-size:30px; font-weight:300; }
+  .app.add .name { color:var(--secondary); }
+  .playing { position:absolute; right:-4px; bottom:-4px; height:22px; padding:0 7px; border:2px solid var(--sheet); border-radius:11px; background:var(--label); display:flex; align-items:center; gap:2px; }
+  .playing i { width:2px; height:7px; border-radius:1px; background:#fff; }
+  .playing i:nth-child(2) { height:11px; } .playing i:nth-child(3) { height:5px; }
+  .favourite { position:absolute; top:-6px; right:-6px; width:24px; height:24px; border-radius:50%; background:#ffd60a; color:#241d00; display:grid; place-items:center; font-size:15px; line-height:1; box-shadow:0 2px 6px rgba(0, 0, 0, .25); }
   .apps.editing { grid-template-columns:1fr; gap:12px; }
-  .app-editor { padding:12px; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.05); }
+  .app-editor { padding:12px; border-radius:14px; background:#fff; }
   .app-editor-head { display:flex; align-items:center; gap:12px; margin-bottom:12px; min-width:0; }
   .app-editor-head .app { width:48px; flex:none; }
-  .app-editor-name { font-size:16px; font-weight:650; overflow-wrap:anywhere; }
+  .app-editor-head .art { border-radius:11px; font-size:20px; }
+  .app-editor-name { font-size:16px; font-weight:600; overflow-wrap:anywhere; }
   .app-actions { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
-  .app-actions button { min-height:44px; min-width:44px; padding:10px 8px; border:0; border-radius:12px; background:rgba(255,255,255,.1); font-size:14px; font-weight:600; }
-  .app-actions .pin[aria-pressed="true"] { color:#ffe991; background:rgba(255,214,10,.13); }
-  .app-actions .remove { color:#ffd0d0; background:rgba(255,107,107,.13); }
+  .app-actions button { min-height:44px; padding:10px 8px; border:0; border-radius:10px; background:#f2f2f7; color:var(--label); font-size:15px; font-weight:600; }
+  .app-actions .pin[aria-pressed="true"] { color:#7a5a00; background:rgba(255, 214, 10, .22); }
+  .app-actions .remove { color:var(--danger); background:rgba(215, 0, 21, .08); }
   .app-actions button:disabled, #edit-apps:disabled, #restore:disabled { opacity:.4; cursor:default; }
-  #apps-sheet button:focus-visible { outline:3px solid #8ec7ff; outline-offset:3px; }
-  #apps-sheet .pill { min-height:44px; }
-  .app.add .art { background:transparent; border:2px dashed rgba(255,255,255,.25); box-shadow:none; color:var(--dim); font-weight:400; font-size:34px; }
-  .editing .app.add { display:none; }
-  .row-btn { height:52px; border:0; border-radius:16px; background:rgba(255,255,255,.1); font-size:16px; font-weight:600; text-align:left; padding:0 18px; }
-  .browser-controls { display:flex; gap:8px; flex-wrap:wrap; }
-  .browser-controls[hidden] { display:none; }
-  .browser-controls button { flex:1; min-width:100px; min-height:44px; padding:8px; border:1px solid var(--line); border-radius:14px; background:var(--glass); font-size:13px; font-weight:600; }
-  .row-btn.danger { background:rgba(255,107,107,.22); color:#ffd0d0; }
-  .note { font-size:13px; color:var(--dim); line-height:1.4; margin:0; padding:0 4px; }
-  .note.ok { color:var(--ok); } .note.err { color:var(--warn); }
-  .group-label { font-size:13px; font-weight:500; color:var(--dim); margin:6px 16px -6px; }
-  .cancel { height:50px; border:0; border-radius:999px; background:#fff; color:#000; font-weight:700; }
-  .field { width:100%; height:50px; border-radius:14px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.06); color:#fff; padding:0 14px; font:500 16px -apple-system, system-ui, sans-serif; -webkit-user-select:text; user-select:text; outline:0; }
-  .field:focus { border-color:rgba(255,255,255,.4); }
-  .sheet form { display:flex; flex-direction:column; gap:10px; margin:0; }
-  .sheet form.type { flex-direction:row; }
-  #text-sheet .pill { min-height:44px; }
-  .list { display:flex; flex-direction:column; gap:6px; }
-  .list button { display:flex; align-items:center; justify-content:space-between; gap:10px; height:50px; border:0; border-radius:14px; background:rgba(255,255,255,.07); padding:0 16px; font-size:15px; font-weight:600; text-align:left; }
-  .list button span:last-child { font-size:12px; color:var(--dim); font-weight:600; }
-  .list button[disabled] { opacity:.5; }
-  .file-path { color:var(--dim); font-size:13px; overflow-wrap:anywhere; }
-  .file-list button { min-height:50px; height:auto; padding:12px 16px; }
-  .file-list button span:first-child { overflow-wrap:anywhere; min-width:0; }
-  .file-actions { display:grid; gap:8px; }
-  .file-actions button { min-height:48px; }
-  #files-sheet button:focus-visible { outline:3px solid #8ec7ff; outline-offset:3px; }
-  #pair { position:fixed; inset:0; background:var(--ambient); display:none; flex-direction:column; justify-content:center; gap:14px; padding:24px; text-align:center; z-index:9; }
+  #restore-group { margin-top:22px; }
+  #restore { color:var(--blue-text); }
+
+  /* 快捷键设置：主屏的几个（可以拖着排）、应用一行一个；挑选页的红减号、绿加号和拖动的把手 */
+  .app-icon { flex:none; width:30px; height:30px; border-radius:7px; overflow:hidden; background:#2c2c2e; color:#fff; display:grid; place-items:center; font-size:15px; font-weight:700; box-shadow:0 0 0 1px #e0e0e5; }
+  .app-icon img { width:100%; height:100%; display:block; object-fit:cover; }
+  .apps-rows .row { min-height:56px; }
+  .apps-rows .row > span:not([class]) { flex:none; white-space:nowrap; }
+  .apps-rows .row .value { flex:1; max-width:none; text-align:right; }
+  .picks .row { min-height:48px; }
+  .sign { flex:none; position:relative; width:22px; height:22px; border-radius:50%; background:var(--green); }
+  .sign::before, .sign::after { content:""; position:absolute; left:6px; top:9.75px; width:10px; height:2.5px; border-radius:1px; background:#fff; }
+  .sign::after { transform:rotate(90deg); }
+  .sign.minus { background:var(--red); }
+  .sign.minus::after { display:none; }
+  button:disabled > .sign { opacity:.35; }
+  .remove-pick { flex:none; width:44px; height:44px; margin:0 -11px; padding:0; border:0; background:none; display:grid; place-items:center; }
+  .pick-body { display:flex; align-items:center; gap:12px; flex:1; min-width:0; min-height:48px; padding:0; border:0; background:none; color:inherit; font:inherit; text-align:left; }
+  .pick-body.pressed { transform:none; opacity:.6; }
+  .pick-body.nav::after { content:"›"; flex:none; margin:-2px 0 0 -4px; color:var(--chevron); font-size:22px; line-height:1; }
+  .handle { position:relative; z-index:1; flex:none; width:44px; height:44px; margin-right:-13px; padding:0 13px; display:flex; flex-direction:column; justify-content:center; gap:3px; touch-action:none; cursor:grab; }
+  .handle i { height:2px; border-radius:1px; background:var(--chevron); }
+  .group > .lifted { z-index:2; background:#fff; box-shadow:0 6px 18px rgba(0, 0, 0, .16); transition:none; }
+  .group > .lifted::before, .group > .lifted + *::before { display:none; }
+
+  /* 链接 / 打字：白色输入栏，右边一个按钮 */
+  .type { display:flex; align-items:center; gap:8px; height:50px; margin:0; padding:0 6px 0 16px; border-radius:14px; background:#fff; }
+  .type input { flex:1; min-width:0; border:0; outline:0; background:transparent; color:var(--label); font:400 16px -apple-system, system-ui, sans-serif; -webkit-user-select:text; user-select:text; }
+  .website-form button { flex:none; height:38px; padding:0 16px; border:0; border-radius:10px; background:var(--label); color:#fff; font-size:15px; font-weight:600; }
+  .website-form button:disabled { opacity:.45; }
+  .type .erase { flex:none; width:44px; height:44px; padding:0; border:0; border-radius:10px; background:transparent; display:grid; place-items:center; color:var(--label); }
+  .search-field { width:100%; height:44px; margin-top:16px; padding:0 14px; border:0; border-radius:12px; background:#fff; color:var(--label); font:400 16px -apple-system, system-ui, sans-serif; -webkit-user-select:text; user-select:text; outline:0; }
+  #add-sheet form { display:flex; flex-direction:column; margin:16px 0 0; }
+  .form .row > span:first-child { flex:none; width:84px; }
+  .form input { flex:1; min-width:0; height:44px; border:0; outline:0; background:transparent; color:var(--label); font:inherit; text-align:right; -webkit-user-select:text; user-select:text; }
+  .form input::placeholder { color:var(--chevron); }
+  .list { margin-top:12px; }
+  .list:empty { display:none; }
+  .list .row .value { font-size:13px; }
+  .file-path { margin:14px 16px 0; color:var(--secondary); font-size:13px; overflow-wrap:anywhere; }
+  .movie-name { margin:0 16px 8px; font-size:15px; font-weight:600; overflow-wrap:anywhere; }
+  .upload { position:relative; display:flex; align-items:center; min-height:50px; margin:12px 0; padding:0 16px; border-radius:14px; background:#fff; color:var(--blue-text); font-size:16px; font-weight:600; }
+  .upload input { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+  .item { padding-right:8px; }
+  .item .text { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; padding:8px 0; overflow-wrap:anywhere; }
+  .item .detail { font-size:13px; color:var(--secondary); }
+  .item .item-actions { display:flex; gap:4px; flex:none; }
+  .link { height:36px; padding:0 12px; border:0; border-radius:18px; background:transparent; color:var(--blue-text); font-size:15px; font-weight:600; }
+  .link.danger { color:var(--danger); }
+  .link.pressed, .type .erase.pressed { transform:none; opacity:.4; }
+
+  /* 配对 */
+  #pair { position:fixed; inset:0; z-index:9; display:none; flex-direction:column; justify-content:center; gap:14px; padding:24px; background:var(--page); text-align:center; }
   #pair.show { display:flex; }
-  #pair h1 { margin:0; font-size:26px; }
-  #pair p { margin:0; color:var(--dim); }
-  #pair input:not([type="checkbox"]) { font:600 30px -apple-system, system-ui, Roboto, sans-serif; font-variant-numeric:tabular-nums; letter-spacing:.3em; text-align:center; background:var(--glass); color:#fff; border:1px solid rgba(255,255,255,.2); border-radius:14px; height:64px; -webkit-user-select:text; user-select:text; }
-  #pair #device-name { font-size:16px; letter-spacing:normal; height:48px; }
-  #pair label { color:var(--dim); font-size:14px; }
-  #pair button { height:52px; border:0; border-radius:999px; background:#fff; color:#000; font-weight:700; }
+  #pair h1 { margin:0; font-size:26px; letter-spacing:-.5px; }
+  #pair p { margin:0; color:var(--ink-dim); }
+  #pair input { height:64px; border:1px solid rgba(60, 64, 80, .12); border-radius:14px; background:#fff; color:var(--label); text-align:center;
+                font:600 30px -apple-system, system-ui, Roboto, sans-serif; font-variant-numeric:tabular-nums; letter-spacing:.3em; -webkit-user-select:text; user-select:text; }
+  #pair #device-name { height:48px; font-size:16px; letter-spacing:normal; }
+  #pair button { height:52px; border:0; border-radius:999px; background:var(--label); color:#fff; font-weight:700; }
+  #pair-err { color:var(--warn) !important; }
+
+  /* 访客遥控器：只有播放控制 */
   #guest-note { display:none; }
   body.guest #guest-note { display:block; }
-  body.guest .actions, body.guest .tabs, body.guest .surface, body.guest #open-text,
-  body.guest .keys [data-a="back"], body.guest #browser-controls [data-a="previouscontrol"],
-  body.guest #browser-controls [data-a="nextcontrol"], body.guest #browser-retry,
+  body.guest header, body.guest .mode, body.guest .pad-area, body.guest .shortcuts-label, body.guest .chips,
+  body.guest #browser-controls [data-a="previouscontrol"], body.guest #browser-controls [data-a="nextcontrol"], body.guest #browser-retry,
   body.guest .scrim { display:none !important; }
-
-  /* Settings sheet: a main page and sub-pages, iOS-style grouped rows. */
-  /* Rows of small text over the remote's controls need more than the glass gives. */
-  .sheet.settings { gap:0; padding-top:12px; background:rgba(28,30,40,.95); }
-  .page { display:flex; flex-direction:column; gap:8px; }
-  .page[hidden] { display:none; }
-  .page .sheet-head { min-height:52px; }
-  .section-label { font-size:13px; font-weight:500; color:var(--dim); margin:16px 16px 0; }
-  .footnote { margin:0 16px; font-size:13px; line-height:18px; color:var(--dim); }
-  .footnote[hidden] { display:none; }
-  .footnote.ok { color:var(--ok); } .footnote.err { color:var(--warn); }
-  .group { display:flex; flex-direction:column; border-radius:14px; background:var(--card); overflow:hidden; margin:0; }
-  .group[hidden] { display:none; }
-  .row { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:52px; padding:0 16px; border:0; background:transparent; color:#fff; font-size:16px; font-weight:500; text-align:left; }
-  .group > .row + .row { border-top:1px solid var(--divider); }
-  .row > span:first-child { min-width:0; margin-right:auto; }
-  .row .value { display:flex; align-items:center; min-width:0; max-width:55%; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .row.nav::after { content:""; flex:none; width:7px; height:7px; margin:0 2px 0 -4px; border-top:2px solid rgba(235,235,245,.35); border-right:2px solid rgba(235,235,245,.35); transform:rotate(45deg); }
-  .row.pressed, .tile.pressed, .segmented button.pressed { transform:none; background:rgba(255,255,255,.12); }
-  .switch { appearance:none; -webkit-appearance:none; flex:none; position:relative; width:51px; height:31px; margin:0; border-radius:16px; background:rgba(120,120,128,.36); transition:background .15s; cursor:pointer; }
-  .switch::before { content:""; position:absolute; top:2px; left:2px; width:27px; height:27px; border-radius:50%; background:#fff; box-shadow:0 2px 4px rgba(0,0,0,.3); transition:transform .15s; }
-  .switch:checked { background:var(--on); }
-  .switch:checked::before { transform:translateX(20px); }
-  .segmented { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:4px; padding:4px; border-radius:14px; background:var(--card); }
-  .segmented button { height:40px; border:0; border-radius:10px; background:transparent; font-size:15px; font-weight:600; transition:background-color .15s, color .15s; }
-  .segmented button.on { background:#fff; color:#000; }
-  .tiles { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
-  .tile { height:52px; border:0; border-radius:14px; background:var(--card); font-size:16px; font-weight:600; }
-  .tile.wide { margin-top:16px; }
-  .tile.primary { background:#fff; color:#000; }
-  .tile.danger { color:var(--danger); }
-  .tile.armed { background:rgba(255,105,97,.22); color:#ffd0d0; }
-  .choices .row[aria-pressed="true"]::after { content:""; flex:none; width:12px; height:6px; margin:-4px 2px 0 0; border-left:2.5px solid var(--on); border-bottom:2.5px solid var(--on); transform:rotate(-45deg); }
-  .choices .row:disabled { color:var(--dim); cursor:default; }
-  .choices .row .value { max-width:45%; }
-  .page-head { display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); align-items:center; min-height:52px; }
-  .page-head > span { font-size:17px; font-weight:700; white-space:nowrap; }
-  .back { justify-self:start; display:flex; align-items:center; gap:6px; height:44px; padding:0 4px; border:0; background:none; font-size:16px; font-weight:500; }
-  .back::before { content:""; width:9px; height:9px; border-left:2.5px solid #fff; border-bottom:2.5px solid #fff; transform:rotate(45deg); margin-left:4px; }
-  .form .row > span:first-child { width:84px; flex:none; }
-  .form input { flex:1; min-width:0; height:44px; border:0; outline:0; background:transparent; color:#fff; font:inherit; text-align:right; -webkit-user-select:text; user-select:text; }
-  .form input::placeholder { color:rgba(235,235,245,.35); }
-  .item { padding-right:8px; }
-  .item .text { display:flex; flex-direction:column; gap:2px; min-width:0; padding:8px 0; }
-  .item .text span { overflow-wrap:anywhere; }
-  .item .detail { font-size:13px; color:var(--dim); }
-  .item .item-actions { display:flex; gap:4px; flex:none; }
-  .link { height:36px; padding:0 12px; border:0; border-radius:18px; background:transparent; font-size:15px; font-weight:600; }
-  .link.danger { color:var(--danger); }
+  body.guest .controls { justify-content:center; }
+  /* 返回键藏起来但留着它的位置：别的键不挪 */
+  body.guest .keys [data-press="back"] { visibility:hidden; pointer-events:none; }

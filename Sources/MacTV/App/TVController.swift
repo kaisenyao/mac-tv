@@ -37,9 +37,15 @@ final class TVController: NSObject, ObservableObject {
     let jellyfin: JellyfinServers
     let networkShares: NetworkShares
     let updater: Updater
-    let topShelf: TopShelfFeed
     let feedback: Feedback
     private var coordinatorChanges: [AnyCancellable] = []
+
+    /// 手机遥控器上按住的键（规矩和键盘一样，见 PhonePresses）
+    lazy var phonePresses = PhonePresses(tv: self)
+    /// 双指滑动：Mac 的触控板、滚轮和手机遥控器的触控板共用（见 TrackpadGestures）
+    lazy var trackpadGestures = TrackpadGestures(tv: self)
+    /// 哔哩哔哩、网易云、YouTube 在主屏顶部的轮播（见 AppShelf）
+    lazy var appShelf = AppShelf(tv: self)
 
     // MARK: - State
 
@@ -51,7 +57,7 @@ final class TVController: NSObject, ObservableObject {
     //
     // 屏幕上每一块能操作的地方都属于下面一类，横着、竖着各自归一类。各应用只申报"焦点现在所在的地方横 / 竖是哪一类"
     // （module(horizontal:)）和"长条里朝这边还有没有下一个"（flickCanMove），方向、走几格、惯性、声音、震动都由这一处决定：
-    // 双指滑动在 main.swift，按键音和震动在 handle(_:) 里按这里的分类挑。
+    // 双指滑动在 TrackpadGestures.swift，按键音和震动在 handle(_:) 里按这里的分类挑。
     //
     // - strip 长条：窗口不动、内容在底下滚的一长排（视频排、歌单排、播放列表、相关视频、歌单页的歌）。选中是加一圈框。
     //   手指带着内容走：往左 / 往上滑是下一个。轻轻一拨一格；用力一甩接着滑，越往后越慢，到这一条的头就停。
@@ -75,9 +81,16 @@ final class TVController: NSObject, ObservableObject {
 
     func module(horizontal: Bool) -> Module {
         if activeSheet != nil { return .picker }   // 弹出的面板：一列固定的选项
+        if browserChromeUp { return browserStore.chromeModule(horizontal: horizontal) }   // 浏览器网页上的标签栏、"⋯"菜单
         if bilibiliOpen { return bilibiliStore.module(horizontal: horizontal) }
         if neteaseOpen { return neteaseStore.module(horizontal: horizontal) }
+        if browserOpen, mode == .launcher { return horizontal ? .strip : .drawer }
+        if dedaoOpen { return dedaoStore.module(horizontal: horizontal) }
         if movies != nil { return .drawer }
+        // 主屏顶部的轮播（哔哩哔哩、网易云、YouTube）：左右是翻页，内容跟着手走，一次滑动翻一页；上下离开这一栏
+        if case .shelf = focus, AppShelf.services.contains(shelfService.id), appShelf.current(for: shelfService.id) != nil {
+            return .drawer
+        }
         // 主屏：左右是在一排固定的图标里挑；上下是在 Top Shelf、图标、下面的格子之间翻
         return horizontal ? .picker : .drawer
     }
@@ -85,25 +98,65 @@ final class TVController: NSObject, ObservableObject {
     /// 拖进度：手指横着滑了多远（往右为正）、手指抬起
     func scrubMove(points: Double) {
         let crossed = bilibiliOpen ? bilibiliStore.player.scrubMove(points: points)
-            : neteaseOpen ? neteaseStore.scrubMove(points: points) : false
+            : neteaseOpen ? neteaseStore.scrubMove(points: points)
+            : dedaoOpen ? dedaoStore.player.scrubMove(points: points) : false
         if crossed { feedback.play(.move, from: .trackpad) }   // 拖过一段响一声，像旋钮的档位
     }
     func endScrub() {
         if bilibiliOpen { bilibiliStore.player.endScrub() } else if neteaseOpen { neteaseStore.endScrub() }
+        else if dedaoOpen { dedaoStore.player.endScrub() }
+    }
+
+    /// 按住确认会打开的东西（和 main.swift 里按住回车是同一套条件）。打开了返回 true
+    func openHoldMenu() -> Bool {
+        if browserPageInFront { return browserStore.openMenu() }   // 浏览器的网页：标签栏的"⋯"菜单
+        guard mode == .launcher, activeSheet == nil else { return false }
+        if bilibiliOpen, !bilibiliStore.editing {
+            let store = bilibiliStore, player = store.player
+            if player.current == nil {
+                guard store.cardMenu == nil, !store.settingsOpen else { return false }
+                return store.openCardMenu()
+            }
+            guard !player.panelVisible, !player.qualityMenuVisible, !player.relatedVisible else { return false }
+            return player.openPanel()
+        }
+        if neteaseOpen, !neteaseStore.typing, neteaseStore.account != nil, neteaseStore.menu == nil {
+            return neteaseStore.openCardMenu()
+        }
+        // 得到的播放界面：按住确认 = "⋯"菜单（倍速、定时关闭、讲目列表），同网易云
+        if dedaoOpen { return dedaoStore.openPlayerMenu() }
+        return false
+    }
+
+    /// 转盘这一格能不能走：只在焦点所在的这一排 / 这一列里走，不跨到别的区域（各应用自己判断）
+    func wheelCanMove(_ direction: RemoteCommand.Direction) -> Bool {
+        if activeSheet != nil { return true }
+        if browserChromeUp { return browserStore.chromeCanMove(direction) }   // 浏览器的标签栏、"⋯"菜单
+        if bilibiliOpen { return bilibiliStore.wheelCanMove(direction) }
+        if neteaseOpen { return neteaseStore.wheelCanMove(direction) }
+        if browserOpen, mode == .launcher { return browserStore.canMove(direction) }
+        if dedaoOpen { return dedaoStore.canMove(direction) }
+        return true
     }
 
     /// 转盘沿着哪个方向走：焦点所在的这一排是横的（首页那几排、顶栏、音质栏、播放列表、排序）还是竖的（菜单、左边栏、设置、歌单里的歌）
     func wheelRunsHorizontally() -> Bool {
         if activeSheet != nil { return false }   // 弹出的面板都是竖着一列
+        if browserChromeUp { return browserStore.menu == nil }   // 浏览器的标签栏横着一排；"⋯"菜单竖着一列
         if bilibiliOpen { return bilibiliStore.wheelRunsHorizontally }
         if neteaseOpen { return neteaseStore.wheelRunsHorizontally }
+        if browserOpen, mode == .launcher { return browserStore.focus != .field }
+        if dedaoOpen { return dedaoStore.wheelRunsHorizontally }
         return true                               // 主屏：一排图标
     }
 
     /// 长条里朝这个方向还有没有下一个。没有就停：一次滑动接着走的（第二格起、甩出去的惯性）不离开这一条
     func flickCanMove(_ direction: RemoteCommand.Direction) -> Bool {
+        if browserChromeUp { return browserStore.chromeCanMove(direction) }
         if bilibiliOpen { return bilibiliStore.flickCanMove(direction) }
         if neteaseOpen { return neteaseStore.flickCanMove(direction) }
+        if browserOpen, mode == .launcher { return browserStore.canMove(direction) }
+        if dedaoOpen { return dedaoStore.canMove(direction) }
         return false
     }
     /// The top-row app whose content the Top Shelf shows.
@@ -127,11 +180,17 @@ final class TVController: NSObject, ObservableObject {
     @Published var bilibiliOpen = false
     let neteaseStore = NeteaseStore()
     @Published var neteaseOpen = false
+    /// 浏览器的开始页开着（见 BrowserStore）
+    @Published var browserOpen = false
+    let browserStore = BrowserStore()
+    /// 得到（听书、课程）的原生页面开着（见 DedaoStore）
+    @Published var dedaoOpen = false
+    let dedaoStore = DedaoStore()
     /// Who's watching: their apps and their sign-ins.
     @Published var profile: Profile
 
     /// The focused button on Mac TV's own Brave screen.
-    @Published var browserFocus = 0
+    @Published var braveFocus = 0
     let browserPreferences: BrowserPreferences
     /// Toasts, the volume indicator and controller banners.
     let notices = Notices()
@@ -251,6 +310,11 @@ final class TVController: NSObject, ObservableObject {
     var openedSteam = false
     var steamObservers: [NSObjectProtocol] = []
     var pointer: CGPoint?
+    /// 手机触控板的鼠标移动：摊到屏幕的每一帧里走（见 PointerGlide）
+    lazy var pointerGlide = PointerGlide(move: { [weak self] dx, dy in self?.applyPointerMove(dx: dx, dy: dy) },
+                                         ended: { [weak self] in self?.pointerStopped() })
+    /// 上一次告诉界面"鼠标动了"是什么时候（见 applyPointerMove）
+    var lastHoverEvent: CFTimeInterval = 0
 
     // MARK: - Lifecycle
 
@@ -266,7 +330,6 @@ final class TVController: NSObject, ObservableObject {
         jellyfin = appServices.jellyfin
         networkShares = appServices.networkShares
         updater = appServices.updater
-        topShelf = appServices.topShelf
         feedback = appServices.feedback
         self.browserPreferences = browserPreferences ?? BrowserPreferences()
         let store = profiles ?? ProfileStore(folder: library.storageFolder)
@@ -344,6 +407,12 @@ final class TVController: NSObject, ObservableObject {
     }
 
     private func handleInLauncher(_ command: RemoteCommand) {
+        // 手机触控板的鼠标（移动、点击）：在哪都是鼠标，哔哩哔哩、网易云里也一样，不交给应用当按键
+        switch command {
+        case .pointer(let dx, let dy): movePointer(dx: dx, dy: dy); return
+        case .click: clickPointer(); return
+        default: break
+        }
         switch sheets.top {
         case .setup: handleSetup(command); return
         case .profilePicker: handleProfiles(command); return
@@ -367,6 +436,14 @@ final class TVController: NSObject, ObservableObject {
             neteaseStore.handle(command)
             return
         }
+        if browserOpen {
+            browserStore.handle(command)
+            return
+        }
+        if dedaoOpen {
+            dedaoStore.handle(command)
+            return
+        }
         if movies != nil {
             handleMovies(command)
             return
@@ -387,18 +464,28 @@ final class TVController: NSObject, ObservableObject {
             }
         case .pointer(let dx, let dy): movePointer(dx: dx, dy: dy)
         case .click: clickPointer()
+        case .playPause: toggleBackgroundAudio()
         default: break
         }
     }
 
     private var feedbackState: String {
-        String(describing: (focus, sheets, movies, mode == .launcher)) + (bilibiliOpen ? bilibiliStore.focusKey : "")
+        // 主屏顶部的轮播翻了一页也算走了一格（焦点还在"播放"上，但要有声音和震动）
+        String(describing: (focus, sheets, movies, mode == .launcher)) + "\(appShelf.turns)"
+            + (bilibiliOpen ? bilibiliStore.focusKey : "")
             + (neteaseOpen ? neteaseStore.focusKey : "")
+            + (browserOpen ? browserStore.focusKey : "")
+            + (dedaoOpen ? dedaoStore.focusKey : "")
     }
 
     // MARK: - Command Dispatch
 
     func handle(_ command: RemoteCommand, from source: Feedback.Source = .keyboard) {
+        // 手机遥控器上的按键（点一下 / 按住 / 松开）：按键盘的规矩换成具体的动作，再走下面同一条路
+        if case .press(let key, let phase) = command {
+            phonePresses.handle(key, phase, from: source)
+            return
+        }
         if source == .remote {
             noteRemoteConnection()
             if displaysSleeping {
@@ -413,10 +500,9 @@ final class TVController: NSObject, ObservableObject {
         case .screenOff, .screenOn, .sleepMac: break
         default: if dismissedScreensaver { return }
         }
-        Analytics.noteInput(source)
 
         switch command {
-        case .pointer, .click, .scroll: break
+        case .pointer, .click, .pointerHold, .scroll: break
         default:
             NSCursor.setHiddenUntilMouseMoves(true)
             suppressHover = true
@@ -431,14 +517,41 @@ final class TVController: NSObject, ObservableObject {
             if mode == .launcher, module(horizontal: true) == .scrub {
                 for _ in 0..<count {
                     if bilibiliOpen { bilibiliStore.player.scrub(by: forward ? 5 : -5) } else if neteaseOpen { neteaseStore.nudge(forward ? 5 : -5) }
+                    else if dedaoOpen { dedaoStore.player.skip(forward ? 5 : -5) }
                 }
                 feedback.play(.move, from: source)
                 return
             }
             let horizontal = wheelRunsHorizontally()
-            for _ in 0..<count { handle(.move(horizontal ? (forward ? .right : .left) : (forward ? .down : .up)), from: source) }
+            let direction: RemoteCommand.Direction = horizontal ? (forward ? .right : .left) : (forward ? .down : .up)
+            for _ in 0..<count {
+                // 只在这一排 / 这一列里走，到头就停（转进左边栏、顶栏这些别的地方要按方向键）
+                guard (mode != .launcher && !browserChromeUp) || wheelCanMove(direction) else { break }   // 浏览器的标签栏也到头就停
+                handle(.move(direction), from: source)
+            }
             return
         case .home: goHome(); return
+        case .swipe(let dx, let dy, let phase):
+            // 手机触控板上的双指滑动：和 Mac 触控板上滑一样（同一套门槛、惯性、声音）。
+            // 不归它管的地方（网页播放器里）就滚动网页，和以前一样
+            let sample = TrackpadGestures.Sample(
+                dx: dx, dy: dy,
+                phase: ["began": .began, "changed": .changed, "ended": .ended][phase] ?? .none,
+                momentum: phase == "momentum" ? .changed : (phase == "momentumEnd" ? .ended : .none),
+                precise: true)
+            if !trackpadGestures.feed(sample, from: source), phase == "changed" || phase == "momentum", dy != 0 {
+                handle(.scroll(dy: -dy * 3), from: source)
+            }
+            return
+        case .pointerHold:
+            holdPointer()
+            return
+        case .longSelect:
+            // 手机遥控器上按住 OK = 键盘上按住回车（同一个键）：在视频卡片、歌上是菜单，看视频时是右边的面板；
+            // 没有菜单可开的地方就是一次普通的确认
+            if openHoldMenu() { feedback.play(.select, from: source); return }
+            handle(.select, from: source)
+            return
         case .activateBrowser:
             if playbackCoordinator.iinaOpen {
                 playbackCoordinator.activateIINA()
@@ -452,11 +565,11 @@ final class TVController: NSObject, ObservableObject {
             return
         case .volume(let delta):
             if playbackCoordinator.iinaOpen { playbackCoordinator.handleIINACommand(command) }
-            else { showVolume(SystemControl.changeVolume(by: delta)) }
+            else { audioCoordinator.pressVolume(by: delta) }   // 系统调不了的输出：显示器的 DDC 或 Mac TV 自己的音量
             return
         case .mute:
             if playbackCoordinator.iinaOpen { playbackCoordinator.handleIINACommand(command) }
-            else { showVolume(SystemControl.toggleMute()) }
+            else { audioCoordinator.pressMute() }
             return
         case .screenOff:
             displayCoordinator.noteDisplaySleep(true)
@@ -464,6 +577,7 @@ final class TVController: NSObject, ObservableObject {
             return
         case .screenOn: wakeDisplays(); return
         case .sleepTimer(let minutes): setSleepTimer(minutes: minutes); return
+        case .shortcut(let id): runShortcut(id, from: source); return   // 手机遥控器上的快捷键（见 RemoteShortcuts）
         case .setting(let key, let value):
             if key == "autoSkip" { autoSkip = value }
             if key == "autoNext" { autoNext = value }
@@ -526,12 +640,13 @@ final class TVController: NSObject, ObservableObject {
             let changed = feedbackState != before
             switch command {
             case .move where changed: feedback.play(moveCue, from: source)
-            case .seek: feedback.play(.move, from: source)   // 快进 / 快退（滚轮、手机遥控器）：轻快的"嗒"
+            case .seek: feedback.play(.move, from: source)   // 快进 / 快退（滚轮、手柄的肩键）：轻快的"嗒"
             case .select: feedback.play(.select, from: source)
             case .back where changed: feedback.play(.back, from: source)
             default: break
             }
         case .player(let service):
+            if handleInBrowserChrome(command, from: source) { break }   // 浏览器网页：标签栏、"⋯"菜单，网页里的返回
             if !bilibiliStore.handleInPlayer(command, service: service), !neteaseStore.handleInPlayer(command, service: service) {
                 playbackCoordinator.handleInPlayer(command, service: service)
             }
@@ -541,16 +656,30 @@ final class TVController: NSObject, ObservableObject {
 
     // MARK: - Opening & Home
 
+    /// 按编号打开一个应用（和在主屏上选它一样，走 open：先关掉别的应用）
+    func openApp(_ id: String) {
+        guard let app = services.first(where: { $0.id == id }) ?? Catalog.services.first(where: { $0.id == id }) else { return }
+        open(app)
+    }
+
     func open(_ service: Service) {
-        if service.id == BilibiliStore.appID { closeNetease(); openBilibili(); return }
+        if service.id == DedaoStore.appID {
+            closeNetease(); if bilibiliOpen { closeBilibili() }; if browserOpen { closeBrowser() }
+            openDedao(); return
+        }
+        closeDedao()   // 开别的应用时，得到不能还在后台放着
+        if service.id == BrowserStore.appID { closeNetease(); if bilibiliOpen { closeBilibili() }; openBrowser(); return }
+        if browserOpen { closeBrowser() }
+        if service.id == BilibiliStore.appID { openBilibili(); return }   // 它自己会停下网易云、得到、浏览器
         if bilibiliOpen { closeBilibili() }   // 开别的应用时，哔哩哔哩不能还在后台放着
         if service.id == NeteaseStore.appID { openNetease(); return }
-        closeNetease()
+        // 开网站、Mac 应用、Steam 游戏：网易云停下（不然两边一起响）；设置、添加应用、影片的片库不放东西，后台的歌接着放
+        switch service.kind {
+        case .web, .app, .steam: closeNetease()
+        case .movies, .addApp, .settings: break
+        }
         playbackCoordinator.closeIINAPlayback()
         playbackCoordinator.closeExternalBrowser()
-        var opened = ["app": analyticsAppName(service)]
-        if case .web = service.kind { opened["player"] = browserPreferences.choice(for: profile.id).rawValue }
-        Analytics.send(.appOpened, opened)
         playbackCoordinator.resetPlaybackRequest()
         sheets.closeDismissible()
         switch service.kind {
@@ -564,7 +693,6 @@ final class TVController: NSObject, ObservableObject {
             NSWorkspace.shared.open(SteamLibrary.launchURL(for: appID))
             openedSteam = true
             if appID != SteamLibrary.bigPicture.appID { watchForSteamGame() }
-            showToast("Opening \(service.name) in Steam")
         case .movies:
             openMovies()
         case .addApp:
@@ -583,6 +711,8 @@ final class TVController: NSObject, ObservableObject {
         movies = nil
         closeBilibili()
         leaveNetease()
+        closeBrowser()
+        closeDedao()
         playbackCoordinator.closeWebPlayback()
         mode = .launcher
         sheets.closeDismissible()
@@ -595,6 +725,20 @@ final class TVController: NSObject, ObservableObject {
 
     var idleForUpdate: Bool {
         (screensaver || displaysSleeping) && mode == .launcher && setup == nil && !playbackCoordinator.isAnyPlaybackActive
+            && !nativePlaybackActive
+    }
+
+    /// 哔哩哔哩、网易云、得到自己的播放器正在放（屏保底下、显示器睡着时也可能在放歌、放书）
+    var nativePlaybackActive: Bool {
+        bilibiliStore.player.blocksScreensaver
+            || (neteaseStore.current != nil && !neteaseStore.paused)
+            || (dedaoStore.player.current != nil && !dedaoStore.player.paused)
+    }
+
+    /// 主屏上按播放 / 暂停：后台在放的网易云、得到停下或接着放
+    private func toggleBackgroundAudio() {
+        if neteaseStore.current != nil { neteaseStore.toggleFromHome() }
+        else if dedaoStore.player.current != nil { dedaoStore.player.togglePause() }
     }
 
     var braveInstalled: Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.brave.Browser") != nil }
@@ -610,7 +754,7 @@ final class TVController: NSObject, ObservableObject {
 
     func stepWebsitePlayer() {
         let next = browserPreferences.choice(for: profile.id) == .embedded ? BrowserChoice.brave : .embedded
-        if !setWebsitePlayer(next.rawValue) { showToast("Install Brave Browser to select it.") }
+        if !setWebsitePlayer(next.rawValue) { showToast("Brave Browser Isn't Installed") }
     }
 
     private func pairingChanged() {
@@ -649,10 +793,6 @@ final class TVController: NSObject, ObservableObject {
     func startControllers() {
         controllerInput = ControllerInput(tv: self)
         controllerInput?.start()
-        if ProcessInfo.processInfo.environment["MACTV_PREVIEW_CONTROLLER"] == "1" {
-            controllerChanged(ControllerInfo(name: "DualSense Wireless Controller", battery: 0.7, selectSymbol: "xmark.circle",
-                                             backSymbol: "circle.circle", menuSymbol: "line.3.horizontal.circle"), connected: true)
-        }
     }
 
     func showControllerNotice(_ notice: ControllerNotice) { notices.showController(notice) }

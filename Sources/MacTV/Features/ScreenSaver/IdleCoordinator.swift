@@ -31,14 +31,13 @@ final class IdleCoordinator: ObservableObject {
 
     private func checkIdle() {
         guard let tv, tv.mode == .launcher, !tv.playbackCoordinator.isAnyPlaybackActive, !tv.displaysSleeping,
-              tv.activeSheet == nil, tv.movies == nil, tv.bilibiliStore.player.current == nil, !screensaver,
+              tv.activeSheet == nil, tv.movies == nil, !tv.bilibiliStore.player.blocksScreensaver, !screensaver,
               Date().timeIntervalSince(lastActivity) > TimeInterval(ScreenSaverSettings.delayMinutes * 60) else { return }
         showScreensaver()
     }
 
     func showScreensaver() {
         guard tv?.displaysSleeping != true else { return }
-        Analytics.send(.screenSaverStarted, ["wallpaper": ScreenSaverSettings.wallpaper.rawValue])
         ScreenSaverSettings.playing = ScreenSaverSettings.pictures(for: ScreenSaverSettings.wallpaper)
         lastActivity = Date()
         screensaver = true
@@ -51,7 +50,6 @@ final class IdleCoordinator: ObservableObject {
         sleepTimer?.invalidate()
         guard minutes > 0 else {
             sleepAt = nil
-            tv?.showToast("Sleep timer off")
             return
         }
         sleepAt = Date().addingTimeInterval(TimeInterval(minutes * 60))
@@ -63,6 +61,5 @@ final class IdleCoordinator: ObservableObject {
                 SystemControl.displayOff()
             }
         }
-        tv?.showToast("Sleep timer: \(minutes) minutes")
     }
 }

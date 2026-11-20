@@ -9,7 +9,7 @@ Thanks for helping. Bug reports and ideas go to [GitHub issues](https://github.c
 - Match the surrounding code and the Apple TV look: Liquid Glass only over real content, a white platter for focus, the `Font.tv` type scale, and SF Symbols in one colour.
 - Settings and Arrange Apps rows are one line: a title and, on the right, a value, switch, chevron or buttons. No second line under the title. Control Center tiles keep their status line.
 - Mac TV opens official services only. Don't add, suggest or document sites that host pirated content.
-- Analytics events live only in `Analytics.swift`. Never send what anyone watches, titles, addresses, file names or profile names.
+- There are no analytics. Never send what anyone watches, titles, addresses, file names or profile names anywhere.
 
 ## Build from source
 
@@ -63,13 +63,13 @@ Built-in checks, run on the app's binary:
 One Swift package, one app target, organised by feature:
 
 - `Sources/MacTV/App`: the entry point, `TVController` (the app's state and input routing), `SheetStack` (which sheets are open, and which is on top), `Notices` (toasts, the volume indicator and controller banners), TV mode, `RootView` and the built-in self tests.
-- `Sources/MacTV/Core`: app-wide services with no screen of their own: `Preferences` (every setting, published), system controls, sounds, logging and the diagnostics report, analytics and updates.
+- `Sources/MacTV/Core`: app-wide services with no screen of their own: `Preferences` (every setting, published), system controls, sounds, logging and the diagnostics report, and updates.
 - `Sources/MacTV/DesignSystem`: the Apple TV look shared by every screen: type scale, Liquid Glass, motion and the TV canvas.
 - `Sources/MacTV/Features/<Feature>`: everything one feature needs, kept together: its model, its `TVController` extension and its views. Home, Playback, Movies, Remote, Display, Audio, Controllers, Screen Saver, Settings, Profiles and Games.
 
 The phone remote is ordinary web files in `Features/Remote/Page` (`remote.html`, `remote.css`, `remote.js`), bundled as a package resource and served as one page with the stylesheet and script inline. The web tests read the same files.
 
-App-wide services (preferences, the movie library, Jellyfin, network shares, updates, Top Shelf, sounds) come in through `AppServices` and are held by `TVController`; feature code uses `tv.movieLibrary` and the like rather than `.shared`, so tests can hand in their own. The package builds in the Swift 6 language mode, so the compiler checks thread safety.
+App-wide services (preferences, the movie library, Jellyfin, network shares, updates, sounds) come in through `AppServices` and are held by `TVController`; feature code uses `tv.movieLibrary` and the like rather than `.shared`, so tests can hand in their own. The package builds in the Swift 6 language mode, so the compiler checks thread safety.
 
 A feature with state of its own keeps it in a coordinator that publishes it (`PlaybackCoordinator`, `RemoteCoordinator`, `DisplayCoordinator`, `AudioCoordinator`, `IdleCoordinator`), rather than in `TVController`. A feature uses Core and DesignSystem freely, and reaches other features only through `TVController`. New code goes in the folder of the feature it belongs to; something two features need moves to Core or DesignSystem.
 
@@ -81,6 +81,6 @@ A feature with state of its own keeps it in a coordinator that publishes it (`Pl
 - **Brave player:** Mac TV opens its own Brave window through Apple Events (values passed as descriptors, never as script text) and sends input only to that window. It needs Automation and Accessibility permission. Auto-skip, auto-next and the playback check apply only to the built-in player.
 - **Network shares:** `NetworkShares.swift` mounts SMB shares with NetFS (no macOS dialogs), keeps passwords in the Keychain under its own label, and reconnects at launch, after waking, when the network returns and every two minutes. Movies keeps an offline share's films (and where you stopped) in `offline.json` until it's back.
 - **Jellyfin:** `Jellyfin.swift` signs in with `AuthenticateByName` and keeps only the token in the Keychain. Its movies and episodes join Movies with `jellyfin://<server>/<item>` paths. `PlaybackInfo` with a device profile picks direct play (MP4/MOV with H.264 or HEVC) or Jellyfin's HLS, which `AVPlayback` opens. Progress goes back through `/Sessions/Playing`, and a film that's also a file on this Mac shows once, as the file.
-- **Updates:** `Updater.swift` reads the latest GitHub release, at launch and daily. With automatic updates on, it downloads straight away and installs only while Mac TV is idle (screen saver up, or screen off at home with nothing playing). Installing mounts the release's `.dmg`, checks the app inside satisfies the running app's designated requirement (same identifier and signing certificate), swaps it in and relaunches. So releases must be tagged `vX.Y`, carry a `.dmg`, and be signed with the same certificate as the builds people have, or the update is refused.
+- **Updates:** `Updater.swift` reads the latest release of this fork (kaisenyao/mac-tv), at launch and daily; with no release yet it reports up to date. With automatic updates on, it downloads straight away and installs only while Mac TV is idle (screen saver up, or screen off at home with nothing playing). Installing mounts the release's `.dmg`, checks the app inside satisfies the running app's designated requirement (same identifier and signing certificate), swaps it in and relaunches. So releases must be tagged `vX.Y`, carry a `.dmg`, and be signed with the same certificate as the builds people have, or the update is refused.
 - **Tiles:** generated from any square app icon (`TileArt.swift`): the background is read, the logo found and sized, and the background extended to 5:3.
-- **Top Shelf:** daily lists from [TVmaze](https://www.tvmaze.com) (CC BY-SA) and Apple's public music charts.
+- **Top Shelf:** Bilibili, NetEase Cloud Music and YouTube show your own feeds from their signed-in accounts (`AppShelf.swift`); Movies shows your library's art; other apps show their colours.

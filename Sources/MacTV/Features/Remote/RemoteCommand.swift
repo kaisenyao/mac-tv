@@ -5,24 +5,39 @@ enum RemoteCommand {
     enum Direction: String { case up, down, left, right }
 
     case move(Direction), select, back, home
+    /// 按住确认（键盘上按住回车，手机遥控器上按住中间的 OK）：卡片菜单 / 看视频时右边的面板
+    case longSelect
+    /// 手机遥控器上的一个键：点了一下 / 按住了 / 还按着 / 松开了（规矩和键盘一样，见 PhonePresses）
+    case press(PhonePresses.Key, PhonePresses.Phase)
     case playPause, seek(forward: Bool)
     /// 手机遥控器的转盘转了一格：+1 顺时针，-1 逆时针
     case wheel(Int)
     case volume(Int), mute
     case text(String), deleteBackward
     case pointer(dx: Double, dy: Double), click, scroll(dy: Double)
+    /// 手机触控板上一根手指按住不动：和鼠标按住一样（长按出菜单）
+    case pointerHold
+    /// 手机触控板上的双指滑动：和 Mac 触控板上滑一样（见 TrackpadGestures）
+    case swipe(dx: Double, dy: Double, phase: String)
     case launch(String), openInBrowser
     case screenOff, screenOn, sleepMac
     case sleepTimer(minutes: Int)
     case controlCenter
     case nextControl, previousControl, activateBrowser, browserFullscreen, retryBrowser
     case setting(String, Bool)
+    /// 手机遥控器上的一个快捷键（见 RemoteShortcuts）：在这里不能用、现在什么都做不了的不理
+    case shortcut(String)
 
     init?(json: [String: Any]) {
         guard let action = json["a"] as? String else { return nil }
         switch action {
         case "up", "down", "left", "right": self = .move(Direction(rawValue: action)!)
         case "ok": self = .select
+        case "okhold": self = .longSelect
+        case "press":
+            guard let key = (json["k"] as? String).flatMap(PhonePresses.Key.init(rawValue:)),
+                  let phase = (json["p"] as? String).flatMap(PhonePresses.Phase.init(rawValue:)) else { return nil }
+            self = .press(key, phase)
         case "back": self = .back
         case "home": self = .home
         case "playpause": self = .playPause
@@ -31,8 +46,6 @@ enum RemoteCommand {
             let steps = max(-16, min(16, json["d"] as? Int ?? 1))
             guard steps != 0 else { return nil }
             self = .wheel(steps)
-        case "rewind": self = .seek(forward: false)
-        case "forward": self = .seek(forward: true)
         case "volup": self = .volume(6)
         case "voldown": self = .volume(-6)
         case "mute": self = .mute
@@ -43,6 +56,11 @@ enum RemoteCommand {
         case "pointer": self = .pointer(dx: json["dx"] as? Double ?? 0, dy: json["dy"] as? Double ?? 0)
         case "click": self = .click
         case "scroll": self = .scroll(dy: json["dy"] as? Double ?? 0)
+        case "mousehold": self = .pointerHold
+        case "swipe":
+            guard let phase = json["p"] as? String, ["began", "changed", "ended", "momentum", "momentumEnd"].contains(phase) else { return nil }
+            let clamp = { (v: Double) in max(-2000, min(2000, v.isFinite ? v : 0)) }
+            self = .swipe(dx: clamp(json["dx"] as? Double ?? 0), dy: clamp(json["dy"] as? Double ?? 0), phase: phase)
         case "launch":
             guard let id = json["id"] as? String else { return nil }
             self = .launch(id)
@@ -60,6 +78,9 @@ enum RemoteCommand {
         case "setting":
             guard let key = json["k"] as? String, let value = json["v"] as? Bool else { return nil }
             self = .setting(key, value)
+        case "shortcut":
+            guard let id = json["id"] as? String, !id.isEmpty, id.count <= 64 else { return nil }
+            self = .shortcut(id)
         default: return nil
         }
     }
