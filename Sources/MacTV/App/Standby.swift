@@ -68,7 +68,7 @@ extension RemoteCommand {
     /// Turns the TV off: it isn't someone using the Mac (so it doesn't tell macOS so, which would wake the display).
     var entersStandby: Bool {
         switch self {
-        case .power(hold: true), .sleepNow, .sleepMac: true
+        case .power(hold: true), .sleepNow: true
         default: false
         }
     }

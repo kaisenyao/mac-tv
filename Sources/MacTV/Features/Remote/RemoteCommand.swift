@@ -27,9 +27,9 @@ enum RemoteCommand {
     /// focusFollowsFinger：遥控器式的滑动（手机的点按区、Siri Remote），焦点跟着手指走；触控板式的是 false
     case swipe(dx: Double, dy: Double, phase: String, focusFollowsFinger: Bool = false)
     case launch(String), openInBrowser
-    /// sleepNow: TV standby (the phone's Settings › Sleep Now, as Control Center's). sleepMac: the whole Mac sleeps,
-    /// from the TV's Settings › System › Sleep Mac only
-    case sleepNow, sleepMac
+    /// TV standby (the phone's Settings › Sleep Now, as Control Center's). Mac TV never sleeps the whole Mac: it's
+    /// also a server
+    case sleepNow
     case sleepTimer(minutes: Int)
     case controlCenter
     case nextControl, previousControl, activateBrowser, browserFullscreen, retryBrowser

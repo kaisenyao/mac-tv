@@ -40,7 +40,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     /// Something is playing in front. What Home sent to the background (paused, see AppQuit) doesn't count, so the
     /// screen saver and updates go on as they do at Home.
     var isAnyPlaybackActive: Bool {
-        ((iinaSession != nil || externalBrowser != nil) && !externalInBackground)
+        (iinaSession != nil && !externalInBackground) || externalBrowser != nil
             || (moviePlayer != nil && !movieInBackground) || webView != nil
     }
 
@@ -51,19 +51,26 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
 
     // MARK: - In the background (Home, see AppQuit)
 
-    /// IINA or Brave, sent to the background by Home: still open behind Mac TV, IINA paused, until the app that
-    /// opened it is opened again. Presses stay with Mac TV meanwhile.
+    /// IINA, sent to the background by Home: still open behind Mac TV, paused, until Movies is opened again. Presses
+    /// stay with Mac TV meanwhile.
     @Published private(set) var externalInBackground = false
+    /// A website app that was playing in Brave when it went to the background (or the TV to standby): Brave can't be
+    /// paused without running script in its page, so its window closed, and nothing plays unseen. Opening the app
+    /// again opens this address in Brave.
+    private(set) var closedBrave: (service: Service, url: URL)?
+    /// The address Brave was last sent to (what's kept when it closes, if Brave can't say where its tab is)
+    private var braveURL: URL?
     /// Movies, sent to the background by Home: its screen and its player, paused where they were.
     @Published private(set) var movieInBackground = false
     private(set) var parkedMovies: MoviesBrowser?
 
     /// TV standby: the page in front, a movie and IINA pause where they are (pages in the background are paused
-    /// already). Brave isn't reached: Mac TV has no way to pause its page without running script in it.
+    /// already). Brave in front goes to the background, which closes it, keeping its address.
     func pauseAll() {
         webView?.pauseAllMediaPlayback(completionHandler: nil)
         moviePlayer?.background()   // paused and saved, and its clock stops
         iinaSession?.pause()
+        if externalBrowser != nil { tv?.goHome() }
     }
 
     /// Out of TV standby: a movie in front shows its controls again, still paused.
@@ -71,11 +78,17 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         if tv?.mode == .movie { moviePlayer?.foreground() }
     }
 
-    /// Home: Movies (its library or its player), IINA and Brave go to the background. Nothing closes.
+    /// Home: Movies (its library or its player) and IINA go to the background, paused. Brave closes, keeping where
+    /// it was (see closedBrave).
     func sendToBackground(movies: MoviesBrowser?) {
-        if iinaSession != nil || externalBrowser != nil {
+        if iinaSession != nil {
             iinaSession?.pause()
             externalInBackground = true
+        }
+        if let browser = externalBrowser, let service = externalBrowserService {
+            let url = browser.currentURL() ?? braveURL
+            closeExternalBrowser()
+            if let url { closedBrave = (service, url) }
         }
         if let player = moviePlayer, tv?.mode == .movie {
             player.background()
@@ -106,12 +119,11 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         return true
     }
 
-    /// Opening the website app that's playing in Brave in the background: back to it.
+    /// Opening the website app that was playing in Brave: Brave opens again at the same address. False when it wasn't.
     func resumeExternalBrowser(_ service: Service) -> Bool {
-        guard externalInBackground, externalBrowser != nil, externalBrowserService?.id == service.id else { return false }
-        externalInBackground = false
-        tv?.setMode(.player(service))
-        activateExternalBrowser()
+        guard let closed = closedBrave, closed.service.id == service.id else { return false }
+        closedBrave = nil
+        playInBrave(service, url: closed.url)
         return true
     }
 
@@ -231,8 +243,9 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         return true
     }
 
-    /// A website app in the background quits (all of them with no id): its page goes, and where it was.
+    /// A website app in the background quits (all of them with no id): its page goes, and where it was (in Brave too).
     func dropParkedWeb(_ id: String? = nil) {
+        if let closed = closedBrave, id == nil || closed.service.id == id { closedBrave = nil }
         for key in Array(parkedWeb.keys) where id == nil || key == id { parkedWeb.removeValue(forKey: key)?.web.stopLoading() }
         for key in Array(reclaimedWeb.keys) where id == nil || key == id { reclaimedWeb[key] = nil }
     }
@@ -565,7 +578,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     func closeIINAPlayback(terminating: Bool = false) {
         let previous = iinaSession
         iinaSession = nil
-        if externalBrowser == nil { externalInBackground = false }
+        externalInBackground = false
         iinaPlaybackError = nil
         iinaPlaybackStatus = ""
         previous?.close(immediate: terminating)
@@ -642,6 +655,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         tv?.setLaunchedAppID(nil)
         let session = BraveSession()
         externalBrowser = session
+        braveURL = url
         tv?.braveFocus = 0
         externalBrowserService = service
         tv?.setMode(.player(service))
@@ -658,6 +672,7 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
     func navigateExternalBrowser(service: Service, url: URL) throws {
         guard let browser = externalBrowser else { return }
         externalBrowserService = service
+        braveURL = url
         do { try browser.navigate(to: url) }
         catch {
             externalBrowserError = error.localizedDescription
@@ -712,7 +727,6 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         let previous = externalBrowser
         externalBrowser = nil
         externalBrowserService = nil
-        if iinaSession == nil { externalInBackground = false }
         externalBrowserError = nil
         externalBrowserOpening = false
         do { try previous?.close() }

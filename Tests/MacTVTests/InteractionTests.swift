@@ -271,7 +271,8 @@ import WebKit
             // A short Power press while awake does nothing
             Self.press(tv, .siriRemote, .power)
             #expect(!tv.standby)
-            #expect(!SystemGuard.refused.contains("pmset sleepnow"), "none of them asked to sleep the Mac")
+            #expect(SystemGuard.refused.allSatisfy { $0 == "pmset displaysleepnow" || $0 == "wake the display" },
+                    "only the display: Mac TV has no way to sleep the Mac")
         }
     }
 
@@ -329,6 +330,49 @@ import WebKit
             #expect(tv.appSwitcher?.index == 0 && tv.backgroundApps.map(\.id) == [Self.other.id])
             tv.handle(.back)
             #expect(tv.appSwitcher == nil && tv.mode == .launcher)
+        }
+    }
+
+    @Test func openedFromHomeQuittingEveryAppClosesItOnHome() async throws {
+        try await Self.withTV { tv in
+            tv.open(Self.other)
+            tv.goHome()
+            tv.open(Self.site)
+            tv.goHome()
+            tv.lastTVPress = nil
+            tv.pressTV(from: .remote)   // on Home already: no app to leave
+            tv.pressTV(from: .remote)
+            #expect(tv.appSwitcher?.origin == nil && tv.backgroundApps.count == 2)
+            for _ in 0..<2 {
+                tv.handle(.move(.up))
+                try await Task.sleep(for: TVController.switcherQuitSlide + .milliseconds(150))
+            }
+            #expect(tv.backgroundApps.isEmpty && tv.appSwitcher == nil && tv.mode == .launcher, "closed on Home")
+            #expect(tv.webView == nil && tv.playbackCoordinator.parkedWebIDs.isEmpty)
+        }
+    }
+
+    /// Brave can't be paused, so nothing plays unseen: Home closes it, keeping its address and its card; opening the
+    /// app again opens that address in Brave; quitting the app forgets it. (In a test Brave never really opens:
+    /// SystemGuard refuses it, which is all this needs.)
+    @Test func braveClosesOnHomeAndReopensWhereItWas() async throws {
+        try await Self.withTV { tv in
+            let brave = Service(id: "test-brave", name: "Brave Site", kind: .web(URL(string: "https://example.com/")!))
+            let watching = URL(string: "https://example.com/watch?v=1")!
+            tv.playbackCoordinator.playInBrave(brave, url: watching)
+            #expect(tv.externalBrowser != nil && tv.appInFront?.id == brave.id)
+            tv.pressTV(from: .remote)
+            #expect(tv.externalBrowser == nil, "closed, not left playing behind Mac TV")
+            #expect(tv.playbackCoordinator.closedBrave?.url == watching && tv.backgroundApps.first?.id == brave.id)
+            tv.open(brave)
+            #expect(tv.externalBrowserService?.id == brave.id && tv.playbackCoordinator.closedBrave == nil, "the same address again")
+            // TV standby closes it the same way
+            tv.enterStandby(reason: "test")
+            #expect(tv.externalBrowser == nil && tv.playbackCoordinator.closedBrave?.service.id == brave.id)
+            tv.wakeFromStandby()
+            // Quitting it from the App Switcher forgets where it was
+            tv.quitApp(brave.id, reason: "test")
+            #expect(tv.playbackCoordinator.closedBrave == nil && tv.backgroundApps.isEmpty)
         }
     }
 
@@ -494,10 +538,9 @@ import WebKit
         try #require(SystemGuard.fake)   // never reach the real calls below without it
         SystemGuard.forgetRefused()
         SystemControl.displayOff()
-        SystemControl.sleepNow()
         #expect(!SystemControl.displayOn())
         SystemGuard.open(URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings")!)
-        #expect(SystemGuard.refused == ["pmset displaysleepnow", "pmset sleepnow", "wake the display",
+        #expect(SystemGuard.refused == ["pmset displaysleepnow", "wake the display",
                                         "open x-apple.systempreferences:com.apple.BluetoothSettings"])
         // The standby path asks for the display off, and is refused
         try await InteractionTests.withTV { tv in

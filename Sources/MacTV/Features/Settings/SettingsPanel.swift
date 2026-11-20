@@ -61,7 +61,7 @@ struct SettingsPanel: Equatable {
         // Movies' forms: the text fields, then Connect or Sign In
         case formAddress, formUser, formPassword, formSubmit
         // System
-        case userGuide, about, softwareUpdates, keepMacAwake, lidOverride, screenOff, sleepMac
+        case userGuide, about, softwareUpdates, keepMacAwake, lidOverride, screenOff
         // System › User Guide
         case guideSection(Int)
         // System › About, System › Software Updates
@@ -83,8 +83,6 @@ struct SettingsPanel: Equatable {
     var row = 0
     /// The pages opened below the section's page, deepest last.
     var path: [Level] = []
-    /// Sleep Mac asks for a second press: this is the first. Anything else cancels it.
-    var confirming = false
     /// 左右调了几次设置（真变了的才算）：焦点没动，但要和走一格一样响一声、震一下
     var changes = 0
     /// Select or a click: the focused control dips and settles back each time this goes up.
@@ -170,7 +168,7 @@ extension SettingsPanel.Section {
             return rows
         case .remotes: return [.siriRemote, .iPhone, .otherControllers]
         case .apps: return [.addApp, .arrangeApps, .topShelfPreferences, .movies]
-        case .system: return [.userGuide, .about, .softwareUpdates, .keepMacAwake, .lidOverride, .screenOff, .sleepMac]
+        case .system: return [.userGuide, .about, .softwareUpdates, .keepMacAwake, .lidOverride, .screenOff]
         case .profiles: return []
         }
     }
@@ -217,7 +215,7 @@ extension SettingsPanel.Row {
         case .movies: "APPS"
         case .userGuide, .about, .softwareUpdates: "MAC TV"
         case .guideSection: "CONTENTS"
-        case .keepMacAwake, .lidOverride, .screenOff, .sleepMac: "POWER"
+        case .keepMacAwake, .lidOverride, .screenOff: "POWER"
         case .pairedDevice: "PAIRED DEVICES"
         case .movieFolder, .addMovieFolder: "FOLDERS"
         case .networkShare, .addNetworkShare: "NETWORK SHARES"
@@ -433,10 +431,9 @@ extension TVController {
         dedicatedTVMode ? "Full Screen" : window?.screen?.localizedName ?? NSScreen.main?.localizedName
     }
 
-    /// What a row shows. `focused` puts a waiting "Press Again" on it, and the caret in a text field.
+    /// What a row shows. `focused` puts the caret in a text field.
     func settingsContent(_ row: SettingsPanel.Row, panel: SettingsPanel, focused: Bool) -> SettingsRowContent {
         typealias Content = SettingsRowContent
-        let confirming = focused && panel.confirming
         func onOff(_ title: String, _ on: Bool) -> Content { Content(title: title, accessory: .toggle(on)) }
         switch row {
         case .twentyFourHour: return onOff("24-Hour Time", preferences.twentyFourHourTime)
@@ -548,7 +545,6 @@ extension TVController {
         case .keepMacAwake: return onOff("Keep Mac Awake", keepMacAwake)
         case .lidOverride: return onOff("Stay Awake With Lid Closed", lidOverride)
         case .screenOff: return Content(title: "Turn Off Display")
-        case .sleepMac: return Content(title: confirming ? "Press Again to Sleep" : "Sleep Mac", warning: confirming)
         case .version: return Content(title: "Version", value: AppVersion.current)
         case .source: return Content(title: "Source Code", value: "github.com/kaisenyao/mac-tv")
         case .report: return Content(title: "Copy Diagnostics Report")
@@ -634,8 +630,6 @@ extension TVController {
 
         let rows = settingsRows(panel)
         panel.row = min(panel.row, max(rows.count - 1, 0))
-        // Anything but a second press cancels a waiting "Press Again".
-        if case .select = command {} else { panel.confirming = false }
         guard rows.indices.contains(panel.row) else {
             if case .back = command { closeSettingsPage(&panel) }
             pages = panel
@@ -687,7 +681,6 @@ extension TVController {
         panel.path.append(.init(page: page, from: panel.row))
         panel.row = 0
         panel.card = nil
-        panel.confirming = false
         switch page {
         case .siriRemote, .otherControllers: remoteCoordinator.refreshRemoteStatus()
         case .iPhone: pairingGuest = false   // a full-access code each time
@@ -712,7 +705,6 @@ extension TVController {
             panel.row = 0
         }
         panel.card = nil
-        panel.confirming = false
         panel.typed = ""
         panel.caret = 0
         panel.form = SourceForm()
@@ -724,24 +716,13 @@ extension TVController {
         pages?.row = index
     }
 
-    /// Sleep Mac: the first press asks again, the second does it. True on the second.
-    private func confirmSetting() -> Bool {
-        if pages?.confirming == true {
-            pages?.confirming = false
-            return true
-        }
-        pages?.confirming = true
-        return false
-    }
-
     /// Select, Return, Space or a click on a row.
     func activateSetting(_ row: SettingsPanel.Row) {
         // A form that's connecting waits; only Back leaves it.
         guard let panel = pages, !panel.form.connecting else { return }
-        // A click focuses the row first, and cancels a "Press Again" waiting on another.
+        // A click focuses the row first.
         if let index = settingsRows(panel).firstIndex(of: row), index != panel.row {
             pages?.row = index
-            pages?.confirming = false
             pages?.card = nil
         }
         pages?.presses += 1
@@ -806,10 +787,6 @@ extension TVController {
         case .keepMacAwake: keepMacAwake.toggle()
         case .lidOverride: lidOverride.toggle()
         case .screenOff: enterStandby(reason: "Turn Off Display")
-        case .sleepMac:
-            // The whole Mac (the remotes can't wake it); TV standby is Control Center's Sleep Now
-            guard confirmSetting() else { return }
-            handle(.sleepMac)
         case .update: updater.activate()
         case .autoUpdate: updater.automatic.toggle()
         case .report: DiagnosticReport.copy(from: self)

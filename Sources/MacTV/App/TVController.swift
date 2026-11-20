@@ -301,7 +301,7 @@ final class TVController: NSObject, ObservableObject {
     var iinaPlaybackError: String? { playbackCoordinator.iinaPlaybackError }
     var iinaPlaybackStatus: String { playbackCoordinator.iinaPlaybackStatus }
     /// Brave in front (not in the background since Home).
-    var externalBrowser: BraveSession? { playbackCoordinator.externalInBackground ? nil : playbackCoordinator.externalBrowser }
+    var externalBrowser: BraveSession? { playbackCoordinator.externalBrowser }
     var externalBrowserService: Service? { playbackCoordinator.externalBrowserService }
     var externalBrowserError: String? { playbackCoordinator.externalBrowserError }
     var externalBrowserOpening: Bool { playbackCoordinator.externalBrowserOpening }
@@ -687,12 +687,6 @@ final class TVController: NSObject, ObservableObject {
             if key == "autoNext" { autoNext = value }
             if key == "keepMacAwake" { keepMacAwake = value }
             if key == "lidOverride" { lidOverride = value }
-            return
-        case .sleepMac:
-            // The whole Mac, from Settings › System › Sleep Mac or the phone's Settings (each asks first). The remotes
-            // can't wake it.
-            goHome()
-            SystemControl.sleepNow()
             return
         default: break
         }

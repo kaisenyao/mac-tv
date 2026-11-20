@@ -201,6 +201,13 @@ final class BraveSession {
         pointer = nil
     }
 
+    /// The address its tab is on now (read as Brave's dictionary allows; no script runs in the page). Nil before
+    /// its window exists, or if Brave doesn't answer.
+    func currentURL() -> URL? {
+        guard windowID != nil, let text = try? runScript("url").stringValue else { return nil }
+        return URL(string: text)
+    }
+
     /// Returns false for commands managed by Mac TV rather than Brave.
     @discardableResult
     func handle(_ command: RemoteCommand) throws -> Bool {
@@ -321,6 +328,8 @@ final class BraveSession {
                 set bounds of w to valueText
               else if operation is "bounds" then
                 return bounds of w
+              else if operation is "url" then
+                return URL of active tab of w
               end if
             end tell
           end using terms from

@@ -963,6 +963,17 @@ private struct ShelfSongRow: View {
     }
 }
 
+/// 一块挖了个圆孔的方块（填的时候用 even-odd）：盖在唱片上当遮罩，正中间的轴孔透出后面的背景
+private struct SpindleHole: Shape {
+    let diameter: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect)
+        path.addEllipse(in: CGRect(x: rect.midX - diameter / 2, y: rect.midY - diameter / 2, width: diameter, height: diameter))
+        return path
+    }
+}
+
 /// 唱片：封套（歌单封面）在前，黑胶从它后面往右滑出来。只有正在放的那首歌的唱片会转（暂停就停），
 /// 歌单、专辑没在放，唱片不转。
 /// 黑胶本身是画出来的：一圈圈纹路、中间贴着封面的圆标签和一个小孔，上面一层不转的反光
@@ -1027,7 +1038,13 @@ private struct RecordSleeve: View {
         }
         .frame(width: disc, height: disc)
         .shadow(color: .black.opacity(0.55), radius: 36, y: 22)
+        // 中间的轴孔是真的穿透的：透过它看见后面的背景（唱片的影子在孔里也挖掉，不然孔里是一团黑）。孔在正中间，
+        // 转起来、滑出来都还在原地；遮罩只画一次，不跟着每一帧算。遮罩比唱片大一圈，影子不被切掉
+        .mask { SpindleHole(diameter: Self.hole(disc)).fill(style: FillStyle(eoFill: true)).padding(-100) }
     }
+
+    /// 轴孔多大：真唱片 7 毫米的孔、100 毫米的标签，是标签的 0.07
+    static func hole(_ disc: CGFloat) -> CGFloat { disc * 0.38 * 0.07 }
 
     /// 盘面、一圈圈纹路、中间贴着封面的圆标签和小孔
     private var record: some View {
@@ -1047,7 +1064,9 @@ private struct RecordSleeve: View {
                 .frame(width: disc * 0.38, height: disc * 0.38)
                 .clipShape(Circle())
                 .overlay(Circle().strokeBorder(.black.opacity(0.4), lineWidth: 2))
-            Circle().fill(Color(white: 0.82)).frame(width: 14, height: 14)
+            // 轴孔的边：贴着孔外沿一圈很淡的暗边，看起来是有厚度的孔，不是贴上去的一个点
+            Circle().strokeBorder(.black.opacity(0.3), lineWidth: 1.25)
+                .frame(width: Self.hole(disc) + 2.5, height: Self.hole(disc) + 2.5)
         }
         .frame(width: disc, height: disc)
     }

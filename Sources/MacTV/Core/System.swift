@@ -44,8 +44,6 @@ enum SystemControl {
     @discardableResult
     static func displayOn() -> Bool { DisplayPower.wake() }
 
-    /// Full system sleep. The phone can't wake the Mac over Wi-Fi; its keyboard or lid can.
-    static func sleepNow() { pmset("sleepnow") }
 
     /// Sends a key to whichever app is in front. Needs Accessibility permission, asked for once.
     static func postKeyToFrontApp(_ code: CGKeyCode) {

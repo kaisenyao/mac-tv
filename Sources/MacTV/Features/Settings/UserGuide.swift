@@ -93,7 +93,7 @@ enum UserGuide {
             .paragraph("Screen Saver: the type, when it starts, and its options."),
             .paragraph("Remotes and Devices: Siri Remote, iPhone and game controllers."),
             .paragraph("Apps: Add App, Arrange Apps, Top Shelf, and Movies’ sources."),
-            .paragraph("System: this guide, About, Software Updates, and power: Keep Mac Awake, Stay Awake With Lid Closed, Turn Off Display, and Sleep Mac, which puts the whole Mac to sleep (the remotes can’t wake it)."),
+            .paragraph("System: this guide, About, Software Updates, and power: Keep Mac Awake, Stay Awake With Lid Closed, and Turn Off Display, which puts the TV in standby, as Sleep Now does."),
         ]),
         Section(title: "Privacy and Data", symbol: "hand.raised.fill", blocks: [
             .paragraph("Mac TV keeps its data on this Mac: your profiles, apps, settings and history, in its folder in Application Support, and sign-ins in your keychain. It has no account of its own and sends nothing about you anywhere."),

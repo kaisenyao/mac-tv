@@ -51,7 +51,7 @@ import Testing
             #expect(tv.settingsContent(.feedback, panel: panel, focused: false).title == "Navigation Clicks")
             tv.displayCoordinator.hasLid = true
             #expect(tv.settingsRows(SettingsPanel(section: .system, open: true))
-                    == [.userGuide, .about, .softwareUpdates, .keepMacAwake, .lidOverride, .screenOff, .sleepMac])
+                    == [.userGuide, .about, .softwareUpdates, .keepMacAwake, .lidOverride, .screenOff])
         }
     }
 
@@ -244,7 +244,7 @@ import Testing
             #expect(headers(SettingsPanel(section: .videoAndAudio, open: true)) == ["VIDEO", "VIDEO", "AUDIO", "AUDIO"])
             #expect(headers(SettingsPanel(section: .remotes, open: true)) == ["REMOTES", "REMOTES", "OTHER DEVICES"])
             #expect(headers(SettingsPanel(section: .apps, open: true)) == ["HOME SCREEN", "HOME SCREEN", "HOME SCREEN", "APPS"])
-            #expect(headers(SettingsPanel(section: .system, open: true)) == ["MAC TV", "MAC TV", "MAC TV", "POWER", "POWER", "POWER", "POWER"])
+            #expect(headers(SettingsPanel(section: .system, open: true)) == ["MAC TV", "MAC TV", "MAC TV", "POWER", "POWER", "POWER"])
             #expect(headers(SettingsPanel(section: .profiles, open: true)).allSatisfy { $0 == "PROFILES" })
             // Top Shelf: its list of apps, and every group on an app's page.
             #expect(TVController.topShelfAppsHeader == "APPS")
