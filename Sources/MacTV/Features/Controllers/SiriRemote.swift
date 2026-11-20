@@ -466,6 +466,9 @@ final class SiriRemoteInput {
     /// The one live instance, for the C callbacks.
     fileprivate static weak var current: SiriRemoteInput?
 
+    /// Called when the remote connects (or wakes and reconnects).
+    var onConnect: (() -> Void)?
+
     init(sink: @escaping (SiriRemoteAction) -> Void) {
         self.sink = sink
     }
@@ -499,6 +502,10 @@ final class SiriRemoteInput {
         }
         self.manager = manager
         touch.onFrame = { [weak self] point, time in self?.touchFrame(point, at: time) }
+        // 启动时已经连着的遥控器：马上就知道（配对页要不要弹出来，看的就是这个）
+        if let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>, !devices.isEmpty {
+            SiriRemoteStatus.shared.connected = true
+        }
     }
 
     func stop() {
@@ -513,12 +520,15 @@ final class SiriRemoteInput {
 
     private func remoteConnected() {
         Log.app.notice("Siri Remote connected")
+        SiriRemoteStatus.shared.connected = true
+        onConnect?()
         // 遥控器睡醒重连后，触控面是一个新设备，要重新挂上
         touch.start()
     }
 
     private func remoteDisconnected() {
         Log.app.notice("Siri Remote disconnected")
+        SiriRemoteStatus.shared.connected = false
         emit(recognizer.reset())
         touch.stop()
     }
@@ -670,16 +680,36 @@ extension SiriRemoteInput {
     static var shared: SiriRemoteInput?
 }
 
+/// Whether a Siri Remote is connected, for the pairing sheet and Setup.
+@MainActor
+final class SiriRemoteStatus: ObservableObject {
+    static let shared = SiriRemoteStatus()
+    @Published var connected = false
+}
+
 extension TVController {
     /// Starts reading the Siri Remote, alongside the game controllers.
     func startSiriRemote() {
         let input = SiriRemoteInput { [weak self] action in self?.siriRemote(action) }
+        input.onConnect = { [weak self] in self?.noteOtherRemote() }
         SiriRemoteInput.shared = input
         input.start()
     }
 
+    /// A Siri Remote or game controller is connected: there's already a remote, so the pairing
+    /// sheet needn't come up at launch.
+    var otherRemoteConnected: Bool { SiriRemoteStatus.shared.connected || controller != nil }
+
+    /// A Siri Remote or game controller connected or was used: the pairing sheet shown at launch
+    /// goes away (as it does when the phone connects), and Setup's remote step moves on.
+    func noteOtherRemote() {
+        remoteCoordinator.noteOtherRemote()
+        notePhoneDuringSetup()
+    }
+
     /// Everything goes the way the phone remote's does, so both remotes feel the same.
     func siriRemote(_ action: SiriRemoteAction) {
+        noteOtherRemote()
         switch action {
         case .press(let key, let phase): handle(.press(key, phase), from: .siriRemote)
         case .playPause: handle(.playPause, from: .siriRemote)

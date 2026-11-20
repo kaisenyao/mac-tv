@@ -260,7 +260,7 @@ extension TVController {
         switch section {
         case .profiles: return profiles.all.map(\.name).joined(separator: ", ")
         case .remotes:
-            let parts = [phonePaired ? "Phone" : nil, controller?.name].compactMap { $0 }
+            let parts = [phonePaired ? "Phone" : nil, SiriRemoteStatus.shared.connected ? "Siri Remote" : nil, controller?.name].compactMap { $0 }
             return parts.isEmpty ? "Not Set Up" : parts.joined(separator: " · ")
         case .watching: return autoSkip ? "On" : "Off"
         case .screenSaver: return "\(ScreenSaverSettings.wallpaper.title) · \(ScreenSaverSettings.delayMinutes) min"

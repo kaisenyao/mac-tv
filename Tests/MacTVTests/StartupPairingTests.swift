@@ -57,6 +57,45 @@ import Testing
         }
     }
 
+    @Test func aSiriRemoteOrControllerAlreadyConnectedSkipsStartupPairing() throws {
+        try withController { tv in
+            SiriRemoteStatus.shared.connected = true
+            defer { SiriRemoteStatus.shared.connected = false }
+            tv.offerStartupPairing()
+            #expect(!tv.pairing)
+        }
+        try withController { tv in
+            tv.controller = ControllerInfo(name: "DualSense Wireless Controller")
+            tv.offerStartupPairing()
+            #expect(!tv.pairing)
+        }
+    }
+
+    @Test func aSiriRemoteOrControllerConnectingDismissesStartupQRButKeepsManuallyOpenedQR() throws {
+        try withController { tv in
+            tv.offerStartupPairing()
+            #expect(tv.pairing)
+            tv.siriRemote(.playPause)                 // 用 Siri Remote 按了一下
+            #expect(!tv.pairing)
+            tv.pairing = true                         // 自己打开的配对页：不会被关掉
+            tv.siriRemote(.playPause)
+            #expect(tv.pairing)
+        }
+        try withController { tv in
+            tv.offerStartupPairing()
+            #expect(tv.pairing)
+            tv.controllerChanged(ControllerInfo(name: "Xbox Wireless Controller"), connected: true)
+            #expect(!tv.pairing)
+        }
+    }
+
+    @Test func pairingSheetOffersBluetoothSettings() throws {
+        try withController { tv in
+            #expect(tv.pairingRows.contains(.bluetooth))
+            #expect(tv.pairingRows.last == .done)
+        }
+    }
+
     @Test func optOutSkipsStartupPairing() throws {
         let suite = "MacTV.StartupPairing.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

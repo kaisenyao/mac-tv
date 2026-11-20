@@ -115,6 +115,8 @@ final class RemoteCoordinator: ObservableObject {
     func showStartupPairingIfReady() {
         guard let tv, startupPairingPending, !phoneConnectedThisLaunch,
               tv.setup == nil, tv.profilePicker == nil, tv.mode == .launcher else { return }
+        // Siri Remote 或手柄已经连着：已经有遥控器了，不用弹配对页
+        if tv.otherRemoteConnected { startupPairingPending = false; return }
         startupPairingPending = false
         guard tv.preferences.showPairingAtLaunch else { return }
         startupPairingVisible = true
@@ -127,6 +129,12 @@ final class RemoteCoordinator: ObservableObject {
         if startupPairingVisible, let tv {
             tv.pairing = false
         }
+    }
+
+    /// A Siri Remote or game controller connected or was used: the pairing sheet shown at launch goes away.
+    func noteOtherRemote() {
+        startupPairingPending = false
+        if startupPairingVisible, let tv { tv.pairing = false }
     }
 
     func notePairingDismissed() {

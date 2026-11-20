@@ -132,6 +132,7 @@ final class ControllerInput {
 extension TVController {
     func controllerChanged(_ info: ControllerInfo, connected: Bool, remaining: ControllerInfo? = nil) {
         controller = connected ? info : remaining
+        if connected { noteOtherRemote() }   // 手柄连上了：启动时的配对页收起来，设置流程往下走
         showControllerNotice(ControllerNotice(info: info, connected: connected))
     }
 }

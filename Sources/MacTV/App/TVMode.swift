@@ -99,13 +99,14 @@ final class TVMode {
         }
     }
 
-    /// The pairing sheet's rows: phone access, the display (only when there's more than one), show-at-launch, and Done.
-    enum PairingRow { case access, display, showAtLaunch, done }
+    /// The pairing sheet's rows: phone access, the display (only when there's more than one),
+    /// Bluetooth Settings (for a Siri Remote or game controller), show-at-launch, and Done.
+    enum PairingRow { case access, display, bluetooth, showAtLaunch, done }
 
     var pairingRows: [PairingRow] {
         var rows: [PairingRow] = [.access]
         if displayOptions.count > 1 { rows.append(.display) }
-        rows.append(contentsOf: [.showAtLaunch, .done])
+        rows.append(contentsOf: [.bluetooth, .showAtLaunch, .done])
         return rows
     }
     var pairingFocusedRow: PairingRow { pairingRows[min(pairingFocus, pairingRows.count - 1)] }
@@ -145,6 +146,7 @@ final class TVMode {
             case .access: tv?.pairingGuest.toggle()
             case .display: stepDisplay(1)
             case .showAtLaunch: tv?.preferences.showPairingAtLaunch.toggle()
+            case .bluetooth: PairSheet.openBluetoothSettings()
             case .done: tv?.pairing = false
             }
         case .back: tv?.pairing = false
@@ -430,7 +432,7 @@ extension TVController {
     var displaySetup: [[String: Any]] {
         availableTVDisplays.map { ["id": $0.id, "name": $0.name, "current": $0.current, "preferred": $0.preferred] }
     }
-    var pairingRows: [TVMode.PairingRow] { tvMode?.pairingRows ?? [.access, .showAtLaunch, .done] }
+    var pairingRows: [TVMode.PairingRow] { tvMode?.pairingRows ?? [.access, .bluetooth, .showAtLaunch, .done] }
     var pairingFocusedRow: TVMode.PairingRow { tvMode?.pairingFocusedRow ?? .access }
     func stepPairingDisplay() { tvMode?.stepDisplay(1) }
     func handlePairing(_ command: RemoteCommand) { tvMode?.handlePairing(command) }

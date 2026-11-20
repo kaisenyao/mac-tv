@@ -181,7 +181,7 @@ struct SetupScreen: View {
     private func remote(_ flow: SetupFlow) -> some View {
         VStack(spacing: 28) {
             title("Use Your Phone as a Remote")
-            subtitle("Scan with your phone’s camera.")
+            subtitle("Scan with your phone’s camera. A Siri Remote or game controller works too.")
             HStack(alignment: .top, spacing: 36) {
                 if tv.remoteLinks.isEmpty {
                     RoundedRectangle(cornerRadius: 28, style: .continuous).fill(.white.opacity(0.1))
