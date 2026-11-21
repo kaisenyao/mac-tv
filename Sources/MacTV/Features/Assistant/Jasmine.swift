@@ -114,6 +114,7 @@ final class Jasmine: ObservableObject {
         self.voice.onFinished = { [weak self] in self?.saidEverything() }
         self.microphone.onAudio = { [weak self] data, level in self?.heard(data, level: level) }
         self.microphone.onLost = { [weak self] in self?.cancel(because: "Microphone Disconnected") }
+        if !SystemGuard.fake { OrbPipeline.prepare() }   // her orb's shader, compiled before she first shows
     }
 
     /// Where her short lines are kept once made (Voice): ~/Library/Caches/Mac TV/Jasmine.

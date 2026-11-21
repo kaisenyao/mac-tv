@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Jasmine on screen, laid out as tvOS 26's Siri:
-/// - her orb in the top-right corner; while she listens or works, a glass capsule beside it with your words;
+/// - her orb in the top-right corner (PianaSoul's orb, a plain circle: JasmineOrb); while she listens or works, a
+///   glass capsule beside it with your words;
 /// - a short answer (or why she can't), in a floating card there (tvPanelSurface, tvShadow(.float));
 /// - a longer answer, in large type at the top left over the whole screen dimmed (SheetBackdrop): a few lines,
 ///   then MORE (Select shows the rest).
@@ -24,12 +25,10 @@ struct JasmineOverlay: View {
                 .transition(.opacity)
             }
             TVCanvas {
-                GlassGroup {
-                    if jasmine.shown { corner.tvGlassTransition() }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(.trailing, 96)
-                .padding(.top, 52)
+                GlassGroup { corner }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.trailing, 96)
+                    .padding(.top, 52)
             }
             .ignoresSafeArea()
         }
@@ -40,35 +39,38 @@ struct JasmineOverlay: View {
     }
 
     /// The top-right corner: the orb, with your words or her short answer beside it.
-    @ViewBuilder private var corner: some View {
-        let orb = JasmineOrb(phase: jasmine.phase, level: jasmine.level).frame(width: orbSize, height: orbSize)
-        if let text = cornerText {
-            let content = HStack(alignment: .center, spacing: 22) {
-                Text(text)
+    private var corner: some View {
+        HStack(alignment: .center, spacing: 24) {
+            if let text = cornerText {
+                let content = Text(text)
                     .font(.tv(.callout))
                     .foregroundStyle(.white.opacity(dimmed ? 0.7 : 1))
                     .lineLimit(cornerIsCard ? 3 : 1)
                     .truncationMode(.head)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: 680, alignment: .leading)
-                orb
+                    .padding(.horizontal, 34).padding(.vertical, 22)
+                if cornerIsCard {
+                    // Her short answer: a floating card (Layers: a panel's surface and shadow).
+                    content
+                        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 36, style: .continuous))
+                        .tvShadow(.float)
+                        .tvGlassTransition()
+                } else {
+                    // Your words while she hears: a caption (Layers: a notice, a glass capsule).
+                    content.tvGlass(in: Capsule()).tvGlassTransition()
+                }
             }
-            .padding(.leading, 34).padding(.trailing, 14).padding(.vertical, 14)
-            if cornerIsCard {
-                // Her short answer: a floating card (Layers: a panel's surface and shadow).
-                content
-                    .tvPanelSurface(in: RoundedRectangle(cornerRadius: 36, style: .continuous))
-                    .tvShadow(.float)
-            } else {
-                // Your words while she hears: a caption (Layers: a notice, a glass capsule).
-                content.tvGlass(in: Capsule())
+            if jasmine.shown {
+                JasmineOrb(phase: jasmine.phase, level: jasmine.level)
+                    .frame(width: orbSize, height: orbSize)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
-        } else {
-            orb.padding(14).tvGlass(in: Circle())
         }
     }
 
-    private var orbSize: CGFloat { jasmine.mode == .dictation ? 56 : 72 }
+    /// About 1.4× the size tvOS gives Siri's orb: PianaSoul's orb is a large one.
+    private var orbSize: CGFloat { jasmine.mode == .dictation ? 78 : 100 }
 
     /// Her answer, when it's too long for the corner.
     private var longAnswer: String? {
@@ -79,6 +81,7 @@ struct JasmineOverlay: View {
 
     /// What the corner says: her short answer, or your words while she hears and works.
     private var cornerText: String? {
+        guard jasmine.shown else { return nil }
         if let line = jasmine.line { return longAnswer != nil ? nil : line }
         return jasmine.heard.isEmpty ? nil : jasmine.heard
     }
@@ -115,62 +118,6 @@ struct JasmineAnswer: View {
             if !expanded, Self.isCut(text) {
                 Text("MORE").font(.tv(.caption1, emphasized: true)).tracking(1.4).opacity(0.6)
             }
-        }
-    }
-}
-
-/// The orb: PianaSoul's blue (its ORB_COLORS.blue), a soft sky over a slow tide of light that swells with the voice.
-/// About 30 frames a second while it shows; Reduce Motion keeps it still.
-struct JasmineOrb: View {
-    let phase: Jasmine.Phase
-    let level: Float
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private static let sky = [Color(red: 0.20, green: 0.42, blue: 0.80), Color(red: 0.42, green: 0.66, blue: 0.94)]
-    private static let tide = [Color(red: 0.78, green: 0.89, blue: 0.98), Color(red: 0.95, green: 0.98, blue: 1)]
-    private static let under = Color(red: 0.56, green: 0.74, blue: 0.95)
-
-    var body: some View {
-        if reduceMotion {
-            orb(time: 0)
-        } else {
-            TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-                orb(time: context.date.timeIntervalSinceReferenceDate)
-            }
-        }
-    }
-
-    /// As PianaSoul's: energy 0.7 speaking, 0.4 hearing or thinking, 0.16 otherwise; the voice adds to it.
-    private var energy: Double {
-        let base = switch phase {
-        case .speaking: 0.7
-        case .listening, .thinking, .finishing: 0.4
-        default: 0.16
-        }
-        return base + Double(level) * 0.6
-    }
-
-    private func orb(time: Double) -> some View {
-        let t = time * (1 + energy)
-        let swell = 0.10 * sin(0.9 * t) + 0.04 * sin(1.7 * t + 1)
-        let rise = 0.30 - swell - energy * 0.16
-        return GeometryReader { geometry in
-            let side = geometry.size.width
-            ZStack {
-                LinearGradient(colors: Self.sky, startPoint: .top, endPoint: .bottom)
-                // The tide: a bright face that rises with the voice and rolls slowly.
-                Ellipse()
-                    .fill(LinearGradient(colors: Self.tide.reversed(), startPoint: .top, endPoint: .bottom))
-                    .frame(width: side * 2.2, height: side * 1.3)
-                    .rotationEffect(.radians(0.18 * sin(0.6 * t)))
-                    .offset(y: side * (0.62 + rise))
-                    .blur(radius: side * 0.05)
-                RadialGradient(colors: [.clear, Self.under.opacity(0.35)], center: .center,
-                               startRadius: side * 0.2, endRadius: side * 0.6)
-            }
-            .frame(width: side, height: side)
-            .clipShape(Circle())
-            .scaleEffect(1 + 0.012 * sin(1.3 * t) + CGFloat(level) * 0.11)
         }
     }
 }
