@@ -25,22 +25,18 @@ enum Motion {
 }
 
 extension View {
-    /// Apple TV's Liquid Glass, for Mac TV's controls layer only: sheets, the dock, pills,
-    /// buttons and the volume indicator, never content. Following Apple's guidance it's the
-    /// regular variant (these carry text), applied after the view's other appearance
-    /// modifiers; `interactive` makes a control respond to the pointer, and `tint` marks
-    /// prominence, like a focused button. Frosted material before macOS 26.
-    /// `enabled: false` keeps the modifier in place as `.identity`, so switching glass off never changes the view's identity.
+    /// Apple TV's Liquid Glass, for Mac TV's controls layer only (see the rules in Layers.swift): the dock, pills,
+    /// buttons, Control Center, sidebars, menus and notices, never content. Following Apple's guidance it's the
+    /// regular variant (these carry text), applied after the view's other appearance modifiers; `interactive` makes a
+    /// control respond to the pointer, and `tint` colours it. Before macOS 26 there is no Liquid Glass: `FrostedGlass`
+    /// stands in, the backdrop blurred with the same lit rim.
+    /// `enabled: false` keeps the modifier in place (`.identity`), so switching glass off never changes the view's identity.
     @ViewBuilder
     func tvGlass<S: InsettableShape>(in shape: S, interactive: Bool = false, tint: Color? = nil, enabled: Bool = true) -> some View {
         if #available(macOS 26, *) {
             glassEffect(enabled ? .regular.tint(tint).interactive(interactive) : .identity, in: shape)
-        } else if enabled {
-            background(tint ?? .clear, in: shape)
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(PillOutline(shape).strokeBorder(.white.opacity(0.18)))
         } else {
-            self
+            background { if enabled { FrostedGlass(shape: shape, tint: tint) } }
         }
     }
 
@@ -76,6 +72,29 @@ extension View {
             glassEffectTransition(.materialize)
         } else {
             transition(.opacity)
+        }
+    }
+}
+
+/// Liquid Glass's stand-in before macOS 26: the backdrop blurred, lit a little from above, and the rim that catches
+/// the light at the top-left and again, fainter, at the bottom-right, as the real glass's edge does. One material,
+/// one fill and one stroke: nothing here is blurred or redrawn while it rests.
+private struct FrostedGlass<S: InsettableShape>: View {
+    let shape: S
+    let tint: Color?
+
+    private static var rim: LinearGradient {
+        LinearGradient(stops: [.init(color: .white.opacity(0.5), location: 0), .init(color: .white.opacity(0.14), location: 0.3),
+                               .init(color: .white.opacity(0.07), location: 0.7), .init(color: .white.opacity(0.28), location: 1)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    var body: some View {
+        ZStack {
+            shape.fill(.ultraThinMaterial)
+            if let tint { shape.fill(tint) }
+            shape.fill(LinearGradient(colors: [.white.opacity(0.09), .white.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+            PillOutline(shape).strokeBorder(Self.rim, lineWidth: 1.5)
         }
     }
 }

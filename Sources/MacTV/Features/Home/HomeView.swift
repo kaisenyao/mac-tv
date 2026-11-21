@@ -1,36 +1,73 @@
 import SwiftUI
 
-// The home screen follows Apple TV (tvOS 26): the focused dock app's Top Shelf fills the
-// screen behind a frosted glass dock of 5:3 icons, with the next row peeking below. Moving
+// The home screen follows Apple TV (tvOS 26 and 27): the focused dock app's Top Shelf fills the
+// screen behind a Liquid Glass dock of 5:3 icons, with the next row peeking below. Moving
 // up expands the Top Shelf; moving down scrolls into the full app grid. Everything is laid
 // out on a canvas 1920 points wide (or 1080 tall, whichever fits), stretched along the
 // other axis so it fills any window shape edge to edge.
 
-private struct Layout {
+/// Apple TV's Home Screen, measured from the pictures in Apple's own guide (tvOS 27) at 1920 points wide: six
+/// 250×150 icons 48 apart and 90 from each side, rows 110 apart; the dock's glass 40 around the top row (so 50 from
+/// each side of the screen, its corners concentric with the icons'). Home and Arrange Apps both lay out from these.
+enum HomeGrid {
     static let tile = CGSize(width: 250, height: 150)
-    static let tileSpacing: CGFloat = 28
-    static let dockPadding: CGFloat = 44
-    static let rowGap: CGFloat = 80
+    static let tileCorner: CGFloat = 22
+    static let spacing: CGFloat = 48
+    static let dockPadding: CGFloat = 40
+    static let rowGap: CGFloat = 110
+    /// From one row's top to the next's.
+    static let rowStride = tile.height + rowGap
+    static let dockHeight = tile.height + dockPadding * 2
+    static let dockCorner = tileCorner + dockPadding
+    /// A focused icon is a fifth bigger, where it was (Apple TV's doesn't rise).
+    static let focusScale: CGFloat = 1.2
+    /// From the dock's bottom to the screen's, on Home.
+    static let dockBottom: CGFloat = 67
+    /// The first icon's left edge, where Home's content starts: the Top Shelf's text lines up with it.
+    static let contentLeading: CGFloat = 90
+
+    /// The dock's top edge on Home (it sits a fixed distance from the bottom; extra height goes to the Top Shelf).
+    static func dockTop(_ canvas: CGSize) -> CGFloat { canvas.height - dockBottom - dockHeight }
+
+    static func dockWidth(columns: Int) -> CGFloat {
+        CGFloat(columns) * tile.width + CGFloat(columns - 1) * spacing + dockPadding * 2
+    }
+}
+
+private struct Layout {
+    /// On Home the rows under the dock sit this much closer, so the second row peeks over the bottom edge.
+    static let peek: CGFloat = 28
+    /// In the grid the dock's row is this far from the top, and at most this many rows are on screen above the last.
+    static let gridTop: CGFloat = 97
+    static let gridRowsAbove = 2
 
     let canvas: CGSize
+    let columns: Int
 
-    /// The dock sits a fixed distance from the bottom; extra height goes to the Top Shelf.
-    var dockFrame: CGRect { CGRect(x: (canvas.width - 1728) / 2, y: canvas.height - 320, width: 1728, height: 220) }
-    /// How far everything moves up when focus goes below the dock.
-    var gridShift: CGFloat { dockFrame.midY - Self.tile.height / 2 - 75 }
+    var dockFrame: CGRect {
+        let width = HomeGrid.dockWidth(columns: columns)
+        return CGRect(x: (canvas.width - width) / 2, y: HomeGrid.dockTop(canvas), width: width, height: HomeGrid.dockHeight)
+    }
+
+    /// How far everything moves when the Top Shelf has the screen (down, off the bottom), or focus is on a row of
+    /// the grid (up: the dock's row to the top, then a row at a time once the focused row would leave the screen).
+    func offset(shelfFocused: Bool, focusedRow: Int) -> CGFloat {
+        if shelfFocused { return 420 }
+        guard focusedRow > 0 else { return 0 }
+        return Self.gridTop - top(ofRow: 0, inGrid: true) - CGFloat(max(0, focusedRow - Self.gridRowsAbove)) * HomeGrid.rowStride
+    }
 
     /// The top of a row of apps: the dock's row in the dock, the rest below it.
-    func top(ofRow row: Int) -> CGFloat {
-        let dockRowTop = dockFrame.midY - Self.tile.height / 2
+    func top(ofRow row: Int, inGrid: Bool) -> CGFloat {
+        let dockRowTop = dockFrame.minY + HomeGrid.dockPadding
         guard row > 0 else { return dockRowTop }
-        // The second row peeks just below the dock.
-        return dockFrame.maxY + 60 + CGFloat(row - 1) * (Self.tile.height + Self.rowGap)
+        return dockRowTop + CGFloat(row) * HomeGrid.rowStride - (inGrid ? 0 : Self.peek)
     }
 
     /// Where the app at a place on Home is, before the grid scrolls.
-    func tileFrame(_ index: Int, columns: Int) -> CGRect {
-        CGRect(x: dockFrame.minX + Self.dockPadding + CGFloat(index % columns) * (Self.tile.width + Self.tileSpacing),
-               y: top(ofRow: index / columns), width: Self.tile.width, height: Self.tile.height)
+    func tileFrame(_ index: Int, inGrid: Bool) -> CGRect {
+        CGRect(x: dockFrame.minX + HomeGrid.dockPadding + CGFloat(index % columns) * (HomeGrid.tile.width + HomeGrid.spacing),
+               y: top(ofRow: index / columns, inGrid: inGrid), width: HomeGrid.tile.width, height: HomeGrid.tile.height)
     }
 }
 
@@ -53,10 +90,8 @@ struct HomeView: View {
     }
 
     var body: some View {
-        let layout = Layout(canvas: canvas)
-        let rowStride = Layout.tile.height + Layout.rowGap
-        // Dock (row 0) sits at rest; row 1 brings the grid up; each subsequent row scrolls by rowStride.
-        let gridOffset: CGFloat = shelfFocused ? 420 : (focusedRow > 0 ? -layout.gridShift - CGFloat(focusedRow - 1) * rowStride : 0)
+        let layout = Layout(canvas: canvas, columns: tv.columns)
+        let gridOffset = layout.offset(shelfFocused: shelfFocused, focusedRow: focusedRow)
 
         ZStack(alignment: .topLeading) {
             TopShelf(tv: tv, expanded: shelfFocused)
@@ -81,7 +116,7 @@ struct HomeView: View {
             let held = panel?.onHome == true ? panel?.selectedID.flatMap { id in tv.services.firstIndex { $0.id == id } } : nil
             AppMenuLayer(tv: tv, menu: held == nil ? nil : panel?.menu, id: held.map { tv.services[$0].id },
                          name: held.map { tv.services[$0].name } ?? "",
-                         tile: held.map { layout.tileFrame($0, columns: tv.columns).offsetBy(dx: 0, dy: gridOffset) },
+                         tile: held.map { layout.tileFrame($0, inGrid: tv.inGrid).offsetBy(dx: 0, dy: gridOffset) },
                          rightOfTile: (held ?? 0) % tv.columns < tv.columns - 2, size: canvas)
                 .zIndex(10)
         }
@@ -89,6 +124,7 @@ struct HomeView: View {
         .clipped()
         .foregroundStyle(.white)
         .animation(Motion.navigate, value: focusedRow)
+        .animation(Motion.navigate, value: tv.inGrid)
         .animation(Motion.navigate, value: shelfFocused)
         .animation(Motion.appear, value: tv.shelfAppIndex)
     }
@@ -104,19 +140,22 @@ extension HomeView {
 
 /// Home's status row, as tvOS 26's: the time and the avatar in a glass capsule. It widens (the glyphs and the
 /// Control Center button come in between) while focus is in it, or Control Center or the profiles are open from it;
-/// the focused button grows on a white platter. Everything in it is as big as the avatar (TopBar).
+/// the focused button grows on a white platter. While one of the two is open the row is Apple TV's Control Center
+/// row: the capsule's glass is gone, the open one is big and the other small.
 private struct StatusCapsule: View {
     @ObservedObject var tv: TVController
     let glyphs: [String]
 
-    private var expanded: Bool {
-        if case .status = tv.focus { return true }
-        return tv.controlCenter != nil || tv.profilePicker?.dropdown == true
-    }
+    /// The open (or focused) button beside the avatar's own size, and the other one while one is open: 58 and 34
+    /// points on Apple TV.
+    private static let selected: CGFloat = 58 / TopBar.avatar
+    private static let resting: CGFloat = 34 / TopBar.avatar
 
     var body: some View {
-        let expanded = expanded
-        HStack(spacing: 16) {
+        let controlCenterOpen = tv.controlCenter != nil, profilesOpen = tv.profilePicker?.dropdown == true
+        let open = controlCenterOpen || profilesOpen
+        let expanded = open || { if case .status = tv.focus { true } else { false } }()
+        HStack(spacing: 13) {
             StatusClock(twentyFour: tv.preferences.twentyFourHourTime)
                 .padding(.trailing, expanded ? 6 : 0)
                 .contentShape(Rectangle())
@@ -128,7 +167,7 @@ private struct StatusCapsule: View {
                 }
                 // Control Center: white while it's open or focused, like Apple TV's
                 let focused = tv.focus == .status(.controlCenter)
-                let lit = focused || tv.controlCenter != nil
+                let lit = focused || controlCenterOpen
                 Button { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) } label: {
                     Image(systemName: "switch.2")
                         .font(.system(size: 22, weight: .semibold))
@@ -136,7 +175,7 @@ private struct StatusCapsule: View {
                         .frame(width: TopBar.avatar, height: TopBar.avatar)
                         .background(Circle().fill(.white).opacity(lit ? 1 : 0))
                         .contentShape(Circle())
-                        .scaleEffect(focused ? 1.15 : 1)
+                        .scaleEffect(lit ? Self.selected : 1)
                         .shadow(color: .black.opacity(focused ? 0.3 : 0), radius: 10, y: 6)
                 }
                 .buttonStyle(PressDip())
@@ -144,17 +183,19 @@ private struct StatusCapsule: View {
             }
             Button { tv.activateStatus(.profile) } label: {
                 ProfileAvatar(profile: tv.profile, size: TopBar.avatar)
-                    .avatarFocus(focused: tv.focus == .status(.profile), lit: tv.profilePicker?.dropdown == true)
+                    .avatarFocus(focused: tv.focus == .status(.profile), lit: profilesOpen)
+                    .scaleEffect(controlCenterOpen ? Self.resting : 1)
                     .contentShape(Circle())
             }
             .buttonStyle(PressDip())
         }
-        .padding(.leading, 22)
+        .padding(.leading, 26)
         .padding(.trailing, TopBar.inset)
         .frame(height: TopBar.height)
-        .tvGlass(in: Capsule())
+        .tvGlass(in: Capsule(), enabled: !open)
         .animation(Motion.focus, value: tv.focus)
         .animation(Motion.focus, value: expanded)
+        .animation(Motion.focus, value: open)
         .animation(Motion.appear, value: glyphs)
     }
 }
@@ -207,7 +248,7 @@ struct AppGrid: View {
     @Environment(\.canvasSize) private var canvas
 
     var body: some View {
-        let layout = Layout(canvas: canvas)
+        let layout = Layout(canvas: canvas, columns: tv.columns)
         // Each cell carries its own app, keyed by id, so a cell never reads a list that has
         // since changed (removing an app shortens it).
         let cells = tv.services.enumerated().map { AppCell.Item(index: $0.offset, service: $0.element) }
@@ -215,33 +256,27 @@ struct AppGrid: View {
             Array(cells[$0..<min($0 + tv.columns, cells.count)])
         }
         ZStack(alignment: .topLeading) {
-            GlassDock(visible: !tv.inGrid)
+            GlassDock()
                 .frame(width: layout.dockFrame.width, height: layout.dockFrame.height)
                 .offset(x: layout.dockFrame.minX, y: layout.dockFrame.minY)
 
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
-                HStack(spacing: Layout.tileSpacing) {
+                HStack(spacing: HomeGrid.spacing) {
                     ForEach(row) { item in
                         AppCell(tv: tv, item: item, showsLabel: rowIndex > 0 || tv.inGrid)
                     }
                 }
-                .offset(x: layout.dockFrame.minX + Layout.dockPadding, y: top(ofRow: rowIndex, in: layout))
+                .offset(x: layout.dockFrame.minX + HomeGrid.dockPadding, y: layout.top(ofRow: rowIndex, inGrid: tv.inGrid))
             }
         }
     }
-
-    private func top(ofRow row: Int, in layout: Layout) -> CGFloat { layout.top(ofRow: row) }
 }
 
-/// tvOS 26 dock: frosted Liquid Glass with a lit top edge.
+/// tvOS 26's dock: Liquid Glass around the top row, its corners concentric with the icons'. It stays around the top
+/// row in the grid too, as Apple TV's does, and scrolls away with that row.
 struct GlassDock: View {
-    /// In the grid the dock's glass dissolves to nothing (`.identity`) instead of fading, which would flatten it.
-    var visible = true
-
     var body: some View {
-        Color.clear
-            .shadow(color: .black.opacity(visible ? 0.25 : 0), radius: 30, y: 16)
-            .tvGlass(in: RoundedRectangle(cornerRadius: 48, style: .continuous), enabled: visible)
+        Color.clear.tvGlass(in: RoundedRectangle(cornerRadius: HomeGrid.dockCorner, style: .continuous))
     }
 }
 
@@ -273,8 +308,8 @@ struct AppCell: View {
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let location):
-                    tv.hover(index, tilt: CGSize(width: location.x / Layout.tile.width - 0.5,
-                                                 height: location.y / Layout.tile.height - 0.5))
+                    tv.hover(index, tilt: CGSize(width: location.x / HomeGrid.tile.width - 0.5,
+                                                 height: location.y / HomeGrid.tile.height - 0.5))
                 case .ended:
                     tv.tilt = .zero
                 }
@@ -312,16 +347,16 @@ struct AppTile: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: HomeGrid.tileCorner, style: .continuous)
         let tilt = reduceMotion ? .zero : tilt
         artwork
-            .frame(width: Layout.tile.width, height: Layout.tile.height)
+            .frame(width: HomeGrid.tile.width, height: HomeGrid.tile.height)
             .clipShape(shape)
             // tvOS light: a soft glare on the focused tile that slides with the pointer.
             .overlay {
                 RadialGradient(colors: [.white.opacity(0.32), .white.opacity(0)],
                                center: UnitPoint(x: 0.5 + tilt.width * 1.2, y: 0.05 + tilt.height * 1.2),
-                               startRadius: 0, endRadius: Layout.tile.width * 0.75)
+                               startRadius: 0, endRadius: HomeGrid.tile.width * 0.75)
                     .blendMode(.plusLighter)
                     .clipShape(shape)
                     .opacity(focused ? 1 : 0)
@@ -334,8 +369,7 @@ struct AppTile: View {
             }
             .rotation3DEffect(.degrees(-tilt.height * 10), axis: (x: 1, y: 0, z: 0), perspective: 0.6)
             .rotation3DEffect(.degrees(tilt.width * 12), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
-            .scaleEffect(focused ? (reduceMotion ? 1.06 : 1.14) : 1)
-            .offset(y: focused && !reduceMotion ? -10 : 0)
+            .scaleEffect(focused ? (reduceMotion ? 1.06 : HomeGrid.focusScale) : 1)
             // Resting icons sit flat on the glass; only the focused one casts a shadow.
             .shadow(color: .black.opacity(focused ? 0.6 : 0), radius: focused ? 28 : 0, y: focused ? 24 : 0)
             .animation(Motion.focus, value: focused)
@@ -422,7 +456,7 @@ enum StoreTile {
 }
 
 /// Settings 磁贴上的齿轮圆盘（照 Apple TV 的设置图标）。矢量图里有几千个点，载入时画成一张位图
-/// （够放大到聚焦时的 1.14 倍、Retina），主屏动画时不再反复画矢量。
+/// （够放大到聚焦时的 1.2 倍、Retina），主屏动画时不再反复画矢量。
 @MainActor
 enum SettingsTile {
     static let gears: NSImage? = {

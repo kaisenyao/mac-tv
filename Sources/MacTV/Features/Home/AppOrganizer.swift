@@ -314,20 +314,21 @@ extension TVController {
 
 // MARK: - The sheet
 
-/// Where everything sits, in the sheet's own coordinates: Home's tiles, dock, columns and gaps.
+/// Where everything sits, in the sheet's own coordinates: Home's tiles, dock, columns and gaps (HomeGrid), with the
+/// rows as Home's grid has them.
 struct ArrangeGrid {
     static let space = "arrange-apps"
-    static let tile = CGSize(width: 250, height: 150)
-    static let spacing: CGFloat = 28
-    /// The dock's padding either side of its row, as on Home.
-    static let inset: CGFloat = 44
-    static let width: CGFloat = 1728
+    static let tile = HomeGrid.tile
+    static let spacing = HomeGrid.spacing
+    /// The dock's padding around its row, as on Home.
+    static let inset = HomeGrid.dockPadding
+    static let width = HomeGrid.dockWidth(columns: AppOrganizer.columns)
     static let dockTop: CGFloat = 96
-    static let dockHeight: CGFloat = 220
+    static let dockHeight = HomeGrid.dockHeight
     /// Room under a row for the focused app's name, as on Home.
-    static let rowGap: CGFloat = 80
-    /// Home's second row sits 60 points below the dock.
-    static let belowTop = dockTop + dockHeight + 60
+    static let rowGap = HomeGrid.rowGap
+    /// The second row's top: a row's stride under the dock's row.
+    static let belowTop = dockTop + inset + HomeGrid.rowStride
 
     /// Every tile.
     let count: Int
@@ -353,7 +354,7 @@ struct ArrangeGrid {
     static func index(at point: CGPoint) -> Int {
         let column = min(max(Int(((point.x - inset + spacing / 2) / (tile.width + spacing)).rounded(.down)), 0),
                          AppOrganizer.columns - 1)
-        if point.y < dockTop + dockHeight + 30 { return column }
+        if point.y < (dockTop + dockHeight + belowTop) / 2 { return column }
         let row = 1 + max(0, Int(((point.y - belowTop + rowGap / 2) / (tile.height + rowGap)).rounded(.down)))
         return row * AppOrganizer.columns + column
     }

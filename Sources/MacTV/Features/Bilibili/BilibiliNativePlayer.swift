@@ -1789,7 +1789,7 @@ struct BilibiliPlayerScreen: View {
                 if player.showing, player.buffering, !player.paused, !player.failed {
                     ProgressView().controlSize(.large)
                         .padding(30)
-                        .background(.black.opacity(0.4), in: Circle())
+                        .tvGlass(in: Circle())
                         .transition(.opacity)
                 }
                 // 画面出来之前：封面放大模糊 + 标题
@@ -1823,7 +1823,7 @@ struct BilibiliPlayerScreen: View {
                     Image(systemName: "pause.fill")
                         .font(.system(size: 76, weight: .bold))
                         .frame(width: 180, height: 180)
-                        .background(.ultraThinMaterial, in: Circle())
+                        .tvGlass(in: Circle())
                         .transition(.opacity)
                 }
 

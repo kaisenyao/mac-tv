@@ -533,14 +533,14 @@ extension AppShelf {
 // MARK: 画面
 
 /// One grid for every app's Top Shelf (哔哩哔哩, YouTube, 网易云, 得到, Movies), so that moving along the dock nothing
-/// that means the same thing jumps. The left column starts where the dock does and is anchored at its bottom: the dots
+/// that means the same thing jumps. The left column starts where the top row's icons do and is anchored at its bottom: the dots
 /// sit the same distance above the dock in every app (collapsed), and the buttons and dots the same distance above the
 /// screen's bottom edge once the dock has slid away (expanded). Top to bottom: tag, title (one or two lines, as long as
 /// it is), meta line, the body (songs, an intro, a film's overview), buttons, dots. Artwork on the right (a record, a
 /// book, a poster) is centred between the top bar and the dock and ends at the same distance from the right edge.
 enum ShelfGrid {
-    /// The column's left edge: the dock's.
-    static let leading: CGFloat = 96
+    /// The column's left edge: the top row's first icon's, as Apple TV's Top Shelf starts.
+    static let leading: CGFloat = HomeGrid.contentLeading
     /// The coloured tag at the top ("每日推荐", "Continue Watching").
     static let tag: CGFloat = 34
     static let tagToTitle: CGFloat = 18
@@ -585,7 +585,7 @@ enum ShelfGrid {
     static let artGap: CGFloat = 80
 
     /// The dock's top edge (Home's dock sits a fixed distance from the bottom).
-    static func dockTop(_ canvas: CGSize) -> CGFloat { canvas.height - 320 }
+    static func dockTop(_ canvas: CGSize) -> CGFloat { HomeGrid.dockTop(canvas) }
     /// Under the top bar: nothing in the Top Shelf goes above it.
     static var top: CGFloat { TopBar.top + TopBar.height }
     /// From the column's bottom (the dots) to the screen's bottom edge.

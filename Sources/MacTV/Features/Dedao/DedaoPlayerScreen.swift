@@ -78,7 +78,7 @@ struct DedaoPlayerScreen: View {
                         .font(.system(size: 68, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 168, height: 168)
-                        .background(.ultraThinMaterial, in: Circle())
+                        .tvGlass(in: Circle())
                         .shadow(color: .black.opacity(0.35), radius: 20, y: 8)
                         .scaleEffect(player.paused ? 1 : 0.7)
                         .opacity(player.paused ? 1 : 0)

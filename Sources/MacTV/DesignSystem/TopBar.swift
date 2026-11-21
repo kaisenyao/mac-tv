@@ -4,22 +4,24 @@ import SwiftUI
 /// from the right edge, and the same height for everything in it — pills, round buttons and avatars on their own — so
 /// nothing in the corner changes size or jumps when you move between them.
 enum TopBar {
+    // Measured from Apple's pictures of tvOS 27 at 1920 points wide: the capsule is 58 tall, 48 from the top, and its
+    // right edge is the dock's (50 from the screen's); the avatar in it is 50, the time 25 points, medium.
     /// The row's top edge.
-    static let top: CGFloat = 56
+    static let top: CGFloat = 48
     /// The row's height: Home's capsule (the time and the avatar, as tvOS 26's), the pills in an app's row.
-    static let height: CGFloat = 60
-    /// From the right edge of the screen to the row's end.
-    static let trailing: CGFloat = 96
+    static let height: CGFloat = 58
+    /// From the right edge of the screen to the row's end: the dock's edge, closer to the screen's than content is.
+    static let trailing: CGFloat = 50
     /// An app's own mark at the row's left (得到's owl, 哔哩哔哩's and 网易云's wordmarks): the same height in each.
     static let brand: CGFloat = 56
     /// An avatar: in Home's capsule, and on its own at the end of an app's row, in the same place on screen.
-    static let avatar: CGFloat = 48
+    static let avatar: CGFloat = 50
     /// From the capsule's edge to the avatar in it (and to its round buttons, as big as the avatar).
     static var inset: CGFloat { (height - avatar) / 2 }
     /// Text in a pill: the song playing, Search, the time in Movies.
     static let text = Font.system(size: TVText.caption1.size, weight: .semibold)
     /// Home's time, in its capsule.
-    static let clock = Font.system(size: TVText.caption1.size, weight: .semibold)
+    static let clock = Font.tv(.caption1)
 }
 
 /// An app's account at the end of its top bar: the avatar alone, round, the size of Home's and where Home's is (the
@@ -43,7 +45,7 @@ extension View {
     /// An avatar's focus, the same everywhere (Home's capsule, an app's row): a white ring around it, and it grows.
     func avatarFocus(focused: Bool, lit: Bool = false) -> some View {
         overlay(Circle().strokeBorder(.white, lineWidth: 3).padding(-5).opacity(focused || lit ? 1 : 0))
-            .scaleEffect(focused ? 1.12 : 1)
+            .scaleEffect(focused || lit ? 1.12 : 1)
             .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 14, y: 8)
     }
 }

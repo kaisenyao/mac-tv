@@ -12,6 +12,19 @@ import SwiftUI
 // | Edge   | controls along an edge of a video: a quality bar, a shelf | EdgeScrim     | none                  | –       | slides, Motion.slide       |
 //
 // A focused card lifts with `.lift`. Destructive actions are `Color.destructive`.
+//
+// What is Liquid Glass and what isn't, as tvOS 26 and 27 use it (Apple TV 4K User Guide, tvOS 27):
+//
+// - Glass is the controls layer, floating over content: Home's dock and status capsule, Control Center's tiles and
+//   round buttons, a pill or a round button in an app's top bar, a button over artwork (Play, Open, "+"), a sidebar,
+//   a side panel, a menu, a player's buttons and its paused mark, and every notice. All of it is `tvGlass`
+//   (a panel or a menu: `tvPanelSurface`, the same glass a little darker for its text).
+// - Focus on glass is `focusPlatter`: the control turns solid white with dark text, as Apple TV's do.
+// - Content is never glass: app icons, posters, covers, cards, the rows of a list, text, and the small labels on
+//   artwork (a duration, a count), which stay dark scrims.
+// - A sheet takes the whole screen on a frosted backdrop, so there is nothing behind it for glass to bend: its
+//   groups are `tvPanel`, a quiet fill, and its rows are plain until focused.
+// - Glass never sits on glass: inside a glass panel or menu, a row is plain and its focus is the white platter.
 
 /// What's behind a panel or a menu: the screen, dimmed. Not blurred: a blur can't reach a web page or a video, and a
 /// dim reads the same over all of them. Clicking it closes what's open, when `close` is given.
@@ -55,13 +68,10 @@ enum TVShadow {
 }
 
 extension View {
-    /// A panel's or a menu's own surface: frosted glass darkened so its text reads over anything, with a hairline edge.
+    /// A panel's or a menu's own surface: Liquid Glass, as tvOS 26's sidebars and menus are, darkened a little so its
+    /// text reads over any artwork behind it.
     func tvPanelSurface<S: InsettableShape>(in shape: S) -> some View {
-        background {
-            shape.fill(.black.opacity(0.35))
-            shape.fill(.ultraThinMaterial)
-            PillOutline(shape).strokeBorder(.white.opacity(0.16))
-        }
+        tvGlass(in: shape, tint: .black.opacity(0.3))
     }
 
     /// One of Mac TV's two shadows; `active` false keeps the modifier in place with no shadow (a tile losing focus).

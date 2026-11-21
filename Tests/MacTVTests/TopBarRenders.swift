@@ -47,6 +47,13 @@ import Testing
         try await withTV { tv in try await render("topbar-home", HomeView(tv: tv)) }
     }
 
+    @Test func grid() async throws {
+        try await withTV { tv in
+            tv.setFocus(.app(tv.columns + 1))
+            try await render("topbar-grid", HomeView(tv: tv))
+        }
+    }
+
     @Test func controlCenter() async throws {
         try await withTV { tv in
             tv.controlCenter = ControlCenterPanel()
@@ -87,11 +94,11 @@ import Testing
     @Test func appAvatars() async throws {
         try await withTV { tv in
             let rows = VStack(alignment: .trailing, spacing: 40) {
-                HStack(spacing: 16) {
+                HStack(spacing: 13) {
                     Text("17:17").font(TopBar.clock)
                     ProfileAvatar(profile: tv.profile, size: TopBar.avatar)
                 }
-                .padding(.leading, 22).padding(.trailing, TopBar.inset).frame(height: TopBar.height).tvGlass(in: Capsule())
+                .padding(.leading, 26).padding(.trailing, TopBar.inset).frame(height: TopBar.height).tvGlass(in: Capsule())
                 AccountAvatar(focused: false) { Color.gray }
                 AccountAvatar(focused: true) { Color.pink }
             }

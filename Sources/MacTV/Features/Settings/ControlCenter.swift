@@ -339,8 +339,10 @@ extension TVController {
 
 // MARK: Views
 
-/// Drawn at Apple TV's own sizes at 1080p: tiles about 206 points wide and 95 tall, Sleep Now as tall as two, round
-/// buttons as wide as a tile is tall, and Apple's tile text: 20-point titles and details, medium.
+/// Drawn at Apple TV's own sizes at 1080p, measured from the pictures in Apple's guide (tvOS 27): tiles about 206
+/// points wide and 95 tall with 17 between them, Sleep Now as tall as two, round buttons as wide as a tile is tall,
+/// and Apple's tile text: 23 points, medium. A tile's second line is a size smaller than Apple TV's (20), because
+/// ours name a display, a speaker or a remote, which run longer than "Home" or "Off".
 struct ControlCenterView: View {
     @ObservedObject var tv: TVController
     @ObservedObject private var siriRemote = SiriRemoteStatus.shared
@@ -350,11 +352,13 @@ struct ControlCenterView: View {
     private static let row: CGFloat = 95
     private static let gap: CGFloat = 17
     private static let width = column * 2 + gap
-    /// The box every round button's symbol is fitted to.
-    private static let glyph = CGSize(width: 40, height: 36)
-    /// The box every tile's symbol is fitted to: as tall as Apple TV's beside 20-point text.
-    private static let tileGlyph = CGSize(width: 36, height: 32)
-    private static let speakerGlyph = CGSize(width: 44, height: 32)
+    /// The box every round button's symbol is fitted to: Apple TV's are 40 points tall, a wide one up to 50 across.
+    private static let glyph = CGSize(width: 50, height: 40)
+    /// The box every tile's symbol is fitted to.
+    private static let tileGlyph = CGSize(width: 38, height: 34)
+    private static let speakerGlyph = CGSize(width: 46, height: 34)
+    private static let tileText = Font.tv(.caption2)
+    private static let tileDetail = Font.system(size: 20, weight: .medium)
     /// The blue of a connected remote or the sound output, as on Apple TV.
     private static let tint = Color(hex: "#5AC8FA")
 
@@ -368,7 +372,7 @@ struct ControlCenterView: View {
                 GlassGroup(spacing: 0) { grid(panel) }
                     .transition(.opacity)
                 Text(caption(panel))
-                    .font(.system(size: 21, weight: .semibold))
+                    .font(.system(size: 23, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.85))
                     .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
                     .frame(width: Self.width, alignment: .center)
@@ -381,10 +385,10 @@ struct ControlCenterView: View {
             }
         }
         .foregroundStyle(.white)
-        // Just under the home screen's status row, which stays in place above it: far enough below that a focused
-        // tile, grown, never reaches the row; its right edge on the row's.
-        .padding(.top, TopBar.top + TopBar.height + 18)
-        .padding(.trailing, TopBar.trailing)
+        // Under the home screen's status row, which stays in place above it, where Apple TV's tiles are: their top
+        // 132 points down, their right edge 10 in from the row's.
+        .padding(.top, TopBar.top + TopBar.height + 26)
+        .padding(.trailing, TopBar.trailing + 10)
         .frame(width: canvas.width, height: canvas.height, alignment: .topTrailing)
         .animation(Motion.focus, value: panel)
         .onReceive(siriRemote.$connected.dropFirst()) { _ in tv.remoteCoordinator.refreshRemoteStatus() }
@@ -441,7 +445,7 @@ struct ControlCenterView: View {
         return VStack(alignment: .leading, spacing: 14) {
             if !available.isEmpty {
                 Text("Add a Control")
-                    .font(.system(size: 21, weight: .semibold))
+                    .font(.system(size: 23, weight: .semibold))
                     .opacity(0.6)
                     .padding(.leading, 6)
                 rounds(available, panel, adding: true)
@@ -457,7 +461,7 @@ struct ControlCenterView: View {
         let focused = panel.item == item
         return Button { tv.activateControl(item) } label: {
             Text(item == .done ? "Done" : "Edit")
-                .font(.system(size: 21, weight: .semibold))
+                .font(.system(size: 23, weight: .semibold))
                 .foregroundStyle(focused ? .black : .white)
                 .padding(.horizontal, 26)
                 .frame(height: 46)
@@ -517,9 +521,9 @@ struct ControlCenterView: View {
         let focused = panel.item == .sleepNow
         let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
         return Button { tv.activateControl(.sleepNow) } label: {
-            VStack(spacing: 16) {
-                Image(systemName: "power").font(.system(size: 88, weight: .light))
-                Text("Sleep Now").font(.system(size: 20, weight: .medium))
+            VStack(spacing: 12) {
+                Image(systemName: "power").font(.system(size: 98, weight: .light))
+                Text("Sleep Now").font(Self.tileText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
             }
@@ -556,10 +560,10 @@ struct ControlCenterView: View {
                     }
                 }
                 .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 20, weight: .medium))
-                        .minimumScaleFactor(0.85)
-                    Text(detail).font(.system(size: 20, weight: .medium)).opacity(0.6)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(Self.tileText)
+                        .minimumScaleFactor(0.9)   // "Sleep Timer" on one line
+                    Text(detail).font(Self.tileDetail).opacity(0.6)
                         .minimumScaleFactor(0.75)   // "Game Controller · 70%" still fits
                         .contentTransition(detail.first?.isNumber == true ? .numericText() : .opacity)
                 }
@@ -567,7 +571,7 @@ struct ControlCenterView: View {
                 Spacer(minLength: 0)
             }
             .padding(.leading, 18)
-            .padding(.trailing, 10)
+            .padding(.trailing, 8)
             .foregroundStyle(focused ? .black : .white)
             .frame(width: Self.column, height: Self.row)
             .focusPlatter(Capsule(), focused: focused)
@@ -597,7 +601,7 @@ struct ControlCenterView: View {
             // or round one (Settings, Search): the same size to the eye.
             Group {
                 if item == .mute {
-                    VolumeSpeaker(audio: tv.audioCoordinator, box: CGSize(width: 48, height: 36))   // the waves follow the volume
+                    VolumeSpeaker(audio: tv.audioCoordinator, box: CGSize(width: 54, height: 40))   // the waves follow the volume
                 } else {
                     Image(systemName: look.symbol)
                         .resizable()

@@ -473,22 +473,23 @@ struct ProfileNameField: View {
     }
 }
 
-/// The profiles dropped down from Home's avatar, as tvOS 26's: a grid of avatars under the status row, its right edge
-/// on the row's, each with its name, the one watching ticked in green, then Add Profile. Focus lifts an avatar and
-/// rings it white, as the avatar in the row.
+/// The profiles dropped down from Home's avatar, as tvOS 26's: a grid of avatars under the status row, each with its
+/// name, the one watching ticked in green, then Add Profile on glass. Focus lifts an avatar and rings it white, as
+/// the avatar in the row. Apple TV's sizes at 1920 points wide: avatars 172 across and 31 apart, rows 228 apart, the
+/// grid 103 from the right edge and 145 from the top.
 struct ProfileDropdown: View {
     @ObservedObject var tv: TVController
-    private static let side: CGFloat = 132
-    private static let tick: CGFloat = 28
+    private static let side: CGFloat = 172
+    private static let tick: CGFloat = 40
 
     var body: some View {
         let picker = tv.profilePicker ?? ProfilePicker(dropdown: true)
         let all = tv.profiles.all
         let count = all.count + 1
         let rows = stride(from: 0, to: count, by: ProfilePicker.dropdownColumns).map { Array($0..<min($0 + ProfilePicker.dropdownColumns, count)) }
-        VStack(alignment: .trailing, spacing: 26) {
+        VStack(alignment: .trailing, spacing: 18) {
             ForEach(rows, id: \.self) { row in
-                HStack(alignment: .top, spacing: 34) {
+                HStack(alignment: .top, spacing: 31) {
                     ForEach(row, id: \.self) { index in
                         item(index, all: all, focused: picker.index == index)
                     }
@@ -496,22 +497,22 @@ struct ProfileDropdown: View {
             }
         }
         .foregroundStyle(.white)
-        .padding(.trailing, TopBar.trailing)
-        .padding(.top, TopBar.top + TopBar.height + 26)
+        .padding(.trailing, 103)
+        .padding(.top, 145)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .animation(Motion.focus, value: picker)
     }
 
     private func item(_ index: Int, all: [Profile], focused: Bool) -> some View {
         let profile = all.indices.contains(index) ? all[index] : nil
-        return VStack(spacing: 14) {
+        return VStack(spacing: 10) {
             Group {
                 if let profile {
                     ProfileAvatar(profile: profile, size: Self.side)
                 } else {
-                    Circle().fill(.white.opacity(0.18))
-                        .overlay(Image(systemName: "plus").font(.system(size: 48, weight: .medium)))
+                    Image(systemName: "plus").font(.system(size: 72, weight: .regular))
                         .frame(width: Self.side, height: Self.side)
+                        .tvGlass(in: Circle())
                 }
             }
             // The focus ring first, then the tick on top of it (on the avatar's edge, never under the ring), both
@@ -521,7 +522,7 @@ struct ProfileDropdown: View {
                 // As tvOS's: a small green tick whose centre sits on the avatar's edge, up and to the right at 45°
                 if profile?.id == tv.profile.id {
                     let edge = Self.side / 2 * 0.7071
-                    Image(systemName: "checkmark").font(.system(size: 14, weight: .bold))
+                    Image(systemName: "checkmark").font(.system(size: 20, weight: .bold))
                         .frame(width: Self.tick, height: Self.tick)
                         .background(Circle().fill(Color(hex: "#30D158")))
                         .offset(x: edge, y: -edge)
@@ -536,7 +537,7 @@ struct ProfileDropdown: View {
                 // The focused avatar grows by 12 %: its name moves down with it, the same gap below every avatar
                 .offset(y: focused ? Self.side * 0.06 : 0)
         }
-        .frame(width: Self.side + 24)
+        .frame(width: Self.side)
         .contentShape(Rectangle())
         .onTapGesture { tv.activateProfile(index) }
     }
