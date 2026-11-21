@@ -186,7 +186,7 @@ struct AdderField: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(label).font(.tv(.caption2, emphasized: true)).tracking(1).textCase(.uppercase).opacity(0.6)
             TVTextField(text: $text, placeholder: placeholder, editing: focused, secure: secure, onSubmit: submit)
-                .font(.system(size: 30, weight: .medium))
+                .font(.tv(.body))
                 .padding(.horizontal, 24)
                 .frame(height: 72)
                 .foregroundStyle(focused ? .black : .white)

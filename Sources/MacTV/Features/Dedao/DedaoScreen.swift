@@ -109,13 +109,12 @@ struct DedaoScreen: View {
 private struct DedaoChoice: View {
     let title: String
     let focused: Bool
-    var size: CGFloat = 24
 
     var body: some View {
         Text(title)
-            .font(.system(size: size, weight: .semibold))
+            .font(.tvMenuItem)
             .foregroundStyle(focused ? .black : .white)
-            .padding(.horizontal, size * 1.25).frame(height: size * 2.5)
+            .padding(.horizontal, 34).frame(height: 68)
             .background(Capsule().fill(focused ? Color.white : .white.opacity(0.1)))
             .scaleEffect(focused ? 1.05 : 1)
             .contentShape(Capsule())
@@ -137,14 +136,14 @@ private struct DedaoFailure: View {
             Text(text).font(.tv(.headline, emphasized: true)).multilineTextAlignment(.center).frame(maxWidth: 1100)
             if store.canRescan {
                 HStack(spacing: 20) {
-                    DedaoChoice(title: "重试", focused: store.failureChoice == 0, size: 27)
+                    DedaoChoice(title: "重试", focused: store.failureChoice == 0)
                         .onTapGesture { store.chooseFailure(0) }
-                    DedaoChoice(title: "重新扫码登录", focused: store.failureChoice == 1, size: 27)
+                    DedaoChoice(title: "重新扫码登录", focused: store.failureChoice == 1)
                         .onTapGesture { store.chooseFailure(1) }
                 }
                 .padding(.top, 14)
             } else {
-                DedaoChoice(title: "重试", focused: true, size: 27)
+                DedaoChoice(title: "重试", focused: true)
                     .onTapGesture { store.chooseFailure(0) }
                     .padding(.top, 14)
             }
@@ -275,7 +274,7 @@ private struct DedaoBrowse: View {
             if let item = store.highlighted {
                 Text(kicker(item)).font(.tv(.caption1, emphasized: true)).foregroundStyle(DedaoStyle.accent)
                 Text(item.title)
-                    .font(.tv(.title2, emphasized: true))
+                    .font(.tvHeroTitle)
                     .lineLimit(1)
                     .frame(maxWidth: 1350, alignment: .leading)
                     .shadow(color: .black.opacity(0.5), radius: 14, y: 4)
@@ -285,7 +284,7 @@ private struct DedaoBrowse: View {
                     if !item.heat.isEmpty { Label(item.heat, systemImage: "flame.fill") }
                     if item.duration > 0 { Label(minutes(item.duration), systemImage: "clock.fill") }
                 }
-                .font(.tv(.body))
+                .font(.tvHeroMeta)
                 .foregroundStyle(.white.opacity(0.72))
                 .lineLimit(1)
                 if !item.intro.isEmpty {
@@ -295,7 +294,7 @@ private struct DedaoBrowse: View {
             } else {
                 // 这一排还没取到：写这一页是什么
                 Text(store.sections.first { $0.id == store.section }?.title ?? "得到")
-                    .font(.tv(.title2, emphasized: true))
+                    .font(.tvHeroTitle)
                     .padding(.top, 44)
             }
         }
@@ -509,7 +508,7 @@ private struct DedaoTag: View {
         Group {
             if let symbol { Image(systemName: symbol) } else { Text(text) }
         }
-        .font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
+        .font(.tvBadge).foregroundStyle(.white)
         .padding(.horizontal, 12).frame(height: 32)
         .background(Capsule().fill(symbol == nil ? Color.black.opacity(0.55) : DedaoStyle.accent))
     }
@@ -587,10 +586,10 @@ private struct DedaoSidebar: View {
                 let shade = dark ? Color.black : Color.white.opacity(open ? 0.78 : (entry.id == store.sidebarSection ? 1 : 0.38))
                 HStack(spacing: 20) {
                     Image(systemName: entry.symbol)
-                        .font(.system(size: 28, weight: .semibold))
+                        .font(.tvMenuSymbol)
                         .frame(width: 44)
                     Text(entry.title)
-                        .font(.tv(.callout))
+                        .font(.tvMenuItem)
                         .fixedSize()
                         .opacity(open ? 1 : 0)
                         .offset(x: open ? 0 : -36)          // 文字往左收
@@ -617,8 +616,8 @@ private struct DedaoTopBar: View {
     var body: some View {
         HStack(spacing: 20) {
             if let owl = DedaoStyle.owl {
-                Image(nsImage: owl).resizable().frame(width: 60, height: 60)
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                Image(nsImage: owl).resizable().frame(width: TopBar.brand, height: TopBar.brand)
+                    .clipShape(RoundedRectangle(cornerRadius: TopBar.brand / 4, style: .continuous))
             }
             Text("得到").font(.tv(.title3, emphasized: true))
             // 在分类页：写上是哪个分类（左边栏收起时只有图标）
@@ -748,7 +747,7 @@ private struct DedaoMenuLayer: View {
         return VStack(alignment: .leading, spacing: 12) {
             if let title = menu.title {
                 Text(title)
-                    .font(.tv(.callout, emphasized: true))
+                    .font(.tvMenuDetail)
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
                     .padding(.horizontal, 22)
@@ -785,19 +784,19 @@ private struct DedaoMenuLayer: View {
                         if item.symbol.isEmpty {
                             Color.clear.frame(width: 36, height: 1)   // 没打勾的档位：字照样对齐
                         } else {
-                            Image(systemName: item.symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36)
+                            Image(systemName: item.symbol).font(.tvMenuSymbol).frame(width: 36)
                         }
-                        Text(item.title).font(.tv(.callout)).lineLimit(1)
+                        Text(item.title).font(.tvMenuItem).lineLimit(1)
                         Spacer(minLength: 0)
                         // 右边现在的值：倍速写"1.5×"；定时关闭开着时写还剩多久（每秒走一下）或"本讲结束"
                         if item.action == .sleepMenu {
                             DedaoSleepDetail(player: store.player)
                         } else if !item.detail.isEmpty {
-                            Text(item.detail).font(.system(size: 24, weight: .medium).monospacedDigit()).opacity(0.55).lineLimit(1)
+                            Text(item.detail).font(.tvMenuDetail.monospacedDigit()).opacity(0.55).lineLimit(1)
                         }
                         // 往里还有一层
                         if item.chevron {
-                            Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.5)
+                            Image(systemName: "chevron.right").font(.tvMenuDetail).opacity(0.5)
                         }
                     }
                     .foregroundStyle(focused ? (danger ? .white : .black) : .white.opacity(0.8))
@@ -831,7 +830,7 @@ private struct DedaoSleepDetail: View {
     var body: some View {
         if let timer = player.sleep {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(timer.label(at: context.date)).font(.system(size: 24, weight: .medium).monospacedDigit()).opacity(0.55)
+                Text(timer.label(at: context.date)).font(.tvMenuDetail.monospacedDigit()).opacity(0.55)
             }
         }
     }
@@ -913,12 +912,12 @@ private struct DedaoSettingsPage: View {
         case .shelf: ("主屏幕顶部", DedaoShelfSource.summary, true)
         }
         return HStack(spacing: 18) {
-            Text(title).font(.system(size: 30, weight: .semibold))
+            Text(title).font(.tvListTitle)
             Spacer(minLength: 20)
-            Text(value).font(.system(size: 28, weight: .medium)).opacity(0.6)
+            Text(value).font(.tvListDetail).opacity(0.6)
                 .contentTransition(.opacity)
             // 弹出一列选项的行带这个记号；开关那一行也留着它的位置，右边的值对在同一条竖线上
-            Image(systemName: "chevron.up.chevron.down").font(.system(size: 20, weight: .semibold))
+            Image(systemName: "chevron.up.chevron.down").font(.tvListDetail)
                 .opacity(picks ? 0.45 : 0)
         }
         .foregroundStyle(dark ? .black : .white.opacity(0.9))
@@ -1000,9 +999,9 @@ private struct DedaoListPage: View {
                 .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .shadow(color: .black.opacity(0.5), radius: 30, y: 18)
             Text(course?.title.isEmpty == false ? course!.title : item.title)
-                .font(.system(size: 40, weight: .bold)).lineLimit(3)
+                .font(.tv(.headline, emphasized: true)).lineLimit(3)
             let author = course?.lecturer.isEmpty == false ? course!.lecturer : item.author
-            if !author.isEmpty { Text(author).font(.tv(.callout)).opacity(0.7) }
+            if !author.isEmpty { Text(author).font(.tv(.body)).opacity(0.7) }
             Text(meta(course: course, list: list)).font(.tv(.caption1, emphasized: true)).foregroundStyle(DedaoStyle.accent)
             let intro = course?.intro.isEmpty == false ? course!.intro : item.intro
             if !intro.isEmpty { Text(intro).font(.tv(.caption2)).opacity(0.55).lineLimit(4) }
@@ -1074,17 +1073,17 @@ private struct DedaoListPage: View {
         Group {
             if current {
                 Image(systemName: store.player.paused ? "pause.fill" : "waveform")
-                    .font(.system(size: 26, weight: .bold)).foregroundStyle(DedaoStyle.accent)
+                    .font(.tvMenuSymbol).foregroundStyle(DedaoStyle.accent)
             } else {
-                Text("\(index + 1)").font(.system(size: 26, weight: .semibold).monospacedDigit()).opacity(0.45)
+                Text("\(index + 1)").font(.tvListDetail.monospacedDigit()).opacity(0.45)
             }
         }
         .frame(width: 60)
         VStack(alignment: .leading, spacing: 6) {
-            Text(track.title).font(.system(size: 28, weight: .semibold)).lineLimit(1)
+            Text(track.title).font(.tvListTitle).lineLimit(1)
                 .foregroundStyle(current ? DedaoStyle.accent : .white)
             Text([track.reader, track.duration > 0 ? clockText(track.duration) : ""].filter { !$0.isEmpty }.joined(separator: " · "))
-                .font(.system(size: 21)).opacity(0.5).lineLimit(1)
+                .font(.tvListDetail).opacity(0.5).lineLimit(1)
         }
         Spacer(minLength: 0)
         Group {
@@ -1096,7 +1095,7 @@ private struct DedaoListPage: View {
                 Text("已听 \(Int(track.progress))%")
             }
         }
-        .font(.system(size: 21, weight: .semibold)).opacity(0.55)
+        .font(.tvListDetail).opacity(0.55)
     }
 
     @ViewBuilder private func folderRow(_ index: Int) -> some View {
@@ -1105,12 +1104,12 @@ private struct DedaoListPage: View {
             .frame(width: 60, height: 80)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         VStack(alignment: .leading, spacing: 6) {
-            Text(entry.title).font(.system(size: 28, weight: .semibold)).lineLimit(1)
-            Text(entry.author).font(.system(size: 21)).opacity(0.5).lineLimit(1)
+            Text(entry.title).font(.tvListTitle).lineLimit(1)
+            Text(entry.author).font(.tvListDetail).opacity(0.5).lineLimit(1)
         }
         Spacer(minLength: 0)
         if entry.progress > 0 {
-            Text(entry.finished ? "已听完" : "已听 \(entry.progress)%").font(.system(size: 21, weight: .semibold)).opacity(0.55)
+            Text(entry.finished ? "已听完" : "已听 \(entry.progress)%").font(.tvListDetail).opacity(0.55)
         }
     }
 }

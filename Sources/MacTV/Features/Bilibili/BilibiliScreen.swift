@@ -89,13 +89,14 @@ struct BilibiliScreen: View {
                     .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: 50)).animation(.easeOut(duration: 0.28).delay(0.05)),
                                             removal: .opacity.animation(.easeIn(duration: 0.12))))
             }
+            brandBar
+            sidebar
             if store.accountMenuOpen {
-                // 头像菜单后面：屏幕压暗一层，点一下收起（和别的菜单一样）
+                // 头像菜单后面：整个屏幕（连字标和左边栏）压暗一层，点一下收起；头像和菜单在它上面，亮着（和别的菜单一样）
                 DimBackdrop(close: { store.tapAccount() })
                     .transition(.opacity.animation(BiliMotion.slide))
             }
-            topBar
-            sidebar
+            accountBar
             if store.cardMenu != nil {
                 DimBackdrop(close: { _ = store.closeCardMenu() })
                     .transition(.opacity.animation(BiliMotion.slide))
@@ -122,10 +123,10 @@ struct BilibiliScreen: View {
                 let current = tab == store.sidebarTab
                 HStack(spacing: 20) {
                     Image(systemName: tab.symbol)
-                        .font(.system(size: 30, weight: .semibold))
+                        .font(.tvMenuSymbol)
                         .frame(width: 44)
                     Text(tab.title)
-                        .font(.tv(.callout, emphasized: current))
+                        .font(.tvMenuItem)
                         .fixedSize()
                         .opacity(open ? 1 : 0)
                         .offset(x: open ? 0 : -36)          // 文字往左收
@@ -198,35 +199,40 @@ struct BilibiliScreen: View {
 
     // MARK: 上半屏：品牌、账号、选中视频的信息（或搜索框）
 
-    /// 顶部一行：品牌和账号。左边栏展开时它不动。
-    private var topBar: some View {
-        HStack(alignment: .center, spacing: 28) {
+    /// 顶部一行的左边：品牌字标。左边栏展开时它不动。和右边的账号分成两层，账号菜单的压暗夹在中间
+    private var brandBar: some View {
+        Group {
             if let logo = Self.logo {
                 Image(nsImage: logo).resizable().interpolation(.high)
                     .aspectRatio(contentMode: .fit)
-                    .frame(height: 64)
+                    .frame(height: TopBar.brand)
             } else {
                 Text("bilibili")
                     .font(.system(size: 52, weight: .heavy, design: .rounded))
                     .foregroundStyle(pink)
             }
-            Spacer()
-            AccountPill(name: store.account?.name ?? "未登录", focused: store.accountFocused, lit: store.accountMenuOpen) {
-                if let face = store.account?.face {
-                    BiliImage(url: face)
-                } else {
-                    Image(systemName: "person.crop.circle.fill").resizable().opacity(0.7)
-                }
-            }
-            .animation(Motion.focus, value: store.accountFocused)
-            .onTapGesture { store.tapAccount() }
-            // 账号菜单：从头像下面滑出来，和左边栏是同一种玻璃和同一条曲线
-            .overlay(alignment: .topTrailing) { accountMenu.offset(y: 84) }
         }
+        .frame(height: TopBar.height)   // 和账号胶囊在同一条中线上
         .padding(.leading, margin)
+        .padding(.top, TopBar.top)
+    }
+
+    /// 顶部一行的右边：账号胶囊和它下面的菜单
+    private var accountBar: some View {
+        AccountPill(name: store.account?.name ?? "未登录", focused: store.accountFocused, lit: store.accountMenuOpen) {
+            if let face = store.account?.face {
+                BiliImage(url: face)
+            } else {
+                Image(systemName: "person.crop.circle.fill").resizable().opacity(0.7)
+            }
+        }
+        .animation(Motion.focus, value: store.accountFocused)
+        .onTapGesture { store.tapAccount() }
+        // 账号菜单：从头像下面滑出来，和左边栏是同一种玻璃和同一条曲线
+        .overlay(alignment: .topTrailing) { accountMenu.offset(y: 84) }
         .padding(.trailing, TopBar.trailing)
         .padding(.top, TopBar.top)
-        .frame(width: canvas.width, alignment: .leading)
+        .frame(width: canvas.width, alignment: .trailing)
     }
 
     /// 头像下面的账号菜单。一直都在，平时缩在头像后面；白色高亮是同一块，在两项之间滑动。
@@ -237,11 +243,11 @@ struct BilibiliScreen: View {
             ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
                 let focused = index == store.accountIndex
                 HStack(spacing: 18) {
-                    Image(systemName: symbol(for: action)).font(.system(size: 26, weight: .semibold)).frame(width: 36)
-                    Text(title(for: action)).font(.tv(.callout, emphasized: focused)).lineLimit(1)
+                    Image(systemName: symbol(for: action)).font(.tvMenuSymbol).frame(width: 36)
+                    Text(title(for: action)).font(.tvMenuItem).lineLimit(1)
                     Spacer(minLength: 0)
                     if action == .switchAccount {   // 进下一层（登录过的账号）
-                        Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.5)
+                        Image(systemName: "chevron.right").font(.tvMenuDetail).opacity(0.5)
                     }
                 }
                 .foregroundStyle(focused ? (action == .confirmLogout ? .white : .black) : .white.opacity(0.8))
@@ -315,7 +321,7 @@ struct BilibiliScreen: View {
             } else if let video = focusedVideo {
                 VStack(alignment: .leading, spacing: 18) {
                     Text(video.title)
-                        .font(.tv(.title2, emphasized: true))
+                        .font(.tvHeroTitle)
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .frame(maxWidth: 1250, alignment: .leading)
@@ -338,14 +344,14 @@ struct BilibiliScreen: View {
                             if video.duration > 0 { Label(video.durationText, systemImage: "clock.fill") }
                         }
                     }
-                    .font(.tv(.body))
+                    .font(.tvHeroMeta)
                     .foregroundStyle(.white.opacity(0.72))
                 }
                 .id(video.id)
                 .transition(.opacity)
             } else {
                 Text(store.upPage?.user.name ?? store.tab.title)
-                    .font(.tv(.title2, emphasized: true))
+                    .font(.tvHeroTitle)
                     .foregroundStyle(.white.opacity(0.9))
             }
         }
@@ -364,7 +370,7 @@ struct BilibiliScreen: View {
     private var searchField: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 20) {
-                Image(systemName: "magnifyingglass").font(.system(size: 38, weight: .semibold))
+                Image(systemName: "magnifyingglass")
                 if store.editing {
                     TextField("搜索视频", text: $store.query)
                         .textFieldStyle(.plain)
@@ -411,12 +417,12 @@ struct BilibiliScreen: View {
             .frame(width: 124, height: 124)
             VStack(alignment: .leading, spacing: 12) {
                 Text(page.user.name)
-                    .font(.tv(.title2, emphasized: true))
+                    .font(.tvHeroTitle)
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 if page.user.fans > 0 {
                     Text(page.user.videos > 0 ? "\(page.user.fansText) · \(page.user.videos) 个视频" : page.user.fansText)
-                        .font(.tv(.body))
+                        .font(.tvHeroMeta)
                         .foregroundStyle(.white.opacity(0.7))
                 }
             }
@@ -478,8 +484,8 @@ struct BilibiliScreen: View {
             ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
                 let focused = index == store.cardMenuIndex
                 HStack(spacing: 18) {
-                    Image(systemName: labels[action]?.0 ?? "circle").font(.system(size: 26, weight: .semibold)).frame(width: 36)
-                    Text(labels[action]?.1 ?? "").font(.tv(.callout, emphasized: focused))
+                    Image(systemName: labels[action]?.0 ?? "circle").font(.tvMenuSymbol).frame(width: 36)
+                    Text(labels[action]?.1 ?? "").font(.tvMenuItem)
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(focused ? .black : .white.opacity(0.8))
@@ -560,11 +566,10 @@ struct BilibiliScreen: View {
                                  destructive: Bool) -> some View {
         let focused = store.clearChoice == choice
         return HStack(spacing: 16) {
-            if let systemImage { Image(systemName: systemImage).frame(width: 34) }
-            Text(title)
+            if let systemImage { Image(systemName: systemImage).font(.tvMenuSymbol).frame(width: 34) }
+            Text(title).font(.tvMenuItem)
             Spacer(minLength: 0)
         }
-        .font(.tv(.body, emphasized: true))
         .foregroundStyle(destructive ? Color.destructive : (focused ? .black : .white))
         .padding(.horizontal, 22)
         .frame(height: 66)
@@ -633,7 +638,7 @@ struct BilibiliScreen: View {
 
     private func sectionTitle(_ title: String, current: Bool) -> some View {
         Text(title)
-            .font(.tv(.headline, emphasized: true))
+            .font(.tvRowTitle)
             .foregroundStyle(.white.opacity(current ? 1 : 0.7))
             .padding(.bottom, 22)
     }
@@ -642,7 +647,7 @@ struct BilibiliScreen: View {
     private func historyChip(_ item: BilibiliStore.Item, focused: Bool) -> some View {
         let clear = item == .clearHistory
         return HStack(spacing: 10) {
-            if clear { Image(systemName: "trash").font(.system(size: 22, weight: .semibold)) }
+            if clear { Image(systemName: "trash") }
             Text(hint(for: item)).lineLimit(1)
         }
         .font(.tv(.callout, emphasized: focused))
@@ -665,11 +670,11 @@ struct BilibiliScreen: View {
     private func trendLine(_ trend: BiliTrend, focused: Bool) -> some View {
         HStack(spacing: 22) {
             Text("\(trend.rank)")
-                .font(.system(size: 30, weight: .heavy).monospacedDigit())
+                .font(.tvListTitle.weight(.heavy).monospacedDigit())
                 .foregroundStyle(focused ? .black : (trend.rank <= 3 ? pink : .white.opacity(0.4)))
                 .frame(width: 44, alignment: .trailing)
             Text(trend.title)
-                .font(.tv(.callout, emphasized: focused))
+                .font(.tvListTitle)
                 .foregroundStyle(focused ? .black : .white.opacity(0.9))
                 .lineLimit(1)
             if let icon = trend.icon {
@@ -713,7 +718,7 @@ struct BilibiliScreen: View {
         let shift = -CGFloat(max(0, focusedColumn - 1)) * (cardWidth + cardGap)
         return VStack(alignment: .leading, spacing: 26) {
             Text(row.title)
-                .font(.tv(.headline, emphasized: true))
+                .font(.tvRowTitle)
                 .foregroundStyle(.white.opacity(index == store.row ? 1 : 0.7))
                 .padding(.leading, margin)
                 .opacity(titled ? 1 : 0)
@@ -753,7 +758,7 @@ struct BilibiliScreen: View {
                             HStack {
                                 HStack(spacing: 7) {
                                     Circle().fill(.white).frame(width: 9, height: 9)
-                                    Text("直播").font(.system(size: 22, weight: .bold))
+                                    Text("直播").font(.tvBadge)
                                 }
                                 .padding(.horizontal, 12).padding(.vertical, 5)
                                 .background(pink, in: Capsule())
@@ -764,7 +769,7 @@ struct BilibiliScreen: View {
                                 HStack {
                                     Spacer()
                                     Label(video.viewsText, systemImage: "eye.fill")
-                                        .font(.system(size: 21, weight: .semibold).monospacedDigit())
+                                        .font(.tvBadge.monospacedDigit())
                                         .padding(.horizontal, 12).padding(.vertical, 5)
                                         .background(.black.opacity(0.66), in: Capsule())
                                 }
@@ -775,7 +780,7 @@ struct BilibiliScreen: View {
                         // 看过的直播间、现在没在播：左上角一个灰色的"未开播"
                         VStack {
                             HStack {
-                                Text("未开播").font(.system(size: 22, weight: .bold))
+                                Text("未开播").font(.tvBadge)
                                     .padding(.horizontal, 12).padding(.vertical, 5)
                                     .background(.black.opacity(0.66), in: Capsule())
                                 Spacer()
@@ -788,7 +793,7 @@ struct BilibiliScreen: View {
                         HStack {
                             Spacer()
                             Text(video.durationText)
-                                .font(.system(size: 23, weight: .semibold).monospacedDigit())
+                                .font(.tvBadge.monospacedDigit())
                                 .padding(.horizontal, 12).padding(.vertical, 5)
                                 .background(.black.opacity(0.66), in: Capsule())
                         }

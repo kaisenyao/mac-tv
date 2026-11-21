@@ -10,6 +10,8 @@ enum TopBar {
     static let height: CGFloat = 64
     /// From the right edge of the screen to the last control.
     static let trailing: CGFloat = 96
+    /// An app's own mark at the row's left (得到's owl, 哔哩哔哩's and 网易云's wordmarks): the same height in each.
+    static let brand: CGFloat = 56
     /// An avatar inside an account pill.
     static let avatar: CGFloat = 48
     /// Text in a pill: a name, the song playing, Search, the time in Movies.

@@ -1713,8 +1713,8 @@ struct BilibiliPlayerScreen: View {
         let cardWidth: CGFloat = 340, gap: CGFloat = 34
         return VStack(alignment: .leading, spacing: 24) {
             HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text(title).font(.system(size: 34, weight: .bold))
-                if let note { Text(note).font(.system(size: 26, weight: .semibold).monospacedDigit()).opacity(0.55) }
+                Text(title).font(.tvRowTitle)
+                if let note { Text(note).font(.tv(.body).monospacedDigit()).opacity(0.55) }
             }
             .padding(.leading, w * 0.05)
             HStack(alignment: .top, spacing: gap) {
@@ -1729,7 +1729,7 @@ struct BilibiliPlayerScreen: View {
                                     .frame(width: cardWidth, height: cardWidth * 9 / 16)
                                 if let duration = item.duration {
                                     Text(duration)
-                                        .font(.system(size: 21, weight: .semibold).monospacedDigit())
+                                        .font(.tvBadge.monospacedDigit())
                                         .padding(.horizontal, 10).padding(.vertical, 4)
                                         .background(.black.opacity(0.66), in: Capsule())
                                         .padding(10)
@@ -1737,9 +1737,10 @@ struct BilibiliPlayerScreen: View {
                                 }
                                 if let badge = item.badge {
                                     HStack(spacing: 6) {
-                                        if item.playing { Image(systemName: "play.fill").font(.system(size: 15, weight: .bold)) }
-                                        Text(badge).font(.system(size: 21, weight: .bold).monospacedDigit())
+                                        if item.playing { Image(systemName: "play.fill") }
+                                        Text(badge)
                                     }
+                                    .font(.tvBadge.monospacedDigit())
                                     .padding(.horizontal, 10).padding(.vertical, 4)
                                     .background(item.playing ? Color(hex: "#FB7299") : .black.opacity(0.66), in: Capsule())
                                     .padding(10)
@@ -1752,7 +1753,7 @@ struct BilibiliPlayerScreen: View {
                             .shadow(color: .black.opacity(focused ? 0.65 : 0), radius: 28, y: 20)
                             .scaleEffect(focused ? 1.09 : 1)
                             Text(item.title)
-                                .font(.system(size: 24, weight: focused ? .semibold : .medium))
+                                .font(.tvCardTitle)
                                 .foregroundStyle(.white.opacity(focused ? 1 : 0.7))
                                 .lineLimit(2)
                                 .frame(width: cardWidth, alignment: .leading)
@@ -1830,7 +1831,7 @@ struct BilibiliPlayerScreen: View {
                 // 它一直都在，平时停在屏幕外面，所以进出都是连贯的滑动；白色高亮是同一块，在选项之间滑过去。
                 VStack(spacing: 0) {
                   HStack(spacing: 34) {     // 标题和档位在同一行，整行居中
-                    Text("清晰度").font(.system(size: 30, weight: .bold)).foregroundStyle(.white.opacity(0.75))
+                    Text("清晰度").font(.tvMenuDetail).foregroundStyle(.white.opacity(0.75))
                         .shadow(color: .black.opacity(0.6), radius: 8, y: 2)
                     // 一条竖线把"这一栏叫什么"和"能选的档位"分开（网易云的音质栏是同样的做法）
                     Capsule().fill(.white.opacity(0.35)).frame(width: 3, height: 40)
@@ -1838,7 +1839,7 @@ struct BilibiliPlayerScreen: View {
                         ForEach(Array(player.qualities.enumerated()), id: \.element) { index, id in
                             let focused = index == player.qualityIndex
                             // 现在用的那一档不打勾，只是比别的亮一点
-                            Text(BiliStream.name(of: id)).font(.system(size: 29, weight: focused || id == player.qualityID ? .bold : .medium))
+                            Text(BiliStream.name(of: id)).font(.tvMenuItem)
                             .foregroundStyle(focused ? .black : .white.opacity(id == player.qualityID ? 1 : 0.6))
                             .shadow(color: .black.opacity(focused ? 0 : 0.6), radius: 8, y: 2)   // 暗色少了，靠文字自己的投影保证看得清
                             .padding(.horizontal, 30)
@@ -1870,7 +1871,8 @@ struct BilibiliPlayerScreen: View {
                 .animation(BiliMotion.slide, value: player.qualityIndex)
 
                 // 下面拉出来的一块（从屏幕下方滑上来）：上面一排"选集"（分 P、合集才有），下面一排"相关视频"。
-                // 一次露一排：焦点所在的那一排停在屏幕下方，在两排之间换时整块上下滑，上面那排淡出、下面那排在屏幕外
+                // 一次露一排：焦点所在的那一排停在屏幕下方，在两排之间换时整块上下滑，别的那排淡出（下面那排不靠
+                // 位置藏：屏幕比 16:9 高时它的标题会从底边露出一截）
                 let shelves = player.shelves
                 let focusRow = shelves.firstIndex(of: player.shelf) ?? 0
                 VStack(alignment: .leading, spacing: Self.shelfGap) {
@@ -1879,7 +1881,7 @@ struct BilibiliPlayerScreen: View {
                         ForEach(Array(shelves.enumerated()), id: \.element) { position, shelf in
                             shelfRow(shelf, w: w)
                                 .frame(height: Self.shelfHeight, alignment: .top)
-                                .opacity(position < focusRow ? 0 : 1)
+                                .opacity(position == focusRow ? 1 : 0)
                         }
                     }
                 }
@@ -1904,13 +1906,13 @@ struct BilibiliPlayerScreen: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Spacer()
                         Text(video.title)
-                            .font(.system(size: 48, weight: .bold))
+                            .font(.tv(.title3, emphasized: true))
                             .lineLimit(2)
                             .frame(maxWidth: w * 0.7, alignment: .leading)
                             .shadow(color: .black.opacity(0.6), radius: 12, y: 3)
                         HStack(spacing: 16) {
                             // UP 主的名字：用鼠标点一下进他的主页（和右边面板里的"UP 主"一样），返回回到这个视频
-                            Text(video.owner).font(.system(size: 27)).opacity(0.7)
+                            Text(video.owner).font(.tvHeroMeta).opacity(0.7)
                                 .contentShape(Rectangle())
                                 .hoverLift(scale: 1.04, brighten: 0.2)
                                 .onTapGesture { player.goToUploader() }
@@ -1921,7 +1923,7 @@ struct BilibiliPlayerScreen: View {
                                 let unit = episode.label.hasPrefix("P") ? "P" : "集"
                                 let name = episode.title.isEmpty || episode.title == video.title ? "" : " · " + episode.title
                                 Text("\(episode.label)\(name)（共 \(player.episodes.count) \(unit)）")
-                                    .font(.system(size: 27)).opacity(0.7).lineLimit(1)
+                                    .font(.tvHeroMeta).opacity(0.7).lineLimit(1)
                             }
                         }
                         .padding(.top, 10)
@@ -1930,12 +1932,12 @@ struct BilibiliPlayerScreen: View {
                             HStack(spacing: 18) {
                                 HStack(spacing: 8) {
                                     Circle().fill(.white).frame(width: 10, height: 10)
-                                    Text("直播").font(.system(size: 25, weight: .bold))
+                                    Text("直播").font(.tvHeroMeta.weight(.bold))
                                 }
                                 .padding(.horizontal, 16).padding(.vertical, 6)
                                 .background(Color(hex: "#FB7299"), in: Capsule())
-                                if let area = video.note { Text(area).font(.system(size: 25, weight: .semibold)).opacity(0.75) }
-                                if video.views > 0 { Text("\(biliCount(video.views)) 人看过").font(.system(size: 25, weight: .semibold)).opacity(0.75) }
+                                if let area = video.note { Text(area).font(.tvHeroMeta).opacity(0.75) }
+                                if video.views > 0 { Text("\(biliCount(video.views)) 人看过").font(.tvHeroMeta).opacity(0.75) }
                             }
                             .padding(.top, 26)
                         } else {
@@ -1966,7 +1968,7 @@ struct BilibiliPlayerScreen: View {
                                     Spacer()
                                     Text(clockText(player.duration))
                                 }
-                                .font(.system(size: 25, weight: .semibold).monospacedDigit())
+                                .font(.tvTimecode)
                                 .padding(.top, 11)
                             }
                         }

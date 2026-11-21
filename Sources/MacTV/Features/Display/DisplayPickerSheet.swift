@@ -93,11 +93,11 @@ struct DisplayPickerSheet: View {
                     let focused = (panel.row == index)
                     HStack(spacing: 18) {
                         Image(systemName: Self.symbol(choice))
-                            .font(.system(size: 30, weight: .medium))
+                            .font(.tvMenuSymbol)
                             .frame(width: 40)
 
                         Text(content.title)
-                            .font(.tv(.callout, emphasized: content.checked))
+                            .font(.tvMenuItem)
                             .lineLimit(1)
 
                         Spacer(minLength: 12)
@@ -106,7 +106,7 @@ struct DisplayPickerSheet: View {
                             SettingSwitch(on: on)
                         } else if content.checked {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 20, weight: .bold))
+                                .font(.tvMenuDetail)
                         }
                     }
                     .padding(.horizontal, 24)

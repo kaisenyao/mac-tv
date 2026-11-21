@@ -55,12 +55,12 @@ struct PlaybackFailureView: View {
     @ObservedObject var tv: TVController
     var body: some View {
         VStack(spacing: 28) {
-            Text("Can’t Play").font(.system(size: 42, weight: .bold))
-            Text(tv.playerFailure?.message ?? "").font(.system(size: 26)).multilineTextAlignment(.center)
+            Text("Can’t Play").font(.tv(.title3, emphasized: true))
+            Text(tv.playerFailure?.message ?? "").font(.tv(.body)).multilineTextAlignment(.center)
             HStack(spacing: 24) {
                 ForEach(Array(["Try Again", "Open in Safari", "Home"].enumerated()), id: \.offset) { index, label in
                     Button(label) { tv.performPlayerRecovery(index) }
-                        .buttonStyle(.plain).font(.system(size: 26, weight: .semibold)).padding(24)
+                        .buttonStyle(.plain).font(.tvMenuItem).padding(24)
                         .foregroundStyle(tv.playerFailure?.selected == index ? .black : .white)
                         .background(tv.playerFailure?.selected == index ? .white : .white.opacity(0.12), in: Capsule())
                 }

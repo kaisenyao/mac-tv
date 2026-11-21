@@ -23,7 +23,7 @@ struct BilibiliPlayerPanel: View {
                 listHeader(list)
                 options(list)
             } else {
-                Text("更多").font(.system(size: 24, weight: .semibold)).foregroundStyle(.white.opacity(0.55)).padding(.leading, 20)
+                Text("更多").font(.tvMenuDetail).foregroundStyle(.white.opacity(0.55)).padding(.leading, 20)
                 rows
             }
         }
@@ -71,11 +71,11 @@ struct BilibiliPlayerPanel: View {
                     .background(Circle().fill(.white.opacity(0.15)))
                     .clipShape(Circle())
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(player.info?.owner.name ?? player.current?.owner ?? "").font(.system(size: 26, weight: .bold)).lineLimit(1)
-                    Text("UP主主页").font(.system(size: 19, weight: .medium)).opacity(0.6)
+                    Text(player.info?.owner.name ?? player.current?.owner ?? "").font(.tvMenuItem).lineLimit(1)
+                    Text("UP主主页").font(.tvMenuDetail).opacity(0.6)
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(0.5)
+                Image(systemName: "chevron.right").font(.tvMenuDetail).opacity(0.5)
             case .like:
                 icon(player.relation.liked ? "hand.thumbsup.fill" : "hand.thumbsup", lit: player.relation.liked, focused: focused)
                 label(player.relation.liked ? "已点赞" : "点赞", value: player.info.map { biliCount($0.likes) })
@@ -107,7 +107,7 @@ struct BilibiliPlayerPanel: View {
     /// 图标：点过赞、收藏过的是粉色（在白色高亮上是黑色）
     private func icon(_ name: String, lit: Bool, focused: Bool) -> some View {
         Image(systemName: name)
-            .font(.system(size: 27, weight: .semibold))
+            .font(.tvMenuSymbol)
             .foregroundStyle(focused ? Color.black : (lit ? pink : .white.opacity(0.88)))
             .frame(width: 46)
     }
@@ -116,10 +116,10 @@ struct BilibiliPlayerPanel: View {
     /// 没有 ">" 的行（点赞、收藏）也留着它的位置，这样每一行的数字右边都对在同一条竖线上
     private func label(_ title: String, value: String?, more: Bool = false) -> some View {
         HStack(spacing: 12) {
-            Text(title).font(.system(size: 26, weight: .semibold)).lineLimit(1)
+            Text(title).font(.tvMenuItem).lineLimit(1)
             Spacer(minLength: 8)
-            if let value { Text(value).font(.system(size: 23, weight: .medium).monospacedDigit()).opacity(0.6).lineLimit(1).contentTransition(value.first?.isNumber == true ? .numericText() : .opacity) }
-            Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(more ? 0.5 : 0)
+            if let value { Text(value).font(.tvMenuDetail.monospacedDigit()).opacity(0.6).lineLimit(1).contentTransition(value.first?.isNumber == true ? .numericText() : .opacity) }
+            Image(systemName: "chevron.right").font(.tvMenuDetail).opacity(more ? 0.5 : 0)
         }
     }
 
@@ -135,9 +135,10 @@ struct BilibiliPlayerPanel: View {
         case .danmaku: "弹幕"
         }
         return HStack(spacing: 12) {
-            Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold))
-            Text(title).font(.system(size: 24, weight: .semibold))
+            Image(systemName: "chevron.left")
+            Text(title)
         }
+        .font(.tvMenuDetail)
         .foregroundStyle(.white.opacity(0.55))
         .padding(.leading, 20)
     }
@@ -168,14 +169,14 @@ struct BilibiliPlayerPanel: View {
                 HStack(spacing: 18) {
                     if let value = item.value {
                         // 弹幕设置：左边名字，右边现在的值，按确认换下一个
-                        Text(item.title).font(.system(size: 24, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(item.title).font(.tvMenuItem).lineLimit(1).minimumScaleFactor(0.8)
                         Spacer(minLength: 8)
-                        Text(value).font(.system(size: 23, weight: .medium)).opacity(0.6).contentTransition(.opacity)
+                        Text(value).font(.tvMenuDetail).opacity(0.6).contentTransition(.opacity)
                     } else {
-                        Image(systemName: "checkmark").font(.system(size: 22, weight: .bold))
+                        Image(systemName: "checkmark").font(.tvMenuSymbol)
                             .frame(width: 46)
                             .opacity(item.checked ? 1 : 0)
-                        Text(item.title).font(.system(size: 26, weight: .semibold)).lineLimit(1)
+                        Text(item.title).font(.tvMenuItem).lineLimit(1)
                         Spacer(minLength: 0)
                     }
                 }

@@ -188,7 +188,7 @@ private struct MoviesHero: View {
             HeroBackdrop(artwork: library.artwork, file: info.backdrop, poster: info.poster)
             VStack(alignment: .leading, spacing: 18) {
                 Text(info.title)
-                    .font(.tv(.title1, emphasized: true))
+                    .font(.tvHeroTitle)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .frame(maxWidth: 1300, alignment: .leading)
@@ -290,10 +290,10 @@ struct MovieMetaLine: View {
     var body: some View {
         HStack(spacing: 16) {
             if info.watched {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 28)).opacity(0.85)
+                Image(systemName: "checkmark.circle.fill").font(.tvHeroMeta).opacity(0.85)
             }
             if !info.parts.isEmpty {
-                Text(info.parts.joined(separator: "  ·  ")).font(.tv(.body)).opacity(0.75)
+                Text(info.parts.joined(separator: "  ·  ")).font(.tvHeroMeta).opacity(0.75)
             }
             ForEach(info.badges, id: \.self) { MovieBadge(text: $0) }
         }
@@ -304,7 +304,7 @@ struct MovieBadge: View {
     let text: String
     var body: some View {
         Text(text)
-            .font(.system(size: 19, weight: .bold))
+            .font(.tvBadge)
             .padding(.horizontal, 9).padding(.vertical, 3)
             .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.white.opacity(0.7), lineWidth: 1.5))
             .opacity(0.85)
@@ -674,9 +674,9 @@ struct MovieCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 Spacer()
                 HStack {
-                    Text(movie.episode ?? "").font(.system(size: 21, weight: .bold)).opacity(0.85)
+                    Text(movie.episode ?? "").font(.tvBadge).opacity(0.85)
                     Spacer()
-                    Text(MovieInfo.left(duration - position)).font(.system(size: 21, weight: .semibold).monospacedDigit()).opacity(0.85)
+                    Text(MovieInfo.left(duration - position)).font(.tvBadge.monospacedDigit()).opacity(0.85)
                 }
                 Capsule().fill(.white.opacity(0.3)).frame(height: 6)
                     .overlay(alignment: .leading) {
@@ -690,7 +690,7 @@ struct MovieCard: View {
             HStack {
                 Spacer()
                 Text(clockText(duration))
-                    .font(.system(size: 23, weight: .semibold).monospacedDigit())
+                    .font(.tvBadge.monospacedDigit())
                     .padding(.horizontal, 12).padding(.vertical, 5)
                     .background(.black.opacity(0.66), in: Capsule())
             }
@@ -749,7 +749,7 @@ struct PosterArt: View {
                 LinearGradient(colors: [Color(hex: "#3A3A3C"), Color(hex: "#1C1C1E")], startPoint: .top, endPoint: .bottom)
                 VStack(spacing: 14) {
                     Image(systemName: "film").font(.system(size: 44, weight: .light)).opacity(0.5)
-                    Text(title).font(.system(size: 26, weight: .semibold)).multilineTextAlignment(.center).lineLimit(3)
+                    Text(title).font(.tvCardTitle).multilineTextAlignment(.center).lineLimit(3)
                         .padding(.horizontal, 18).opacity(0.85)
                 }
             }
@@ -855,11 +855,11 @@ private struct MoviesSidebarView: View {
                 let (symbol, title, status) = describe(section)
                 let isCurrent = index == current
                 HStack(spacing: 20) {
-                    Image(systemName: symbol).font(.system(size: 28, weight: .semibold)).frame(width: 44)
+                    Image(systemName: symbol).font(.tvMenuSymbol).frame(width: 44)
                     if open {
-                        Text(title).font(.tv(.callout)).lineLimit(1).minimumScaleFactor(0.75)
+                        Text(title).font(.tvMenuItem).lineLimit(1).minimumScaleFactor(0.75)
                         Spacer(minLength: 0)
-                        if let status { Text(status).font(.tv(.caption2)).opacity(0.6).lineLimit(1) }
+                        if let status { Text(status).font(.tvMenuDetail).opacity(0.6).lineLimit(1) }
                     }
                 }
                 .foregroundStyle(open && isCurrent ? Color.black
@@ -935,8 +935,8 @@ private struct MoviesMenuView: View {
                 let focused = index == menu.index
                 let (symbol, title, on) = describe(item)
                 HStack(spacing: 18) {
-                    Image(systemName: symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36)
-                    Text(title).font(.tv(.callout, emphasized: focused)).fixedSize()
+                    Image(systemName: symbol).font(.tvMenuSymbol).frame(width: 36)
+                    Text(title).font(.tvMenuItem).fixedSize()
                     Spacer(minLength: 20)
                     if let on { SettingSwitchMini(on: on) }
                 }
@@ -1024,10 +1024,10 @@ private struct AddSourceSheet: View {
             ForEach(Array(TVController.movieSourceChoices.enumerated()), id: \.offset) { index, choice in
                 let focused = index == row
                 HStack(spacing: 18) {
-                    Image(systemName: choice.symbol).font(.system(size: 24)).frame(width: 34)
-                    Text(choice.title).font(.tv(.body)).lineLimit(1)
+                    Image(systemName: choice.symbol).font(.tvMenuSymbol).frame(width: 34)
+                    Text(choice.title).font(.tvMenuItem).lineLimit(1)
                     Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(.system(size: 22, weight: .semibold)).opacity(0.6)
+                    Image(systemName: "chevron.right").font(.tvMenuDetail).opacity(0.6)
                 }
                 .padding(.horizontal, 24)
                 .frame(height: 64)

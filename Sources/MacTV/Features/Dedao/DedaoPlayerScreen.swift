@@ -164,7 +164,7 @@ struct DedaoPlayerScreen: View {
                 Spacer()
                 Text("−" + clockText(max(0, player.duration - player.shownTime)))
             }
-            .font(.system(size: 24, weight: .medium).monospacedDigit())
+            .font(.tvTimecode)
             .foregroundStyle(.white.opacity(0.6))
             if let failure = player.failure {
                 Text(failure).font(.tv(.caption2)).foregroundStyle(Color(hex: "#FF8A80")).lineLimit(1).padding(.top, 10)
@@ -173,21 +173,22 @@ struct DedaoPlayerScreen: View {
     }
 
     /// 进度条下面中间：正在载入；不是 1 倍速时写倍速；开着定时写还剩多久（每秒走一下）。
-    /// 字号同网易云那里写音质的：数字 24；汉字占满字框，同样字号看着大一圈，小一号（20）看起来才一样高
+    /// 字号同网易云那里写音质的：数字是两头时间的字号（tvTimecode）；汉字占满字框，同样字号看着大一圈，
+    /// 小一号（NeteaseProgress.cjkStatus）看起来才一样高
     @ViewBuilder private var status: some View {
         if player.loading {
-            Text("正在载入…").font(.system(size: 20, weight: .medium))
+            Text("正在载入…").font(NeteaseProgress.cjkStatus)
         } else {
             HStack(spacing: 18) {
                 if player.speed != 1 { Text(DedaoStore.speedText(player.speed)) }
                 if let timer = player.sleep {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         let label = timer.label(at: context.date)
-                        Label(label, systemImage: "timer").font(.system(size: label.allSatisfy(\.isASCII) ? 24 : 20, weight: .medium).monospacedDigit())
+                        Label(label, systemImage: "timer").font(label.allSatisfy(\.isASCII) ? .tvTimecode : NeteaseProgress.cjkStatus.monospacedDigit())
                     }
                 }
             }
-            .font(.system(size: 24, weight: .medium).monospacedDigit())
+            .font(.tvTimecode)
         }
     }
 
@@ -203,7 +204,7 @@ struct DedaoPlayerScreen: View {
         return VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 22) {
-                Text("目录").font(.tv(.headline, emphasized: true)).padding(.leading, 120)
+                Text("目录").font(.tvRowTitle).padding(.leading, 120)
                 HStack(alignment: .top, spacing: gap) {
                     ForEach(lo..<max(lo, hi), id: \.self) { index in
                         let track = queue[index]
@@ -216,7 +217,7 @@ struct DedaoPlayerScreen: View {
                                     NeteaseWave(playing: !player.paused, active: open, size: 44)
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 }
-                                Text("\(index + 1)").font(.system(size: 20, weight: .bold).monospacedDigit())
+                                Text("\(index + 1)").font(.tvBadge.monospacedDigit())
                                     .padding(.horizontal, 10).frame(height: 30)
                                     .background(Capsule().fill(.black.opacity(0.55)))
                                     .padding(10)
@@ -227,10 +228,10 @@ struct DedaoPlayerScreen: View {
                                 .strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
                             .scaleEffect(focused ? 1.08 : 1)
                             .opacity(track.playable ? 1 : 0.45)
-                            Text(track.title).font(.system(size: 23, weight: focused ? .semibold : .medium))
+                            Text(track.title).font(.tvCardTitle)
                                 .foregroundStyle(.white.opacity(focused ? 1 : 0.75)).lineLimit(2)
                                 .offset(y: focused ? 10 : 0)
-                            Text(track.duration > 0 ? clockText(track.duration) : " ").font(.system(size: 20))
+                            Text(track.duration > 0 ? clockText(track.duration) : " ").font(.tvCardDetail)
                                 .foregroundStyle(.white.opacity(0.5)).lineLimit(1)
                                 .offset(y: focused ? 10 : 0)
                         }
@@ -318,7 +319,7 @@ private struct DedaoTranscriptColumn: View, Equatable {
             // 只拿到开头一部分时（没登录、没买）写一句，不然以为文稿就这么长
             HStack(spacing: 14) {
                 Text("文稿").font(.tv(.caption1, emphasized: true)).opacity(0.55)
-                if partial { Text("节选").font(.system(size: 21, weight: .medium)).opacity(0.38) }
+                if partial { Text("节选").font(.tv(.caption2)).opacity(0.38) }
             }
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
@@ -367,7 +368,7 @@ private struct DedaoTranscriptColumn: View, Equatable {
                 .fixedSize(horizontal: false, vertical: true)
             case .point:
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("划重点").font(.system(size: 21, weight: .bold)).foregroundStyle(DedaoStyle.accent)
+                    Text("划重点").font(.tv(.caption2, emphasized: true)).foregroundStyle(DedaoStyle.accent)
                     styled(paragraph).font(.system(size: 34, weight: .semibold))
                 }
             case .text:

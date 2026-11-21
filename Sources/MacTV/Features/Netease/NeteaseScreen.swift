@@ -169,7 +169,7 @@ struct NeteaseScreen: View {
     private var topBar: some View {
         HStack(spacing: 20) {
             if let mark = NeteaseStore.wordmark {
-                Image(nsImage: mark).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(height: 46)
+                Image(nsImage: mark).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(height: TopBar.brand)
             } else {
                 Text("网易云音乐").font(.system(size: 44, weight: .medium)).foregroundStyle(.white)
             }
@@ -275,7 +275,7 @@ struct NeteaseScreen: View {
         return VStack(alignment: .leading, spacing: 12) {
             if let title = menu.title {
                 Text(title)
-                    .font(.tv(.callout, emphasized: true))
+                    .font(.tvMenuDetail)
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
                     .padding(.horizontal, 22)
@@ -288,12 +288,12 @@ struct NeteaseScreen: View {
                         if item.symbol.isEmpty {
                             Color.clear.frame(width: 36, height: 1)   // 没有图标的一行（比如没打勾的档位）：字照样对齐
                         } else {
-                            Image(systemName: item.symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36)
+                            Image(systemName: item.symbol).font(.tvMenuSymbol).frame(width: 36)
                         }
                         if store.naming == item.action {
                             TextField("歌单标题", text: $store.newName)
                                 .textFieldStyle(.plain)
-                                .font(.tv(.callout))
+                                .font(.tvMenuItem)
                                 .focused($namingField)
                                 .onSubmit { store.submitName() }
                                 .onAppear {
@@ -306,7 +306,7 @@ struct NeteaseScreen: View {
                                 }
                                 .environment(\.colorScheme, .light)
                         } else {
-                            Text(item.title).font(.tv(.callout, emphasized: focused)).lineLimit(1)
+                            Text(item.title).font(.tvMenuItem).lineLimit(1)
                             Spacer(minLength: 0)
                         }
                     }
@@ -397,11 +397,11 @@ struct NeteaseScreen: View {
           VStack(alignment: .leading, spacing: 16) {
             switch store.focused {
             case .song(let song):
-                Text(song.name).font(.tv(.title2, emphasized: true)).foregroundStyle(.white).lineLimit(2)
-                Text(song.artist).font(.tv(.body)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+                Text(song.name).font(.tvHeroTitle).foregroundStyle(.white).lineLimit(2)
+                Text(song.artist).font(.tvHeroMeta).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
             case .playlist(let list):
-                Text(list.name).font(.tv(.title2, emphasized: true)).foregroundStyle(.white).lineLimit(2)
-                if let second = secondLine(list) { Text(second).font(.tv(.body)).foregroundStyle(.white.opacity(0.72)).lineLimit(1) }
+                Text(list.name).font(.tvHeroTitle).foregroundStyle(.white).lineLimit(2)
+                if let second = secondLine(list) { Text(second).font(.tvHeroMeta).foregroundStyle(.white.opacity(0.72)).lineLimit(1) }
             case nil:
                 EmptyView()
             }
@@ -444,7 +444,7 @@ struct NeteaseScreen: View {
         let shift = -CGFloat(max(0, focusedColumn - 1)) * (cardSize + cardGap)
         return VStack(alignment: .leading, spacing: 26) {
             Text(row.title)
-                .font(.tv(.headline, emphasized: true))
+                .font(.tvRowTitle)
                 .foregroundStyle(.white.opacity(index == store.row ? 1 : 0.7))
                 .padding(.leading, margin)
             HStack(alignment: .top, spacing: cardGap) {
@@ -635,18 +635,18 @@ struct NeteaseScreen: View {
                 if current {
                     NeteaseWave(playing: !store.paused, active: !store.nowPlayingVisible, size: 26)   // 正在放的这一首：波形跟着动，暂停时停住
                 } else {
-                    Text("\(number)").font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.5)
+                    Text("\(number)").font(.tvListDetail.monospacedDigit()).opacity(0.5)
                 }
             }
             .frame(width: 60)
             VStack(alignment: .leading, spacing: 4) {
-                Text(song.name).font(.system(size: 30, weight: .semibold)).lineLimit(1)
-                Text(song.artist).font(.system(size: 23, weight: .regular)).opacity(0.6).lineLimit(1)
+                Text(song.name).font(.tvListTitle).lineLimit(1)
+                Text(song.artist).font(.tvListDetail).opacity(0.6).lineLimit(1)
             }
             Spacer(minLength: 20)
-            if store.liked.contains(song.id) { Image(systemName: "heart.fill").font(.system(size: 20)).opacity(0.5) }
+            if store.liked.contains(song.id) { Image(systemName: "heart.fill").font(.tvListDetail).opacity(0.5) }
             if song.duration > 0 {
-                Text(clockText(Double(song.duration))).font(.system(size: 25, weight: .medium).monospacedDigit()).opacity(0.55)
+                Text(clockText(Double(song.duration))).font(.tvListDetail.monospacedDigit()).opacity(0.55)
             }
         }
         .foregroundStyle(dark ? .black : .white.opacity(current ? 1 : 0.85))
@@ -734,12 +734,12 @@ struct NeteaseScreen: View {
         let value = setting == .quality ? NeteaseStore.name(of: store.effectiveLevel)
             : setting == .shelf ? NeteaseShelfSource.summary : (store.isOn(setting) ? "打开" : "关闭")
         return HStack(spacing: 18) {
-            Text(title).font(.system(size: 30, weight: .semibold))
+            Text(title).font(.tvListTitle)
             Spacer(minLength: 20)
-            Text(value).font(.system(size: 28, weight: .medium)).opacity(0.6)
+            Text(value).font(.tvListDetail).opacity(0.6)
                 .contentTransition(.opacity)
             // 弹出一列选项的行带这个记号；开关那几行也留着它的位置，右边的值对在同一条竖线上
-            Image(systemName: "chevron.up.chevron.down").font(.system(size: 20, weight: .semibold))
+            Image(systemName: "chevron.up.chevron.down").font(.tvListDetail)
                 .opacity(setting == .quality || setting == .shelf ? 0.45 : 0)
         }
         .foregroundStyle(dark ? .black : .white.opacity(0.9))
@@ -848,7 +848,7 @@ struct NeteaseScreen: View {
         return VStack(spacing: 0) {
             Spacer()
             VStack(alignment: .leading, spacing: 22) {
-                Text("播放列表").font(.tv(.headline, emphasized: true)).foregroundStyle(.white).padding(.leading, margin)
+                Text("播放列表").font(.tvRowTitle).foregroundStyle(.white).padding(.leading, margin)
                 HStack(alignment: .top, spacing: gap) {
                     ForEach(lo..<hi, id: \.self) { index in
                         let song = store.queue[index]
@@ -866,10 +866,10 @@ struct NeteaseScreen: View {
                             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .strokeBorder(.white.opacity(focused ? 0.95 : 0.1), lineWidth: focused ? 5 : 1.5))
                             .scaleEffect(focused ? 1.08 : 1)
-                            Text(song.name).font(.system(size: 25, weight: focused ? .semibold : .medium))
+                            Text(song.name).font(.tvCardTitle)
                                 .foregroundStyle(.white.opacity(focused ? 1 : 0.75)).lineLimit(1)
                                 .offset(y: focused ? 10 : 0)
-                            Text(song.artist).font(.system(size: 21)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                            Text(song.artist).font(.tvCardDetail).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
                                 .offset(y: focused ? 10 : 0)
                         }
                         .frame(width: size, alignment: .leading)
@@ -906,13 +906,13 @@ struct NeteaseScreen: View {
         let open = store.qualityVisible
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text("音质").font(.tv(.callout, emphasized: true)).foregroundStyle(.white.opacity(0.75))
+                Text("音质").font(.tvMenuItem).foregroundStyle(.white.opacity(0.75))
                 // 一条竖线把"这一栏叫什么"和"能选的档位"分开
                 Capsule().fill(.white.opacity(0.35)).frame(width: 3, height: 36).padding(.horizontal, 22)
                 ForEach(Array(store.offered.enumerated()), id: \.offset) { index, quality in
                     let focused = index == store.qualityIndex
                     Text(quality.name)
-                        .font(.tv(.callout, emphasized: focused))
+                        .font(.tvMenuItem)
                         .foregroundStyle(focused ? .black : .white.opacity(quality.level == store.actualLevel ? 1 : 0.7))
                         .padding(.horizontal, 28)
                         .frame(height: 64)
@@ -1028,6 +1028,9 @@ struct NeteaseProgress: View {
     @State private var hovering = false
     @ObservedObject private var pointer = PointerActivity.shared   // 按键、滑动时鼠标悬停的加粗收起
 
+    /// 进度条下面中间的汉字（音质；得到的"正在载入…"、"本讲结束"）：比两头 tvTimecode 的数字小一号，看起来才一样高
+    static let cjkStatus = Font.system(size: 21, weight: .medium)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             GeometryReader { geo in
@@ -1061,7 +1064,7 @@ struct NeteaseProgress: View {
                 // 汉字占满整个字框，同样字号比两头的数字看着大一圈：汉字小一号，看起来才一样高（"Hi-Res"是英文，不用）
                 let quality = NeteaseStore.name(of: store.actualLevel)
                 Text(quality)
-                    .font(.system(size: quality.allSatisfy(\.isASCII) ? 24 : 20, weight: .medium))
+                    .font(quality.allSatisfy(\.isASCII) ? .tvTimecode : Self.cjkStatus)
                     .contentTransition(.opacity)
                     .animation(.easeInOut(duration: 0.3), value: store.actualLevel)
                     .contentShape(Rectangle())
@@ -1070,7 +1073,7 @@ struct NeteaseProgress: View {
                 Spacer()
                 Text("-" + clockText(max(0, clock.duration - clock.time)))
             }
-            .font(.system(size: 24, weight: .medium).monospacedDigit())
+            .font(.tvTimecode)
             .foregroundStyle(.white.opacity(0.6))
         }
     }

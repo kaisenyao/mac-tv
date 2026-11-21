@@ -604,7 +604,7 @@ struct AppShelfBanner: View {
 
     private func tag(_ item: AppShelfItem) -> some View {
         Text(tagText(item))
-            .font(.system(size: 20, weight: .bold))
+            .font(.tvBadge)
             .tracking(0.6)
             .padding(.horizontal, 14).frame(height: 34)
             .background(accent, in: Capsule())
@@ -853,7 +853,7 @@ struct AppShelfBanner: View {
                         // 书名前面的"英文新书""英文原版"这些：一个小小的框，不放进大标题里
                         if let badge = dedaoBadge(item) {
                             Text(badge)
-                                .font(.system(size: 19, weight: .semibold))
+                                .font(.tvBadge)
                                 .padding(.horizontal, 12).frame(height: 32)
                                 .overlay(PillOutline().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
                                 .foregroundStyle(.white.opacity(0.85))
@@ -944,7 +944,7 @@ private struct ShelfSongRow: View {
     var body: some View {
         HStack(spacing: 16) {
             Text(String(format: "%02d", number))
-                .font(.system(size: 20, weight: .bold).monospacedDigit())
+                .font(.tvBadge.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.4))
                 .frame(width: 34, alignment: .leading)
             BiliImage(url: song.cover)
@@ -1295,7 +1295,7 @@ private struct NeteaseNowPanel: View {
                     Spacer()
                     Text("−" + clockText(max(0, clock.duration - clock.time)))
                 }
-                .font(.system(size: 20, weight: .semibold).monospacedDigit())
+                .font(.tvTimecode)
                 .foregroundStyle(.white.opacity(0.6))
             }
             .frame(width: width, height: ShelfSongRow.height)
@@ -1364,7 +1364,7 @@ private struct DedaoShelfDetail: View {
         VStack(alignment: .leading, spacing: 30) {
             if !intro.isEmpty {
                 Text(intro)
-                    .font(.system(size: 27))
+                    .font(.tv(.caption1))   // 同得到 App 里书的简介
                     .foregroundStyle(.white.opacity(0.75))
                     .lineSpacing(9)
                     .lineLimit(3)
@@ -1386,7 +1386,7 @@ private struct DedaoShelfDetail: View {
                     if !item.heat.isEmpty { Text(item.heat) }
                 }
             }
-            .font(.system(size: 22, weight: .semibold))
+            .font(.tvHeroMeta)
             .foregroundStyle(.white.opacity(0.62))
             .lineLimit(1)
         }
@@ -1425,7 +1425,7 @@ private struct DedaoListeningPanel: View {
                     Spacer()
                     if left > 0 { Text("还剩 " + clockText(left)) }
                 }
-                .font(.system(size: 20, weight: .semibold).monospacedDigit())
+                .font(.tvTimecode)
                 .foregroundStyle(.white.opacity(0.6))
             }
             .frame(width: width)
@@ -1437,10 +1437,10 @@ private struct DedaoListeningPanel: View {
                     VStack(alignment: .leading, spacing: 8) {
                         if heard != nil {
                             Text(paused ? "上次听到" : "听到这里")
-                                .font(.system(size: 19, weight: .bold)).foregroundStyle(Self.accent)
+                                .font(.tv(.caption2, emphasized: true)).foregroundStyle(Self.accent)
                         }
                         Text(text)
-                            .font(.system(size: 25))
+                            .font(.tv(.caption1))   // 同得到 App 里书的简介
                             .foregroundStyle(.white.opacity(0.8))
                             .lineSpacing(6)
                             .lineLimit(item.title.count > 12 ? 2 : 3)
@@ -1455,7 +1455,7 @@ private struct DedaoListeningPanel: View {
                     ForEach(Array(next.enumerated()), id: \.offset) { index, lecture in
                         HStack(spacing: 16) {
                             Text(String(format: "%02d", lecture.number))
-                                .font(.system(size: 19, weight: .bold).monospacedDigit())
+                                .font(.tvBadge.monospacedDigit())
                                 .foregroundStyle(.white.opacity(0.4))
                                 .frame(width: 34, alignment: .leading)
                             Text(DedaoStore.cleanTitle(DedaoPlayerScreen.split(lecture.track.title).title).title)

@@ -101,8 +101,7 @@ struct MoviePlayerView: View {
                     Spacer()
                     Text("−" + clockText(max(0, player.duration - player.time)))
                 }
-                .font(.system(size: 24, weight: .semibold))
-                .monospacedDigit()
+                .font(.tvTimecode)
                 .shadow(color: .black.opacity(0.5), radius: 6)
             }
             .padding(.horizontal, 110)
@@ -152,7 +151,7 @@ struct MoviePlayerView: View {
                             Image(systemName: "checkmark").opacity(player.selectedRow(in: column) == row ? 1 : 0)
                             Text(title).lineLimit(1)
                         }
-                        .font(.system(size: 24, weight: .semibold))
+                        .font(.tvMenuItem)
                         .padding(.horizontal, 16)
                         .frame(height: 50)
                         .frame(minWidth: 300, alignment: .leading)

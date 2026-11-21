@@ -26,9 +26,10 @@ struct BilibiliSettingsPage: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let list = store.settingList {
                     HStack(spacing: 12) {
-                        Image(systemName: "chevron.left").font(.system(size: 22, weight: .semibold))
-                        Text(title(of: list)).font(.system(size: 26, weight: .semibold))
+                        Image(systemName: "chevron.left")
+                        Text(title(of: list))
                     }
+                    .font(.tvListDetail)
                     .foregroundStyle(.white.opacity(0.55))
                     .padding(.leading, 30)
                     .frame(height: 56, alignment: .leading)
@@ -101,13 +102,13 @@ struct BilibiliSettingsPage: View {
                 let on = position == focused
                 HStack(spacing: 18) {
                     if store.settingList != nil, store.settingList != .danmaku {
-                        Image(systemName: "checkmark").font(.system(size: 24, weight: .bold)).frame(width: 30).opacity(item.checked ? 1 : 0)
+                        Image(systemName: "checkmark").font(.tvMenuSymbol).frame(width: 30).opacity(item.checked ? 1 : 0)
                     }
-                    Text(item.title).font(.system(size: 30, weight: .semibold))
+                    Text(item.title).font(.tvListTitle)
                     Spacer(minLength: 20)
-                    Text(item.value).font(.system(size: 28, weight: .medium)).opacity(0.6).contentTransition(.opacity)
+                    Text(item.value).font(.tvListDetail).opacity(0.6).contentTransition(.opacity)
                     // 进下一层的行带 ">"；别的行也留着它的位置，右边的值对在同一条竖线上
-                    Image(systemName: "chevron.right").font(.system(size: 20, weight: .semibold)).opacity(item.pick ? 0.45 : 0)
+                    Image(systemName: "chevron.right").font(.tvListDetail).opacity(item.pick ? 0.45 : 0)
                 }
                 .foregroundStyle(on ? .black : .white.opacity(0.9))
                 .padding(.horizontal, 30)

@@ -372,7 +372,7 @@ struct ProfilesScreen: View {
                 .scaleEffect(focused ? 1.1 : 1)
                 .shadow(color: .black.opacity(focused ? 0.5 : 0), radius: 24, y: 16)
             label()
-                .font(.system(size: 27, weight: .semibold))
+                .font(.tvCardTitle)
                 .opacity(focused ? 1 : 0.6)
         }
         .contentShape(Rectangle())
@@ -434,7 +434,7 @@ struct ProfileNameField: View {
         TVTextField(text: $name, placeholder: "Name", editing: true, limit: ProfileName.maxLength, onSubmit: onSubmit)
             .multilineTextAlignment(.center)
             .frame(width: 448)
-        .font(.system(size: 40, weight: .semibold))
+        .font(.tv(.headline, emphasized: true))
         .padding(.horizontal, 36)
         .frame(minWidth: 520, minHeight: 84)
         .tvPanel(in: Capsule())

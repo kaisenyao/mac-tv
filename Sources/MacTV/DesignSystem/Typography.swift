@@ -46,4 +46,22 @@ extension Font {
     static let tvCardTitle = Font.system(size: 27, weight: .semibold)
     /// The line under a card's title.
     static let tvCardDetail = Font.tv(.caption2)
+
+    /// A row in a list page: a song, a lecture, an episode, a setting in an app's own settings page.
+    static let tvListTitle = Font.system(size: 29, weight: .semibold)
+    /// The small text in such a row: an artist, a length, a setting's value.
+    static let tvListDetail = Font.tv(.caption2)
+
+    /// An item in a menu or a side panel: an account menu, the player's More panel, a card's menu, a sidebar item.
+    /// One weight whether focused or not (the white highlight shows focus).
+    static let tvMenuItem = Font.system(size: 27, weight: .semibold)
+    /// A menu item's value at its right, and a menu's small heading ("更多", "‹ 倍速").
+    static let tvMenuDetail = Font.system(size: 23, weight: .medium)
+    /// The symbol at the start of a menu item or a sidebar item.
+    static let tvMenuSymbol = Font.system(size: 27, weight: .semibold)
+
+    /// A small label on artwork: 课程, 直播, a duration, a progress.
+    static let tvBadge = Font.system(size: 19, weight: .bold)
+    /// A player's times (elapsed, remaining) and other numbers that tick.
+    static let tvTimecode = Font.system(size: 25, weight: .medium).monospacedDigit()
 }

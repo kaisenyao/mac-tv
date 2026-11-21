@@ -104,7 +104,7 @@ struct MoviePageView: View {
         return VStack(alignment: .leading, spacing: 22) {
             Text(eyebrow).font(.tv(.caption2, emphasized: true)).tracking(1.5).opacity(0.6)
             Text(info.title)
-                .font(.system(size: 88, weight: .bold))
+                .font(.tvHeroTitle)
                 .lineLimit(2)
                 .minimumScaleFactor(0.5)
                 .frame(maxWidth: 1400, alignment: .leading)
@@ -360,9 +360,9 @@ private struct EpisodeCard: View {
             .scaleEffect(focused ? (pressed ? 1.02 : 1.09) : 1)
             VStack(alignment: .leading, spacing: 4) {
                 Text(episode.number.map { "Episode \($0)" } ?? episode.title)
-                    .font(.system(size: 25, weight: focused ? .semibold : .medium)).lineLimit(1)
+                    .font(.tvCardTitle).lineLimit(1)
                 if let duration = episode.duration {
-                    Text(MovieInfo.length(duration)).font(.tv(.caption2)).opacity(0.5)
+                    Text(MovieInfo.length(duration)).font(.tvCardDetail).opacity(0.5)
                 }
             }
             .frame(width: size.width, alignment: .leading)
