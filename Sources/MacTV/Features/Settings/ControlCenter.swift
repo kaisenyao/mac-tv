@@ -378,9 +378,10 @@ struct ControlCenterView: View {
             }
         }
         .foregroundStyle(.white)
-        // Just under the home screen's status row, which stays in place above it.
-        .padding(.top, 124)
-        .padding(.trailing, 80)
+        // Just under the home screen's status row, which stays in place above it: far enough below that a focused
+        // tile, grown, never reaches the row; its right edge on the row's.
+        .padding(.top, TopBar.top + TopBar.height + 28)
+        .padding(.trailing, TopBar.trailing)
         .frame(width: canvas.width, height: canvas.height, alignment: .topTrailing)
         .animation(Motion.focus, value: panel)
         .onReceive(siriRemote.$connected.dropFirst()) { _ in tv.remoteCoordinator.refreshRemoteStatus() }

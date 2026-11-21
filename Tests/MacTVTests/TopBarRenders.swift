@@ -47,6 +47,13 @@ import Testing
         try await withTV { tv in try await render("topbar-home", HomeView(tv: tv)) }
     }
 
+    @Test func controlCenter() async throws {
+        try await withTV { tv in
+            tv.controlCenter = ControlCenterPanel()
+            try await render("topbar-control-center", ZStack { HomeView(tv: tv); ControlCenterView(tv: tv) })
+        }
+    }
+
     @Test func pills() async throws {
         try await withTV { tv in
             let rows = VStack(alignment: .trailing, spacing: 60) {
