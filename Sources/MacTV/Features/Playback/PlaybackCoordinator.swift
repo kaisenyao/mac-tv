@@ -445,9 +445,10 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         }
     }
 
-    private func startMovie(_ movie: Movie, engine: PlaybackEngine, from seconds: Double) {
+    func startMovie(_ movie: Movie, engine: PlaybackEngine, from seconds: Double) {
         let player = MoviePlayer(movie: movie, engine: engine, library: tv?.movieLibrary ?? .shared)
         player.onEnd = { [weak self] in self?.movieEnded(movie) }
+        player.onNext = { [weak self] in self?.playEpisode(after: movie) ?? false }
         player.onClose = { [weak self] in self?.closeMovie() }
         player.onFailure = { [weak self] _ in self?.movieFailed(movie) }
         var instant = Transaction()
@@ -481,11 +482,19 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
 
     /// The end of a movie: back to Movies, or with Autoplay Next Episode on, straight into the show's next episode.
     private func movieEnded(_ movie: Movie) {
+        guard tv?.autoNext == true else { return closeMovie() }
+        if !playEpisode(after: movie) { closeMovie() }
+    }
+
+    /// The show's next episode in place of this one, from where it was left. False when this isn't an episode with
+    /// one after it.
+    @discardableResult
+    private func playEpisode(after movie: Movie) -> Bool {
+        guard let library = tv?.movieLibrary, let current = library.movie(movie.path),
+              let next = library.show(of: current)?.episode(after: current) else { return false }
         closeMovie()
-        guard let tv, tv.autoNext else { return }
-        let library = tv.movieLibrary
-        guard let current = library.movie(movie.path), let next = library.show(of: current)?.episode(after: current) else { return }
         playMovie(next, from: next.inProgress ? max(0, (next.position ?? 0) - 5) : 0)
+        return true
     }
 
     /// The picture or sound stopped partway. Where it stopped is saved (closing saves it). A file that's no longer

@@ -1936,7 +1936,8 @@ final class NeteaseStore: ObservableObject {
     }
 
     /// delta：+1 下一首，-1 上一首。automatic = 这首放完了自己往下走（单曲循环只在这时候起作用）。
-    private func skip(_ delta: Int, automatic: Bool = false) {
+    /// 小茗同学的"下一首""上一首"也走这里
+    func skip(_ delta: Int, automatic: Bool = false) {
         guard !queue.isEmpty else { return }
         if automatic, mode == .single, current != nil {
             jump(to: 0) { [weak self] in if self?.paused == false { self?.player.play() } }
@@ -2158,6 +2159,7 @@ final class NeteaseStore: ObservableObject {
     /// 测试用：当作播放界面开着、在放这首歌（不联网、不出声）
     func pretendPlaying(_ song: NeteaseSong) {
         current = song
+        clock.duration = Double(song.duration)
         nowPlayingVisible = true
     }
 
@@ -2623,5 +2625,66 @@ extension NeteaseStore: ProfileApp {
         syncHistory = store.object(forKey: "neteaseHistory") as? Bool ?? true
         mode = PlayMode(rawValue: store.string(forKey: "neteaseMode") ?? "") ?? .list
         applyVolume()
+    }
+}
+
+// MARK: - 小茗同学找歌、放歌（见 JasmineSearch）：搜索和首页的搜索是同一些接口，放歌和点一首歌是同一个函数
+
+extension NeteaseStore: JasmineMusic {
+    var signedIn: Bool { account != nil }
+    var ownPlaylists: [NeteasePlaylist] { myLists }
+
+    func findSongs(_ keyword: String) async -> [NeteaseSong]? {
+        (await NeteaseAPI.searchResult(keyword, type: 1, limit: 40)).map(NeteaseAPI.songs(inSearch:))
+    }
+
+    func findArtists(_ keyword: String) async -> [NeteasePlaylist]? {
+        (await NeteaseAPI.searchResult(keyword, type: 100, limit: 12)).map(NeteaseAPI.artists(inSearch:))
+    }
+
+    func findPlaylists(_ keyword: String) async -> [NeteasePlaylist]? {
+        (await NeteaseAPI.searchResult(keyword, type: 1000, limit: 20)).map(NeteaseAPI.playlists(inSearch:))
+    }
+
+    /// 歌手的热门歌曲，或者歌单里的歌；没取到是空的
+    func songs(of list: NeteasePlaylist) async -> [NeteaseSong] {
+        if list.kind == .artist { return (await NeteaseAPI.artist(list.id))?.songs ?? [] }
+        if let cached = songCache[list.id], !cached.isEmpty { return cached }
+        let songs = await NeteaseAPI.songs(playlist: list.id)
+        if !songs.isEmpty { songCache[list.id] = songs }
+        return songs
+    }
+
+    /// 这首歌现在能不能放（按设置的音质问）。放不了就是放不了：不换别的办法去取
+    func availability(of song: NeteaseSong) async -> JasmineAvailability {
+        let level = level(for: song)
+        switch await NeteaseAPI.availability(song: song.id, level: level) {
+        case .playable(_, _, _, preview: true):
+            return .preview
+        case .playable(let url, let got, let gain, _):
+            // 地址留着、文件开头先读好：接着放这一首时不用再问一遍（和提前准备下一首一样，见 prepareNext）
+            let asset = AVURLAsset(url: url)
+            _ = try? await asset.load(.isPlayable)
+            prepared[song.id] = (url, got, gain, level, Date(), asset)
+            return .playable
+        case .unavailable:
+            return .unavailable
+        case .unreachable:
+            return .unreachable
+        }
+    }
+
+    /// 进网易云，从这一首放起，songs 是接着往下放的；list 是它所在的歌单或歌手页（从播放界面返回看到的就是它）
+    func playFound(_ song: NeteaseSong, in songs: [NeteaseSong], from list: NeteasePlaylist?) {
+        guard let tv else { return }
+        if !tv.neteaseOpen, let app = tv.services.first(where: { $0.id == Self.appID }) { tv.open(app) }
+        if let list {
+            leaveOverlays()
+            openPlaylist(list)
+        } else {
+            menuParents = []
+            menu = nil
+        }
+        start(song, in: songs)
     }
 }

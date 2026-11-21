@@ -71,6 +71,8 @@ struct BiliUser: Hashable, Sendable {
     var face: URL? = nil
     var fans: Int = 0
     var videos: Int = 0
+    /// 签名（他写的一句简介）：搜出来的才带
+    var sign: String = ""
 
     var fansText: String {
         fans >= 10000 ? String(format: "%.1f万粉丝", Double(fans) / 10000) : "\(fans) 粉丝"
@@ -499,15 +501,25 @@ enum BiliAPI {
 
     // MARK: UP 主：搜索、关注
 
-    /// 按名字搜 UP 主
-    static func searchUsers(_ keyword: String, cookie: String) async -> [BiliUser] {
-        guard let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return [] }
-        let data = await fetch("https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=bili_user&page=1&page_size=12&keyword=\(encoded)", cookie: cookie)
-        return (data?["result"] as? [[String: Any]] ?? []).compactMap { item in
+    /// 按名字搜 UP 主；没问到（断网、被拒）是 nil
+    static func searchUsers(_ keyword: String, cookie: String) async -> [BiliUser]? {
+        (await searchResult("bili_user", keyword, page: 1, size: 12, cookie: cookie)).map(users(inSearch:))
+    }
+
+    static func users(inSearch list: [[String: Any]]) -> [BiliUser] {
+        list.compactMap { item in
             guard let mid = item["mid"] as? Int, let name = item["uname"] as? String else { return nil }
             return BiliUser(mid: mid, name: name, face: link(item["upic"], size: "240w_240h_1c"),
-                            fans: item["fans"] as? Int ?? 0, videos: item["videos"] as? Int ?? 0)
+                            fans: item["fans"] as? Int ?? 0, videos: item["videos"] as? Int ?? 0, sign: item["usign"] as? String ?? "")
         }
+    }
+
+    /// 搜索接口的一页结果（什么都没搜到是空的）；没问到是 nil
+    private static func searchResult(_ type: String, _ keyword: String, page: Int, size: Int, cookie: String) async -> [[String: Any]]? {
+        guard let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
+              let data = await fetch("https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=\(type)&page=\(page)&page_size=\(size)&keyword=\(encoded)", cookie: cookie)
+        else { return nil }
+        return data["result"] as? [[String: Any]] ?? []
     }
 
     /// 一个 UP 主的头像和粉丝数（从视频卡片进他的主页时，手上只有名字）
@@ -767,11 +779,13 @@ enum BiliAPI {
         }
     }
 
-    /// 搜索视频
-    static func search(_ keyword: String, cookie: String, page: Int = 1) async -> [BiliVideo] {
-        guard let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return [] }
-        let data = await fetch("https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=video&page=\(page)&page_size=30&keyword=\(encoded)", cookie: cookie)
-        return (data?["result"] as? [[String: Any]] ?? []).compactMap { item in
+    /// 搜索视频；没问到（断网、被拒）是 nil
+    static func search(_ keyword: String, cookie: String, page: Int = 1) async -> [BiliVideo]? {
+        (await searchResult("video", keyword, page: page, size: 30, cookie: cookie)).map(videos(inSearch:))
+    }
+
+    static func videos(inSearch list: [[String: Any]]) -> [BiliVideo] {
+        list.compactMap { item in
             guard let bvid = item["bvid"] as? String, !bvid.isEmpty, let raw = item["title"] as? String else { return nil }
             // 标题里夹着高亮关键词用的 HTML 标签和转义符
             let title = raw.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)

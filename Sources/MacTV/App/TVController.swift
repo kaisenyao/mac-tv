@@ -398,8 +398,15 @@ final class TVController: NSObject, ObservableObject {
     /// The Mac app or Steam game opened from Mac TV is in front: remote presses go to it as keys.
     var frontAppTakesKeys: Bool {
         guard !NSApp.isActive, let front = NSWorkspace.shared.frontmostApplication else { return false }
-        return front.bundleIdentifier == launchedAppID
+        return Self.takesKeys(front: front.bundleIdentifier, launched: launchedAppID)
             || (openedSteam && (front.bundleIdentifier == SteamLibrary.bundleID || front.processIdentifier == steamGamePID))
+    }
+
+    /// Whether the program in front is the app Mac TV opened. A program with no bundle identifier (one run straight
+    /// from a build folder, or from a terminal) is never it, even when Mac TV has opened nothing: nil isn't nil's app.
+    nonisolated static func takesKeys(front: String?, launched: String?) -> Bool {
+        guard let launched, let front else { return false }
+        return front == launched
     }
     var pointer: CGPoint?
     /// 手机触控板的鼠标移动：摊到屏幕的每一帧里走（见 PointerGlide）

@@ -1027,7 +1027,7 @@ final class BilibiliStore: ObservableObject {
             switch id {
             case "recommended": more = await BiliAPI.recommended(cookie: cookie, page: next)
             case "popular": more = await BiliAPI.popular(cookie: cookie, page: next)
-            default: more = await BiliAPI.search(keyword, cookie: cookie, page: next)
+            default: more = await BiliAPI.search(keyword, cookie: cookie, page: next) ?? []
             }
             guard epoch == self.loginEpoch else { return }   // 这期间退出、换了账号：这一批是上一个账号的推荐
             self.fetchingMore.remove(id)
@@ -1692,7 +1692,7 @@ final class BilibiliStore: ObservableObject {
             let cookie = await cookieHeader()
             async let found = BiliAPI.search(keyword, cookie: cookie)
             async let people = BiliAPI.searchUsers(keyword, cookie: cookie)
-            let (results, users) = await (found, people)
+            let (results, users) = await (found ?? [], people ?? [])
             guard self.lastKeyword == keyword else { return }
             self.loadingTabs.remove(.search)
             self.columns["search"] = 0
@@ -1823,6 +1823,45 @@ extension BilibiliStore {
                                 thumbnail: video.cover, avatar: video.face)
         }
         return (label, items)
+    }
+}
+
+// MARK: 小茗同学找视频、找 UP 主（见 JasmineSearch）：搜索和搜索页是同一些接口，放视频和点一张卡片是同一个函数
+
+extension BilibiliStore: JasmineVideos {
+    func findVideos(_ keyword: String) async -> [BiliVideo]? {
+        await BiliAPI.search(keyword, cookie: await cookieHeader())
+    }
+
+    func findPeople(_ keyword: String) async -> [BiliUser]? {
+        await BiliAPI.searchUsers(keyword, cookie: await cookieHeader())
+    }
+
+    /// 这个 UP 主的投稿，最新的在前；没取到是空的
+    func uploads(of user: BiliUser) async -> [BiliVideo] {
+        let cookie = await cookieHeader()
+        guard let key = await currentSigningKey(cookie: cookie) else { return [] }
+        return await BiliAPI.uploads(mid: user.mid, name: user.name, key: key, cookie: cookie).videos
+    }
+
+    /// 进哔哩哔哩放这个视频。user：是冲着这个 UP 主来的，他的主页垫在下面（从视频返回看到的就是它）
+    func playFound(_ video: BiliVideo, of user: BiliUser?) {
+        guard let tv else { return }
+        if !tv.bilibiliOpen, let app = tv.services.first(where: { $0.id == Self.appID }) { tv.open(app) }
+        resetTransient()
+        if let user { openUp(user) }
+        player.play(video)
+    }
+
+    /// 进哔哩哔哩的搜索页，搜这个词（和在搜索框里打完按确认一样）
+    func showResults(for keyword: String) {
+        guard let tv else { return }
+        if !tv.bilibiliOpen, let app = tv.services.first(where: { $0.id == Self.appID }) { tv.open(app) }
+        resetTransient()
+        player.stop()
+        switchTab(to: .search, focusContent: true)
+        query = keyword
+        submitSearch()
     }
 }
 
