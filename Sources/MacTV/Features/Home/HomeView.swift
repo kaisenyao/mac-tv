@@ -326,17 +326,19 @@ struct AppTile: View {
                 LinearGradient(colors: [Color(hex: "#1BC7FC"), Color(hex: "#027AFF")],
                                startPoint: .top, endPoint: .bottom)
                 if let glyph = StoreTile.glyph {
+                    let mark = TileArt.markSize(aspect: glyph.size.width / max(1, glyph.size.height))
                     Image(nsImage: glyph).resizable().interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(height: 78)
+                        .frame(width: mark.width, height: mark.height)
                 }
             }
         } else if case .movies = service.kind {
             ZStack {
                 LinearGradient(colors: [Color(hex: "#5E5CE6"), Color(hex: "#1F1A6B")],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
+                let mark = TileArt.markSize(aspect: 1)
                 Image(systemName: "film.stack")
-                    .font(.system(size: 70, weight: .medium))
+                    .resizable().fontWeight(.medium).scaledToFit()
+                    .frame(width: mark.width, height: mark.height)
                     .foregroundStyle(.white)
             }
         } else if case .settings = service.kind {
@@ -345,8 +347,9 @@ struct AppTile: View {
                 LinearGradient(colors: [Color(hex: "#DEDEE1"), Color(hex: "#A2A2A7")],
                                startPoint: .top, endPoint: .bottom)
                 if let gears = SettingsTile.gears {
+                    let mark = TileArt.markSize(aspect: 1)
                     Image(nsImage: gears).resizable().interpolation(.high)
-                        .frame(width: 111, height: 111)
+                        .frame(width: mark.width, height: mark.height)
                 }
             }
         } else if service.id == BilibiliStore.appID, let icon = Icons.image(for: service) {
@@ -359,20 +362,13 @@ struct AppTile: View {
                     .frame(width: 126, height: 126)
                     .clipShape(RoundedRectangle(cornerRadius: 23, style: .continuous))
             }
-        } else if service.id == DedaoStore.appID, let owl = DedaoTile.owl {
-            // 得到那只完整的猫头鹰（耳朵、翅膀、爪子都在；Icons/dedao-owl.png，去掉了底色），
-            // 直接站在得到的那种橙色上，看不出边界
-            ZStack {
-                LinearGradient(colors: [Color(hex: "#FF8A1C"), Color(hex: "#F26C00")], startPoint: .top, endPoint: .bottom)
-                Image(nsImage: owl).resizable().interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-                    .padding(.vertical, 9)
+        } else if service.id == DedaoStore.appID, let icon = DedaoTile.icon {
+            // 得到的官方图标（Icons/dedao-icon.png）：写着"得到"的那本书是图案，和别的 App 的图案一样大
+            // （TileArt.markSize）；图标底边贴着卡片底边，猫头鹰从下面探出头，和官方图标一样；底色是图标自己的橙色
+            let side = TileArt.markSize(aspect: DedaoTile.book.width / DedaoTile.book.height).width / DedaoTile.book.width
+            Color(hex: "#FF6B00").overlay(alignment: .bottom) {
+                Image(nsImage: icon).resizable().interpolation(.high).frame(width: side, height: side)
             }
-        } else if service.id == NeteaseStore.appID, let art = Icons.image(for: service) {
-            // 你给的红底白标图：铺满卡片，多出来的红边裁掉
-            Color(hex: "#E60012")
-                .overlay { Image(nsImage: art).resizable().interpolation(.high).aspectRatio(contentMode: .fill) }
-                .clipped()
         } else if let tile = Icons.tile(for: service) {
             Image(nsImage: tile).resizable().interpolation(.high)
         } else {
@@ -386,11 +382,13 @@ struct AppTile: View {
 
 // MARK: Top Shelf
 
-/// 得到在主屏上的那只猫头鹰（去掉了底色的，见上面的卡片）
+/// 得到在主屏上的卡片：它的官方图标，和图标里那本书的位置（见上面的卡片）
 @MainActor
 enum DedaoTile {
-    static let owl: NSImage? = Bundle.main.url(forResource: "dedao-owl.png", withExtension: nil, subdirectory: "Icons")
+    static let icon: NSImage? = Bundle.main.url(forResource: "dedao-icon.png", withExtension: nil, subdirectory: "Icons")
         .flatMap(NSImage.init(contentsOf:))
+    /// Where the book (the mark) is in the icon, as fractions of its side: measured from dedao-icon.png.
+    static let book = CGRect(x: 0.117, y: 0.206, width: 0.766, height: 0.44)
 }
 
 /// Store 磁贴上的白色"A"

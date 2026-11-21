@@ -531,6 +531,7 @@ final class TVController: NSObject, ObservableObject {
         case .setup: handleSetup(command); return
         case .profilePicker: handleProfiles(command); return
         case .audioPicker: handleAudioPicker(command); return
+        case .displayPicker: handleDisplayPicker(command); return
         case .appSwitcher: handleAppSwitcher(command); return
         case .search: handleSystemSearch(command); return
         case .topShelfPreferences: handleTopShelfPreferences(command); return
@@ -846,7 +847,7 @@ final class TVController: NSObject, ObservableObject {
     }
 
     /// 主屏上按播放 / 暂停：后台在放的网易云、得到停下或接着放
-    private func toggleBackgroundAudio() {
+    func toggleBackgroundAudio() {
         if neteaseStore.current != nil { neteaseStore.toggleFromHome() }
         else if dedaoStore.player.current != nil { dedaoStore.player.togglePause() }
     }

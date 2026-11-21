@@ -264,8 +264,6 @@
   .app.current .name { color:var(--blue-text); font-weight:600; }
   /* Files：iPhone 文件 App 那样的白底蓝文件夹（Icons/files.png），和别的图标一样铺满 */
   .app.files .art { background:#fff; }
-  .app.add .art { background:linear-gradient(#1BC7FC, #027AFF); }  /* Store：蓝底白色的 A，和电视上一样 */
-  .app.add .art svg { width:36px; height:32px; }
   .playing { position:absolute; right:-4px; bottom:-4px; height:22px; padding:0 7px; border:2px solid var(--sheet); border-radius:11px; background:var(--label); display:flex; align-items:center; gap:2px; }
   .playing i { width:2px; height:7px; border-radius:1px; background:#fff; }
   .playing i:nth-child(2) { height:11px; } .playing i:nth-child(3) { height:5px; }

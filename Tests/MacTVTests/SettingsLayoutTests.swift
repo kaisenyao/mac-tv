@@ -213,12 +213,14 @@ import Testing
             #expect(tv.settings != nil && tv.activeSheet == .settings)
             back()
             #expect(tv.settings == nil && tv.controlCenter?.item == .settings)
-            for item in [ControlCenterPanel.Item.display, .sleepTimer] {
-                tv.activateControl(item)
-                #expect(tv.controlCenter?.list != nil)
-                back()
-                #expect(tv.controlCenter?.list == nil && tv.controlCenter?.item == item)
-            }
+            tv.activateControl(.sleepTimer)
+            #expect(tv.controlCenter?.list != nil)
+            back()
+            #expect(tv.controlCenter?.list == nil && tv.controlCenter?.item == .sleepTimer)
+            tv.activateControl(.display)
+            #expect(tv.displayPicker != nil)
+            back()
+            #expect(tv.displayPicker == nil && tv.controlCenter?.item == .display)
             tv.activateControl(.audio)
             back()
             #expect(tv.audioPicker == nil && tv.controlCenter?.item == .audio)
@@ -343,44 +345,42 @@ import Testing
 
     // MARK: Text fields
 
-    @Test func textEntryTypesAtTheCaret() {
-        var text = "Kaisn", caret = 5
-        #expect(TextEntry.apply(.move(.left), to: &text, caret: &caret) && caret == 4)
-        TextEntry.apply(.text("e"), to: &text, caret: &caret)
-        #expect(text == "Kaisen" && caret == 5)
-        TextEntry.apply(.deleteBackward, to: &text, caret: &caret)
-        #expect(text == "Kaisn" && caret == 4)
-        for _ in 0..<9 { TextEntry.apply(.move(.left), to: &text, caret: &caret) }
-        #expect(caret == 0 && !TextEntry.apply(.move(.left), to: &text, caret: &caret))
-        #expect(!TextEntry.apply(.deleteBackward, to: &text, caret: &caret))
-        // Return isn't typed, and nothing goes past the limit.
-        TextEntry.apply(.text("Hi \n"), to: &text, caret: &caret, limit: 7)
-        #expect(text == "HiKaisn" && caret == 2)
-        var short = "", at = 0
-        TextEntry.apply(.text("abcdef"), to: &short, caret: &at, limit: 4)
-        #expect(short == "abcd" && at == 4)
+    /// The phone's Type on TV and dictation: at the end (the keyboard types into the real text field itself).
+    @Test func textFromThePhoneGoesAtTheEnd() {
+        var text = "Kaisn"
+        #expect(!TextEntry.apply(.move(.left), to: &text), "the caret is the text field's own")
+        TextEntry.apply(.text("e"), to: &text)
+        #expect(text == "Kaisne")
+        TextEntry.apply(.deleteBackward, to: &text)
+        #expect(text == "Kaisn")
+        var empty = ""
+        #expect(!TextEntry.apply(.deleteBackward, to: &empty))
+        // Return isn't typed, and nothing goes past the limit; Chinese as any text.
+        TextEntry.apply(.text("小茗 \n"), to: &text, limit: 8)
+        #expect(text == "Kaisn小茗 ")
+        var short = ""
+        TextEntry.apply(.text("abcdef"), to: &short, limit: 4)
+        #expect(short == "abcd")
     }
 
-    @Test func theNameFieldMovesItsCaretAndDownGoesToDone() throws {
+    @Test func theNameFieldTakesTheKeyboardAndDownGoesToDone() throws {
         try withTV { tv, _ in
             let second = tv.profiles.add(named: "Bo")
             tv.settings = SettingsPanel(section: .profiles, open: true, row: 1)
             tv.handleSettings(.select)
             tv.handleSettings(.select)
-            #expect(tv.settings?.page == .profileName(second.id) && tv.settings?.typing == true && tv.settings?.caret == 2)
-            tv.handleSettings(.move(.left))
+            #expect(tv.settings?.page == .profileName(second.id) && tv.settings?.typing == true)
+            #expect(tv.tvTextFieldEditing, "the keyboard's keys are the name field's own")
+            tv.handleSettings(.move(.left))                     // the field's caret: the page stays
             tv.handleSettings(.text("e"))
-            #expect(tv.settings?.typed == "Beo" && tv.settings?.caret == 2)
-            tv.handleSettings(.move(.right))
-            tv.handleSettings(.move(.right))   // at the end already: stays
-            #expect(tv.settings?.caret == 3 && tv.settings?.page == .profileName(second.id))
+            #expect(tv.settings?.typed == "Boe" && tv.settings?.page == .profileName(second.id))
             tv.handleSettings(.move(.down))
-            #expect(tv.settings?.row == 1 && tv.settings?.typing == false)
+            #expect(tv.settings?.row == 1 && tv.settings?.typing == false && !tv.tvTextFieldEditing)
             tv.handleSettings(.move(.up))
             #expect(tv.settings?.row == 0 && tv.settings?.typing == true)
             tv.handleSettings(.move(.down))
             tv.handleSettings(.select)
-            #expect(tv.profiles.all.first { $0.id == second.id }?.name == "Beo")
+            #expect(tv.profiles.all.first { $0.id == second.id }?.name == "Boe")
             #expect(tv.settings?.page == .profile(second.id))
         }
     }
@@ -452,12 +452,16 @@ import Testing
             #expect(tv.settings?.page == .addNetworkShare && rows(tv) == [.formAddress, .formUser, .formPassword, .formSubmit])
             #expect(tv.settings?.typing == true)
 
-            tv.handleSettings(.text("nas.lcal/Movies"))
-            for _ in 0..<10 { tv.handleSettings(.move(.left)) }
-            tv.handleSettings(.text("o"))
+            tv.handleSettings(.text("nas.local/Movies"))
             #expect(tv.settings?.form.address == "nas.local/Movies")
             let field = tv.settingsContent(.formAddress, panel: try #require(tv.settings), focused: true)
-            #expect(field.title == "Server" && field.field?.caret == 6)
+            #expect(field.title == "Server" && field.field?.editing == true && field.field?.secure == false)
+            // What the real text field types goes into the form; its Return goes on to the next field
+            field.field?.set?("nas.local/Films")
+            #expect(tv.settings?.form.address == "nas.local/Films")
+            field.field?.submit?()
+            #expect(tv.settings?.row == 1)
+            tv.handleSettings(.move(.up))
 
             tv.handleSettings(.move(.down))
             tv.handleSettings(.move(.down))

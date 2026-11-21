@@ -137,8 +137,8 @@ struct AudioOutputTests {
     func controlCenterItemsExcludeSounds() {
         #expect(!ControlCenterPanel.Item.allCases.contains(where: { "\($0)" == "sounds" }))
         let controls = ControlCenterPanel.Item.standardControls
-        #expect(ControlCenterPanel.neighbour(of: .sleepTimer, .down, controls: controls) == .stayAwake)
-        #expect(ControlCenterPanel.neighbour(of: .stayAwake, .up, controls: controls) == .sleepTimer)
+        #expect(ControlCenterPanel.neighbour(of: .sleepTimer, .down, controls: controls) == .screenSaver)
+        #expect(ControlCenterPanel.neighbour(of: .screenSaver, .up, controls: controls) == .sleepTimer)
     }
 }
 

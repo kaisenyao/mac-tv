@@ -3,7 +3,7 @@ import AppKit
 // The home screen's apps: arranging, adding, hiding and deleting them. Home's first six apps are its top row,
 // the dock; Arrange Apps (and the phone's Edit) move apps into and out of it.
 extension TVController {
-    var arrangedServices: [Service] { services.filter { $0.kind != .addApp && $0.kind != .settings } }
+    var arrangedServices: [Service] { services }
 
     /// The apps Home shows, by id, in order. The first six are the dock.
     var appOrder: [String] { arrangedServices.map(\.id) }

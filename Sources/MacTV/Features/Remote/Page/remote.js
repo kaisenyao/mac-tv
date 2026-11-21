@@ -587,6 +587,8 @@ function appTile(app) {
   b.append(tile, name);
   b.setAttribute('aria-label', `Open ${app.name}${app.id === onTV ? ', on TV' : ''}`);
   b.onclick = () => {
+    // Store opens the phone's own Add page (type an address here); every other app opens on the TV.
+    if (app.id === 'add-app') { openAdd(); return; }
     closeSheets();
     send('launch', { id: app.id });
   };
@@ -608,16 +610,12 @@ function renderApps(focused = appFocus()) {
     box.textContent = '';
     box.classList.remove('editing');
     for (const app of apps) box.appendChild(appTile(app));
-    // 最后两格：Mac 上的文件，和加一个应用
+    // 最后一格：Mac 上的文件（Store 和 Settings 在上面，和别的 App 一样排）
     const files = document.createElement('button');
     files.className = 'app files';
     files.innerHTML = '<span class="tile"><span class="art"><img src="/icon/files" alt=""></span></span><span class="name">Files</span>';
     files.onclick = openFiles;
-    const add = document.createElement('button');
-    add.className = 'app add';
-    add.innerHTML = '<span class="tile"><span class="art"><svg viewBox="0 0 150 132" aria-hidden="true"><use href="#icon-store"/></svg></span></span><span class="name">Store</span>';
-    add.onclick = openAdd;
-    box.append(files, add);
+    box.append(files);
   }
   $('#edit-apps').textContent = editing ? 'Done' : 'Edit';
   $('#edit-apps').classList.toggle('on', editing);

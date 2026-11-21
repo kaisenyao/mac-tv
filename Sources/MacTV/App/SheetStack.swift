@@ -8,7 +8,7 @@ import Foundation
 struct SheetStack {
     /// Bottom to top.
     enum Layer: Int, CaseIterable, Comparable {
-        case controlCenter, settings, organizer, pairing, addApp, topShelfPreferences, audioPicker, appSwitcher
+        case controlCenter, settings, organizer, pairing, addApp, topShelfPreferences, audioPicker, displayPicker, appSwitcher
         case search, profilePicker, setup
 
         static func < (lhs: Layer, rhs: Layer) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -27,6 +27,7 @@ struct SheetStack {
             case .addApp: "add-app"
             case .topShelfPreferences: "top-shelf"
             case .audioPicker: "audio-picker"
+            case .displayPicker: "display-picker"
             case .appSwitcher: "app-switcher"
             case .search: "search"
             case .profilePicker: "profiles"
@@ -47,6 +48,8 @@ struct SheetStack {
     var adder: AppAdder?
     var topShelfPreferences: TopShelfPreferencesPanel?
     var audioPicker: AudioPickerPanel?
+    /// Control Center's Display tile: Full Screen, the displays and the brightness (see DisplayPickerSheet).
+    var displayPicker: DisplayPickerPanel?
     /// Home pressed twice: the apps in the background (see AppQuit).
     var appSwitcher: AppSwitcher?
     /// Mac TV's Search (the Siri button pressed on Home; see SystemSearch).
@@ -65,6 +68,7 @@ struct SheetStack {
         case .addApp: adder != nil
         case .topShelfPreferences: topShelfPreferences != nil
         case .audioPicker: audioPicker != nil
+        case .displayPicker: displayPicker != nil
         case .appSwitcher: appSwitcher != nil
         case .search: search != nil
         case .profilePicker: profilePicker != nil
@@ -87,6 +91,7 @@ struct SheetStack {
         case .addApp: adder = nil
         case .topShelfPreferences: topShelfPreferences = nil
         case .audioPicker: audioPicker = nil
+        case .displayPicker: displayPicker = nil
         case .appSwitcher: appSwitcher = nil
         case .search: search = nil
         case .profilePicker: profilePicker = nil
@@ -133,6 +138,10 @@ extension TVController {
     var audioPicker: AudioPickerPanel? {
         get { sheets.audioPicker }
         set { sheets.audioPicker = newValue }
+    }
+    var displayPicker: DisplayPickerPanel? {
+        get { sheets.displayPicker }
+        set { sheets.displayPicker = newValue }
     }
     var appSwitcher: AppSwitcher? {
         get { sheets.appSwitcher }

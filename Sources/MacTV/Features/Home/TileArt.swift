@@ -12,12 +12,22 @@ import AppKit
 enum TileArt {
     /// Tile size in pixels (2× the 250×150 point tile).
     static let size = CGSize(width: 500, height: 300)
-    /// Every mark is scaled to cover about this many square pixels of the tile…
-    private static let markArea: CGFloat = 22_000
+    /// Every mark is scaled to cover about this many square pixels of the tile, so every app's mark looks the same
+    /// size whatever its shape: about the area of Store's "A" (88 × 78 points)…
+    private static let markArea: CGFloat = 27_600
     /// …but never taller or wider than these.
     private static let maxMark = CGSize(width: 320, height: 190)
     /// Ground pixels kept around the mark, in icon units.
     private static let margin: CGFloat = 0.045
+
+    /// The size, in points, of a mark Home draws itself (Store's A, Settings' gears, Movies, 得到's owl) with
+    /// `aspect` (width ÷ height): the same area and limits as the marks made here, so all of Home's marks match.
+    static func markSize(aspect: CGFloat) -> CGSize {
+        let area = markArea / 4, limit = CGSize(width: maxMark.width / 2, height: maxMark.height / 2)
+        var height = (area / max(aspect, 0.01)).squareRoot()
+        height = min(height, limit.height, limit.width / aspect)
+        return CGSize(width: height * aspect, height: height)
+    }
 
     static func make(from icon: CGImage) -> NSImage? {
         guard let pixels = Pixels(icon, side: 256) else { return nil }

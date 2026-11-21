@@ -34,7 +34,7 @@ struct ArrangeAppsTests {
         try withFolder { folder in
             let tv = twoRows(folder)
             tv.openOrganizer()
-            #expect(tv.organizerOrder == tv.services.filter { $0.kind != .addApp && $0.kind != .settings }.map(\.id))
+            #expect(tv.organizerOrder == tv.services.map(\.id))   // Store and Settings too
             #expect(tv.organizerOrder.count > dock, "a full dock and apps below it; never an empty frame beside a full top row")
             select(tv, tv.appOrder[dock + 1])
             tv.handleOrganizer(.select)
@@ -185,16 +185,19 @@ struct ArrangeAppsTests {
         try withFolder { folder in
             let tv = twoRows(folder)
             for id in ["movies", "browser"] {
-                // On Home: Edit Home Screen only, which picks the app up in Arrange Apps.
+                // On Home: its quick actions, then Edit Home Screen (which picks the app up in Arrange Apps) and
+                // nothing that hides it.
                 tv.organizer = nil
                 tv.setFocus(.app(try #require(tv.services.firstIndex { $0.id == id })))
                 #expect(tv.homeAppFocused, "\(id)")
                 #expect(tv.holdSelect(from: .keyboard), "\(id)")
                 #expect(tv.organizer?.fromHome == true && tv.organizer?.menu == .actions(row: 0), "\(id)")
-                #expect(tv.organizerActions(for: id) == [.editHomeScreen], "\(id)")
-                tv.handle(.move(.down))
-                #expect(tv.organizer?.menu == .actions(row: 0), "\(id): there's no second row")
-                tv.chooseOrganizerMenuRow(1)
+                let actions = tv.organizerActions(for: id)
+                let quick = tv.quickActions(for: id).map(AppOrganizer.Action.quick)
+                #expect(!quick.isEmpty && actions == quick + [.editHomeScreen], "\(id)")
+                for _ in 0..<actions.count { tv.handle(.move(.down)) }
+                #expect(tv.organizer?.menu == .actions(row: actions.count - 1), "\(id): it stops on the last row")
+                tv.chooseOrganizerMenuRow(actions.count)
                 #expect(tv.appOrder.contains(id) && !tv.library.isHidden(id), "\(id): no row hides it")
                 tv.handle(.select)
                 #expect(tv.organizer?.lift?.id == id && tv.organizer?.menu == nil, "\(id): Edit Home Screen")
@@ -299,9 +302,14 @@ struct ArrangeAppsTests {
             tv.handle(.select)
             #expect(tv.organizer == nil && tv.appOrder.contains(site))
 
-            // Not on Home's add and Settings tiles, and not with an app open.
-            tv.setFocus(.app(tv.services.count - 1))
-            #expect(!tv.homeAppFocused && !tv.holdSelect(from: .keyboard) && tv.organizer == nil)
+            // Settings, a system app: its menu has no Hide, and ends with Edit Home Screen.
+            let settings = try #require(tv.services.firstIndex { $0.id == "settings" })
+            tv.setFocus(.app(settings))
+            #expect(tv.homeAppFocused && tv.holdSelect(from: .keyboard))
+            #expect(tv.organizerActions(for: "settings").last == .editHomeScreen)
+            #expect(!tv.organizerActions(for: "settings").contains(.hide))
+            tv.handle(.back)
+            #expect(tv.organizer == nil)
         }
     }
 
@@ -382,7 +390,7 @@ struct ArrangeAppsTests {
             tv.handleOrganizer(.select)
             #expect(tv.appOrder[1] == moving && tv.appOrder.last == before[0])
             // And the phone hiding the app being moved ends the move.
-            select(tv, tv.appOrder[dock])
+            select(tv, try #require(tv.appOrder.last { !AppLibrary.isSystemApp($0) }))   // one that can be hidden
             tv.handleOrganizer(.select)
             let gone = try #require(tv.organizer?.lift?.id)
             tv.hideApp(gone)

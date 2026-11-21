@@ -144,12 +144,12 @@ final class AppLibrary {
 
     // MARK: Home's order
 
-    /// Home's apps in order: the ones this profile shows, then Store and Settings. The first six are the dock.
-    func services() -> [Service] {
-        visibleApps + Catalog.services.filter { !Self.canArrange($0) }
-    }
+    /// Home's apps in order, the ones this profile shows. The first six are the dock. Store and Settings move like
+    /// any app (into the dock too); being system apps, they're never hidden or deleted. An order saved before they
+    /// could move has them last, where they were.
+    func services() -> [Service] { visibleApps }
 
-    /// The apps Home shows, in order, by id. Store and Settings, which always come last, aren't among them.
+    /// The apps Home shows, in order, by id.
     func arrangement() -> [String] { visibleApps.map(\.id) }
 
     /// Puts the apps on show in this order. It must hold exactly those apps, each once. Hidden and unavailable
@@ -178,18 +178,14 @@ final class AppLibrary {
         return arrange(ids)
     }
 
-    private static func canArrange(_ service: Service) -> Bool {
-        service.kind != .addApp && service.kind != .settings
-    }
-
     private static func isBuiltIn(_ id: String) -> Bool {
-        Catalog.services.contains { $0.id == id && canArrange($0) }
+        Catalog.services.contains { $0.id == id }
     }
 
     /// Every app this profile could show, in Home's order, hidden and unavailable ones too so their places
     /// survive. Apps added since the order was saved, by anyone, come last.
     private var orderedApps: [Service] {
-        let apps = Catalog.services.filter(Self.canArrange) + added.compactMap(service(for:))
+        let apps = Catalog.services + added.compactMap(service(for:))
         var remaining = Dictionary(apps.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let ordered = order.compactMap { remaining.removeValue(forKey: $0) }
         return ordered + apps.filter { remaining.removeValue(forKey: $0.id) != nil }

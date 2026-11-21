@@ -8,13 +8,14 @@ struct ControlCenterPanel: Equatable {
     enum Item: String, CaseIterable {
         case sleepNow, remotes, display, audio, sleepTimer
         /// The round buttons.
-        case screenSaver, screenOff, stayAwake, search, settings, profiles, arrangeApps, store
+        case jasmine, screenOff, screenSaver, mute, playPause, search, appSwitcher, settings
+        case stayAwake, profiles, arrangeApps, store, fullScreen, userGuide
         /// The capsule under the round buttons: Edit, and Done while editing.
         case edit, done
 
         /// What can be a round button, and the ones Control Center starts with.
-        static let controls: [Item] = [.screenSaver, .screenOff, .stayAwake, .search, .settings, .profiles, .arrangeApps, .store]
-        static let standardControls: [Item] = [.screenSaver, .screenOff, .stayAwake, .search, .settings]
+        static let controls: [Item] = standardControls + [.stayAwake, .profiles, .arrangeApps, .store, .fullScreen, .userGuide]
+        static let standardControls: [Item] = [.jasmine, .screenOff, .screenSaver, .mute, .playPause, .search, .appSwitcher, .settings]
         static let perRow = 4
     }
 
@@ -239,7 +240,7 @@ extension TVController {
             controlCenter = nil
             enterStandby(reason: item == .sleepNow ? "Sleep Now" : "Turn Off Display")
         case .remotes: pairing = true
-        case .display: openControlCenterList(.display)
+        case .display: openDisplayPicker()
         case .audio: openAudioPicker()
         case .sleepTimer: openControlCenterList(.sleepTimer)
         case .screenSaver:
@@ -255,6 +256,16 @@ extension TVController {
             openProfiles()
         case .arrangeApps: openOrganizer()
         case .store: adder = AppAdder()
+        case .jasmine:
+            controlCenter = nil
+            jasmine.summon()
+        case .mute: audioCoordinator.toggleMute()
+        case .playPause: toggleBackgroundAudio()
+        case .appSwitcher:
+            controlCenter = nil
+            if backgroundApps.isEmpty { nudgeHome(.nothingInBackground) } else { openAppSwitcher(returningTo: appInFront?.id) }
+        case .fullScreen: setDedicatedTVMode(!dedicatedTVMode)
+        case .userGuide: openSettings(to: .userGuide)
         case .edit:
             controlCenter?.editing = true
             controlCenter?.item = controlCenterControls.first ?? controlCenterAvailable.first ?? .done
@@ -356,12 +367,12 @@ struct ControlCenterView: View {
                     .foregroundStyle(.white.opacity(0.85))
                     .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
                     .frame(width: Self.width, alignment: .center)
-                    .padding(.top, 26)
+                    .padding(.top, 16)
                     .contentTransition(.opacity)
                 if panel.editing { addSection(panel) }
                 capsule(panel.editing ? .done : .edit, panel)
                     .frame(width: Self.width)
-                    .padding(.top, 26)
+                    .padding(.top, panel.editing ? 26 : 12)   // close under the buttons; under Add a Control while editing
             }
         }
         .foregroundStyle(.white)
@@ -462,6 +473,12 @@ struct ControlCenterView: View {
         case .profiles: "Profiles"
         case .arrangeApps: "Arrange Apps"
         case .store: "Store"
+        case .jasmine: "Jasmine"
+        case .mute: tv.audioCoordinator.currentVolume.muted ? "Muted" : "Mute"
+        case .playPause: "Play/Pause"
+        case .appSwitcher: "App Switcher"
+        case .fullScreen: tv.dedicatedTVMode ? "Full Screen: On" : "Full Screen: Off"
+        case .userGuide: "User Guide"
         default: " "
         }
     }
@@ -478,6 +495,13 @@ struct ControlCenterView: View {
         case .profiles: return ("person.2.fill", false)
         case .arrangeApps: return ("square.grid.3x3.fill", false)
         case .store: return ("bag.fill", false)
+        case .jasmine: return ("waveform", false)
+        case .mute: return (tv.audioCoordinator.currentVolume.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                            tv.audioCoordinator.currentVolume.muted)
+        case .playPause: return ("playpause.fill", false)
+        case .appSwitcher: return ("square.stack.3d.up.fill", false)
+        case .fullScreen: return ("arrow.up.left.and.arrow.down.right", tv.dedicatedTVMode)
+        case .userGuide: return ("book.fill", false)
         default: return ("circle", false)
         }
     }
@@ -591,7 +615,7 @@ struct ControlCenterView: View {
     private func listPanel(_ list: ControlCenterPanel.List, _ panel: ControlCenterPanel) -> some View {
         let choices = tv.controlCenterChoices(list)
         return VStack(alignment: .leading, spacing: 10) {
-            Text(list == .display ? "Display" : "Sleep Timer")
+            Text("Sleep Timer")   // Display opens its own sheet (DisplayPickerSheet)
                 .font(.system(size: 23, weight: .semibold))
                 .padding(.leading, 6).padding(.bottom, 4)
             ForEach(Array(choices.enumerated()), id: \.element) { index, choice in

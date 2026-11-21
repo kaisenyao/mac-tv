@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Arrange Apps shows Home as it is: the dock (Home's top row) in its glass, the rest of the apps below in
-/// Home's six columns, then Store and Settings, which stay last. Select picks the focused app up and the
+/// Home's six columns, Store and Settings among them. Select picks the focused app up and the
 /// D-pad moves it, the others making room; Select again puts it down and Back puts it back where it was.
 /// Moving an app into a full dock moves the dock's last app to the first place below; moving one out brings
 /// the first app below up into the dock. Press and hold Select on an app for Hide (and, for an app someone
@@ -43,7 +43,7 @@ struct AppOrganizer: Equatable {
     }
 
     /// What press and hold offers for an app.
-    enum Action: Equatable { case editHomeScreen, hide, deleteForEveryone }
+    enum Action: Equatable { case quick(QuickAction), editHomeScreen, hide, deleteForEveryone }
 
     /// Press and hold Select on an app: its menu, then, for Delete for Everyone, the question before the app
     /// goes from everyone's Home. The question starts on Cancel.
@@ -101,7 +101,10 @@ extension TVController {
     func organizerActions(for id: String) -> [AppOrganizer.Action] {
         let added = library.containsAddedApp(id) && !Catalog.services.contains(where: { $0.id == id })
         let hide: [AppOrganizer.Action] = AppLibrary.isSystemApp(id) ? [] : [.hide]
-        return (organizer?.fromHome == true ? [.editHomeScreen] : []) + hide + (added ? [.deleteForEveryone] : [])
+        // Held on Home: the app's own quick actions first (QuickActions), then Edit Home Screen.
+        let home: [AppOrganizer.Action] = organizer?.fromHome == true
+            ? quickActions(for: id).map(AppOrganizer.Action.quick) + [.editHomeScreen] : []
+        return home + hide + (added ? [.deleteForEveryone] : [])
     }
 
     /// Focus is on an app on the Home Screen itself (no app open, no sheet): holding Select opens its menu.
@@ -232,6 +235,8 @@ extension TVController {
             let actions = organizerActions(for: id)
             guard actions.indices.contains(row) else { return }
             switch actions[row] {
+            case .quick(let action):
+                performQuickAction(action)
             case .editHomeScreen:
                 // Arrange Apps, with this app picked up to move; Select puts it down.
                 organizer?.menu = nil
@@ -324,7 +329,7 @@ struct ArrangeGrid {
     /// Home's second row sits 60 points below the dock.
     static let belowTop = dockTop + dockHeight + 60
 
-    /// Every tile, Store and Settings included.
+    /// Every tile.
     let count: Int
 
     var rows: Int { max((count + AppOrganizer.columns - 1) / AppOrganizer.columns, 1) }
@@ -368,9 +373,7 @@ struct AppOrganizerSheet: View {
         let panel = tv.organizer ?? AppOrganizer()
         let order = tv.organizerOrder
         let apps = Dictionary(tv.arrangedServices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        // Store and Settings stay last, as on Home; they don't move.
-        let fixed = tv.services.filter { $0.kind == .addApp || $0.kind == .settings }
-        let grid = ArrangeGrid(count: order.count + fixed.count)
+        let grid = ArrangeGrid(count: order.count)
         let focused = (panel.lift?.id ?? panel.selectedID).flatMap { order.firstIndex(of: $0) }
         let shift = scroll(to: focused)
 
@@ -382,11 +385,6 @@ struct AppOrganizerSheet: View {
                 .allowsHitTesting(false)
             ForEach(Array(order.enumerated()), id: \.element) { index, id in
                 if let service = apps[id] { tile(service, at: index, panel: panel) }
-            }
-            ForEach(Array(fixed.enumerated()), id: \.element.id) { offset, service in
-                AppTile(service: service, focused: false, tilt: .zero)
-                    .position(ArrangeGrid.center(of: order.count + offset))
-                    .allowsHitTesting(false)
             }
         }
         .frame(width: ArrangeGrid.width, height: grid.height, alignment: .topLeading)
@@ -486,7 +484,7 @@ struct AppMenuLayer: View {
                     .transition(.opacity)
             }
             if let menu, let id, let tile {
-                let half = AppMenuCard.height(menu, actions: tv.organizerActions(for: id).count) / 2
+                let half = AppMenuCard.height(menu, actions: tv.organizerActions(for: id)) / 2
                 let reach = AppMenuCard.reach(from: tile.width)
                 AppMenuCard(tv: tv, menu: menu, id: id, name: name)
                     .position(x: rightOfTile ? tile.midX + reach : tile.midX - reach,
@@ -510,13 +508,20 @@ struct AppMenuCard: View {
 
     static let width: CGFloat = 470
 
+    private static func isQuick(_ action: AppOrganizer.Action) -> Bool {
+        if case .quick = action { return true }
+        return false
+    }
+
     /// From the middle of the app to the middle of the card beside it.
     static func reach(from tileWidth: CGFloat) -> CGFloat { tileWidth * 0.57 + 32 + width / 2 }
 
     /// How tall the card is, to keep it on the screen: its rows, or the question and its two answers.
-    static func height(_ menu: AppOrganizer.Menu, actions: Int) -> CGFloat {
+    static func height(_ menu: AppOrganizer.Menu, actions: [AppOrganizer.Action]) -> CGFloat {
+        let count = actions.count
+        let line: CGFloat = actions.contains(where: isQuick) && !actions.allSatisfy(isQuick) ? 21 : 0   // under quick actions
         switch menu {
-        case .actions: return 44 + CGFloat(actions) * 66 + CGFloat(max(0, actions - 1)) * 10
+        case .actions: return 44 + CGFloat(count) * 66 + CGFloat(max(0, count - 1)) * 10 + line
         case .confirmDelete: return 316   // the question (about 60), Cancel and Delete (66 each), their gaps and padding
         }
     }
@@ -525,8 +530,17 @@ struct AppMenuCard: View {
         VStack(alignment: .leading, spacing: 10) {
             switch menu {
             case .actions(let row):
-                ForEach(Array(tv.organizerActions(for: id).enumerated()), id: \.offset) { offset, action in
+                let actions = tv.organizerActions(for: id)
+                ForEach(Array(actions.enumerated()), id: \.offset) { offset, action in
+                    // A line between the app's quick actions and Home's own (as on an iPhone's Haptic Touch menu).
+                    if offset > 0, case .quick = actions[offset - 1], !Self.isQuick(action) {
+                        Rectangle().fill(.white.opacity(0.18)).frame(height: 1).padding(.horizontal, 12).padding(.vertical, 5)
+                    }
                     switch action {
+                    case .quick(let quick):
+                        menuRow(quick.title, systemImage: quick.symbol, focused: row == offset, destructive: false) {
+                            tv.chooseOrganizerMenuRow(offset)
+                        }
                     case .editHomeScreen:
                         menuRow("Edit Home Screen", systemImage: "square.grid.3x3", focused: row == offset, destructive: false) {
                             tv.chooseOrganizerMenuRow(offset)

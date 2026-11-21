@@ -84,8 +84,8 @@ enum Catalog {
         Service(id: "iina", name: "IINA", kind: .app(bundleID: "com.colliderli.iina"),
                 icon: "iina.png"),
         // Store：现在里面是添加 App；以后是完整的商店
-        Service(id: "add-app", name: "Store", kind: .addApp),
-        Service(id: "settings", name: "Settings", kind: .settings),
+        Service(id: "add-app", name: "Store", kind: .addApp, icon: "store-app.png"),
+        Service(id: "settings", name: "Settings", kind: .settings, icon: "settings-app.png"),
     ]
 }
 
@@ -129,8 +129,12 @@ enum Icons {
 
     static func tile(for service: Service) -> NSImage? {
         if let cached = tiles[service.id] { return cached }
-        let tile = service.hasWideArt ? image(for: service)
-            : image(for: service)?.cgImage(forProposedRect: nil, context: nil, hints: nil).flatMap { TileArt.make(from: $0) }
+        // An app's square icon (its phone icon, when it has one: 网易云's official one) is laid out on the tile by
+        // TileArt, so its mark is the size of every other app's; wide art made for the tile is drawn as it is.
+        let square = service.phoneIcon
+            .flatMap { Bundle.main.url(forResource: $0, withExtension: nil, subdirectory: "Icons") }.flatMap(decoded)
+        let tile = square == nil && service.hasWideArt ? image(for: service)
+            : (square ?? image(for: service))?.cgImage(forProposedRect: nil, context: nil, hints: nil).flatMap { TileArt.make(from: $0) }
         tiles[service.id] = tile
         return tile
     }

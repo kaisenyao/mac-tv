@@ -42,12 +42,12 @@ import Testing
         #expect(next(.remotes, .down) == .display)
         #expect(next(.sleepNow, .down) == .audio)
         #expect(next(.audio, .right) == .sleepTimer)
-        #expect(next(.audio, .down) == .screenSaver)
-        #expect(next(.screenSaver, .right) == .screenOff)
-        #expect(next(.stayAwake, .right) == .search)
-        #expect(next(.search, .right) == nil)                 // four to a row
-        #expect(next(.screenSaver, .down) == .settings)       // the second row
-        #expect(next(.screenOff, .down) == .settings)         // a short row: its last
+        #expect(next(.audio, .down) == .jasmine)
+        #expect(next(.sleepTimer, .down) == .screenSaver)
+        #expect(next(.jasmine, .right) == .screenOff)
+        #expect(next(.mute, .right) == nil)                   // four to a row
+        #expect(next(.jasmine, .down) == .playPause)          // the second row
+        #expect(next(.screenOff, .down) == .search)
         #expect(next(.settings, .down) == .edit)
         #expect(next(.edit, .up) == .settings)
         #expect(!ControlCenterPanel.Item.allCases.contains { "\($0)" == "skipIntros" || "\($0)" == "phone" || "\($0)" == "controller" })
@@ -60,41 +60,46 @@ import Testing
             defer { tv.preferences.controlCenterControls = nil }
             tv.preferences.controlCenterControls = nil
             tv.openControlCenter()
-            #expect(tv.controlCenterControls == [.screenSaver, .screenOff, .stayAwake, .search, .settings])
-            #expect(tv.controlCenterAvailable == [.profiles, .arrangeApps, .store])
+            #expect(tv.controlCenterControls == [.jasmine, .screenOff, .screenSaver, .mute, .playPause, .search, .appSwitcher, .settings])
+            #expect(tv.controlCenterAvailable == [.stayAwake, .profiles, .arrangeApps, .store, .fullScreen, .userGuide])
             tv.controlCenter?.item = .edit
             tv.handleControlCenter(.select)
-            #expect(tv.controlCenter?.editing == true && tv.controlCenter?.item == .screenSaver)
+            #expect(tv.controlCenter?.editing == true && tv.controlCenter?.item == .jasmine)
             // The tiles rest: up from the first row goes nowhere.
             tv.handleControlCenter(.move(.up))
-            #expect(tv.controlCenter?.item == .screenSaver)
+            #expect(tv.controlCenter?.item == .jasmine)
 
-            // Picked up, moved right twice, put down.
+            // Picked up, moved right twice, put down: the others make room.
             tv.handleControlCenter(.select)
-            #expect(tv.controlCenter?.lifted == .screenSaver)
+            #expect(tv.controlCenter?.lifted == .jasmine)
             tv.handleControlCenter(.move(.right))
             tv.handleControlCenter(.move(.right))
             tv.handleControlCenter(.select)
             #expect(tv.controlCenter?.lifted == nil)
-            #expect(tv.controlCenterControls == [.screenOff, .stayAwake, .screenSaver, .search, .settings])
+            #expect(tv.controlCenterControls == [.screenOff, .screenSaver, .jasmine, .mute, .playPause, .search, .appSwitcher, .settings])
 
             // Held: out, to Add a Control; focus on the one that took its place.
             tv.controlCenter?.item = .search
             #expect(tv.holdSelect(from: .keyboard))
-            #expect(tv.controlCenterControls == [.screenOff, .stayAwake, .screenSaver, .settings])
-            #expect(tv.controlCenter?.item == .settings)
-            #expect(tv.controlCenterAvailable == [.search, .profiles, .arrangeApps, .store])
+            #expect(tv.controlCenterControls == [.screenOff, .screenSaver, .jasmine, .mute, .playPause, .appSwitcher, .settings])
+            #expect(tv.controlCenter?.item == .appSwitcher)
+            #expect(tv.controlCenterAvailable.first == .search)
+
+            // Its "−" clicked: out too, focus staying where it is.
+            #expect(tv.removeControlCenterControl(.settings))
+            #expect(tv.controlCenterControls == [.screenOff, .screenSaver, .jasmine, .mute, .playPause, .appSwitcher])
+            #expect(tv.controlCenter?.item == .appSwitcher)
 
             // Down to Add a Control, Select: in again, last.
             tv.handleControlCenter(.move(.down))
             #expect(tv.controlCenter?.item == .search)
             tv.handleControlCenter(.select)
-            #expect(tv.controlCenterControls == [.screenOff, .stayAwake, .screenSaver, .settings, .search])
+            #expect(tv.controlCenterControls == [.screenOff, .screenSaver, .jasmine, .mute, .playPause, .appSwitcher, .search])
 
             // Back finishes, on Edit; the order stays.
             tv.handleControlCenter(.back)
             #expect(tv.controlCenter?.editing == false && tv.controlCenter?.item == .edit)
-            #expect(tv.preferences.controlCenterControls == ["screenOff", "stayAwake", "screenSaver", "settings", "search"])
+            #expect(tv.preferences.controlCenterControls == ["screenOff", "screenSaver", "jasmine", "mute", "playPause", "appSwitcher", "search"])
         }
     }
 
@@ -125,11 +130,11 @@ import Testing
         }
     }
 
-    @Test func displayListOffersFullScreenAndTheDisplays() throws {
+    @Test func displayOpensItsSheetWithFullScreenAndTheDisplays() throws {
         try withTV { tv in
             tv.openControlCenter()
             tv.activateControl(.display)
-            #expect(tv.controlCenter?.list == .display)
+            #expect(tv.displayPicker != nil && tv.activeSheet == .displayPicker)   // as Audio opens its sheet
             #expect(Array(tv.controlCenterChoices(.display).prefix(2)) == [.fullScreen, .automaticDisplay])
             #expect(tv.controlCenterChoice(.fullScreen).accessory == .toggle(tv.dedicatedTVMode))
         }

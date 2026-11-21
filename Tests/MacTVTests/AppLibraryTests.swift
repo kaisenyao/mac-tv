@@ -51,7 +51,8 @@ struct AppLibraryTests {
             #expect(Array(expected.prefix(2)) == [a.id, b.id])
             #expect(AppLibrary(folder: folder).services().map(\.id) == expected)
             let c = library.add(name: "Third", url: site("third"), bundleID: nil)
-            #expect(Array(library.services().suffix(3).map(\.id)) == [c.id, "add-app", "settings"])
+            // A new app comes last, after Store and Settings, which are apps like the others.
+            #expect(library.services().map(\.id).last == c.id)
         }
     }
 
@@ -88,7 +89,7 @@ struct AppLibraryTests {
             let json = #"{"order":["youtube","netease","bilibili","movies","dedao","browser"],"hidden":["netease"],"pinned":["movies","dedao","netease"]}"#
             try Data(json.utf8).write(to: file)
             let library = AppLibrary(folder: folder)
-            #expect(library.arrangement() == ["movies", "dedao", "youtube", "bilibili", "browser"])
+            #expect(library.arrangement() == ["movies", "dedao", "youtube", "bilibili", "browser", "add-app", "settings"])
             #expect(try self.json(file)["pinned"] == nil, "the favorites go")
             library.setHidden("netease", false)
             #expect(library.arrangement().contains("netease"))
@@ -98,7 +99,7 @@ struct AppLibraryTests {
             let many = #"{"added":[{"id":"user-seventh","name":"Seventh","url":"https://seventh.example"},{"id":"user-eighth","name":"Eighth","url":"https://eighth.example"}],"order":["youtube","netease","bilibili","movies","dedao","browser","user-seventh","user-eighth"],"pinned":["youtube","netease","bilibili","movies","dedao","user-seventh","user-eighth","user-gone"]}"#
             try Data(many.utf8).write(to: file)
             #expect(AppLibrary(folder: folder).arrangement()
-                    == ["youtube", "netease", "bilibili", "movies", "dedao", "user-seventh", "browser", "user-eighth"])
+                    == ["youtube", "netease", "bilibili", "movies", "dedao", "user-seventh", "browser", "user-eighth", "add-app", "settings"])
         }
     }
 
@@ -117,14 +118,16 @@ struct AppLibraryTests {
             #expect(library.arrangement() == shown)
             #expect(library.move("youtube", to: 0))
             #expect(!library.move("netease", to: 0))
-            #expect(!library.move("settings", to: 0))
+            // Settings moves like any app (a system app: never hidden), and back.
+            #expect(library.move("settings", to: 0) && library.arrangement().first == "settings")
+            #expect(library.move("settings", to: .max))
             #expect(!library.move("missing", to: 0))
             library.restoreBuiltIns()
             // NetEase comes back to the place it had.
             let restored = library.arrangement()
             #expect(restored.first == "youtube")
             #expect(restored.firstIndex(of: "netease") == before.firstIndex(of: "netease"))
-            #expect(Array(library.services().suffix(2).map(\.id)) == ["add-app", "settings"])
+            #expect(library.services().last?.id == "settings")   // back where it was moved to
             #expect(library.move("youtube", to: .max))
             #expect(library.arrangement().last == "youtube")
         }
@@ -259,8 +262,7 @@ struct AppLibraryTests {
                 tv.handleAppsRequest(HTTPRequest(method: "POST", path: path, query: [:], headers: [:], body: Data(json.utf8)))
             }
             let before = tv.appOrder
-            for body in [#"{"index":0}"#, #"{"id":"missing","index":0}"#, #"{"id":"settings","index":0}"#,
-                         #"{"id":"add-app","index":0}"#, #"{"id":"youtube","index":true}"#, #"{"id":"youtube","index":-1}"#,
+            for body in [#"{"index":0}"#, #"{"id":"missing","index":0}"#, #"{"id":"youtube","index":true}"#, #"{"id":"youtube","index":-1}"#,
                          #"{"id":"youtube","index":1.5}"#, #"{"id":"youtube","index":"0"}"#, #"{"id":"youtube"}"#] {
                 #expect(request("/apps/place", body)?.status == "400 Bad Request", "\(body)")
             }

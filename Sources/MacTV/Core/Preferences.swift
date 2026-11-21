@@ -148,6 +148,6 @@ final class Preferences: ObservableObject {
         static let dedicatedTVMode = "dedicatedTVMode"
         static let preferredTVDisplay = "preferredTVDisplay"
         static let twentyFourHourTime = "twentyFourHourTime"
-        static let controlCenterControls = "controlCenterControls"
+        static let controlCenterControls = "controlCenterRoundButtons"
     }
 }
