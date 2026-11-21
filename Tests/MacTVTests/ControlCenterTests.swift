@@ -159,6 +159,14 @@ import Testing
         }
     }
 
+    @Test func aLongNameBreaksIntoTwoEvenLines() {
+        #expect(ControlCenterView.overTwoLines("Speakers") == "Speakers")   // fits: one line
+        #expect(ControlCenterView.overTwoLines("Sleep Timer") == "Sleep\nTimer")
+        #expect(ControlCenterView.overTwoLines("Mac mini Speakers") == "Mac mini\nSpeakers")
+        #expect(ControlCenterView.overTwoLines("MacBook Pro Speakers") == "MacBook Pro\nSpeakers")   // not "MacBook / Pro Speakers"
+        #expect(ControlCenterView.overTwoLines("XG27UCSR") == "XG27UCSR")   // one word: it shrinks instead
+    }
+
     @Test func remotesSaysWhatIsConnected() throws {
         let wasConnected = SiriRemoteStatus.shared.connected
         defer { SiriRemoteStatus.shared.connected = wasConnected }

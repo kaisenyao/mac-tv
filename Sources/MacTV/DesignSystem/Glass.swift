@@ -51,10 +51,9 @@ extension View {
     /// tvOS focus on a control: a solid white platter when focused, the control's glass otherwise. Tinting the
     /// glass white instead reads milky grey over dark artwork, and dark text on it loses contrast. The glass
     /// switches to `.identity` rather than going away, so focus moving never changes the view's identity.
-    func focusPlatter<S: InsettableShape>(_ shape: S, focused: Bool, color: Color = .white, glass: Bool = true,
-                                          kind: TVGlass = .regular) -> some View {
+    func focusPlatter<S: InsettableShape>(_ shape: S, focused: Bool, color: Color = .white, glass: Bool = true) -> some View {
         background { shape.fill(color).opacity(focused ? 1 : 0) }
-            .tvGlass(kind, in: shape, enabled: glass && !focused)
+            .tvGlass(in: shape, enabled: glass && !focused)
     }
 
     /// A plain panel for sheets that sit on the frosted backdrop. Glass there would have only blur to

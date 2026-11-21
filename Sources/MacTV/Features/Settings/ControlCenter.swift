@@ -357,10 +357,11 @@ struct ControlCenterView: View {
     private static let row: CGFloat = 95
     private static let gap: CGFloat = 17
     private static let width = column * 2 + gap
-    /// The box every round button's symbol is fitted to: Apple TV's Search is 40 points tall, its game controller 61 across.
-    private static let glyph = CGSize(width: 61, height: 42)
-    /// Jasmine's ball on her round button: a solid disc, so a little larger than a symbol is tall to weigh the same.
-    private static let orb: CGFloat = 46
+    /// The box every round button's symbol is fitted to, so they weigh the same in a row: a square or round one is 40
+    /// points tall, as Apple TV's Search; a wide, solid one (Play/Pause) no more than 50 across.
+    private static let glyph = CGSize(width: 50, height: 42)
+    /// Jasmine's ball on her round button: a solid disc, so no larger than a symbol is tall.
+    private static let orb: CGFloat = 40
     /// The box every tile's symbol is fitted to: Apple TV's Wi-Fi is 45 across, its round ones (Sleep Timer) 41. A remote
     /// or a phone is narrow, so it's drawn taller than the box, to weigh what a display or a dial does.
     private static let tileGlyph = CGSize(width: 45, height: 41)
@@ -369,6 +370,22 @@ struct ControlCenterView: View {
     /// A tile's symbol is centred on its rounded end's own centre, half a row in, and its text starts here, as Apple TV's.
     private static let tileTextLeading: CGFloat = 88
     private static let tileText = Font.tv(.caption2)
+    /// The text's own width: to 16 points short of the tile's edge, clear of its rounded end.
+    private static let tileTextWidth = column - tileTextLeading - 16
+
+    /// A name that doesn't fit on one line, broken where its two lines come out most even, so neither is cut and both
+    /// shrink as little as they can; between breaks about as even, the later one ("MacBook Pro / Speakers", not
+    /// "MacBook / Pro Speakers").
+    static func overTwoLines(_ name: String) -> String {
+        let font = NSFont.systemFont(ofSize: TVText.caption2.size, weight: .medium)
+        func width(_ text: String) -> CGFloat { (text as NSString).size(withAttributes: [.font: font]).width }
+        let words = name.split(separator: " ").map(String.init)
+        guard words.count > 1, width(name) > tileTextWidth else { return name }
+        let breaks = (1..<words.count).map { (words[..<$0].joined(separator: " "), words[$0...].joined(separator: " ")) }
+        func longer(_ lines: (String, String)) -> Int { Int(max(width(lines.0), width(lines.1)) / 8) }   // to 8 points
+        let best = breaks.reversed().min { longer($0) < longer($1) }!   // reversed: of equals, min keeps the later break
+        return best.0 + "\n" + best.1
+    }
     /// The blue of a connected remote or the sound output, as on Apple TV.
     private static let tint = Color(hex: "#5AC8FA")
 
@@ -420,8 +437,8 @@ struct ControlCenterView: View {
                 tile(.audio, panel, symbol: tv.currentAudioDevice?.tileSymbol ?? AudioOutputDevice.speakerSymbol,
                      title: tv.currentAudioDevice?.name ?? "Speakers", tinted: true)
                 // Apple TV's Sleep Timer symbol: a ring and a needle
-                tile(.sleepTimer, panel, symbol: "gauge.with.needle", title: minutes > 0 ? "\(minutes) min" : "Sleep Timer",
-                     value: minutes > 0 ? "Left" : nil)
+                tile(.sleepTimer, panel, symbol: "gauge.with.needle", title: minutes > 0 ? "Sleep in" : "Sleep Timer",
+                     value: minutes > 0 ? "\(minutes) min" : nil)
             }
             .opacity(panel.editing ? 0.35 : 1)   // editing: the tiles rest, only the round buttons move
             .allowsHitTesting(!panel.editing)
@@ -563,6 +580,7 @@ struct ControlCenterView: View {
                     } else {
                         Image(systemName: symbol)
                             .resizable()
+                            .symbolRenderingMode(.monochrome)   // a screen's outline with nothing in it, as Apple TV's
                             .fontWeight(.regular)
                             .scaledToFit()
                             .frame(width: Self.tileGlyph.width,
@@ -572,7 +590,7 @@ struct ControlCenterView: View {
                 }
                 .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(title).lineLimit(value == nil && title.contains(" ") ? 2 : 1)
+                    Text(value == nil ? Self.overTwoLines(title) : title).lineLimit(value == nil ? 2 : 1)
                     if let value {
                         Text(value).opacity(0.6).lineLimit(1)
                             .contentTransition(value.first?.isNumber == true ? .numericText() : .opacity)
@@ -581,8 +599,8 @@ struct ControlCenterView: View {
                 .font(Self.tileText)
                 .multilineTextAlignment(.leading)
                 .minimumScaleFactor(0.75)
-                // A width of its own, so a long name shrinks to fit before it's cut; clear of the rounded end
-                .frame(width: Self.column - Self.tileTextLeading - 16, alignment: .leading)
+                // A width of its own, so a long name shrinks to fit before it's cut
+                .frame(width: Self.tileTextWidth, alignment: .leading)
             }
             .padding(.leading, Self.row / 2 - Self.tileGlyph.width / 2)
             .foregroundStyle(focused ? .black : .white)
@@ -620,6 +638,7 @@ struct ControlCenterView: View {
                 } else {
                     Image(systemName: look.symbol)
                         .resizable()
+                        .symbolRenderingMode(.monochrome)
                         .fontWeight(.medium)
                         .scaledToFit()
                         .frame(maxWidth: Self.glyph.width, maxHeight: Self.glyph.height)
