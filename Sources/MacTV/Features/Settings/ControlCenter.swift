@@ -368,7 +368,6 @@ struct ControlCenterView: View {
     @ObservedObject var tv: TVController
     @ObservedObject private var siriRemote = SiriRemoteStatus.shared
     @Environment(\.canvasSize) private var canvas
-    @Namespace private var focusSpace
     private static let column: CGFloat = 206
     private static let row: CGFloat = 95
     private static let gap: CGFloat = 17
@@ -717,25 +716,54 @@ struct ControlCenterView: View {
         .transition(.scale.combined(with: .opacity))
     }
 
-    /// A tile's list in place of the tiles, as tvOS opens one: its choices in Settings' rows. Back returns.
+    /// A tile's list in place of the tiles, as tvOS opens one (Apple TV's audio list): a small title in capitals, then
+    /// each choice a glass capsule of its own, the size of a tile, its name on the left and on the right a ring, ticked
+    /// for the one in use. Focus turns the capsule white. Back returns.
     private func listPanel(_ list: ControlCenterPanel.List, _ panel: ControlCenterPanel) -> some View {
         let choices = tv.controlCenterChoices(list)
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("Sleep Timer")   // Display opens its own sheet (DisplayPickerSheet)
-                .font(.system(size: 23, weight: .semibold))
-                .padding(.leading, 6).padding(.bottom, 4)
-            ForEach(Array(choices.enumerated()), id: \.element) { index, choice in
-                SettingsRow(content: tv.controlCenterChoice(choice), focused: index == panel.listRow, presses: panel.presses,
-                            compact: true, focusSpace: focusSpace) {
-                    tv.controlCenter?.listRow = index
-                    tv.chooseControlCenter(choice)
+        return VStack(alignment: .leading, spacing: Self.gap) {
+            Text("SLEEP TIMER")   // Display opens its own sheet (DisplayPickerSheet)
+                .font(.system(size: 21, weight: .semibold))
+                .opacity(0.85)
+                .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
+                .padding(.leading, 8)
+            GlassGroup(spacing: 0) {
+                VStack(spacing: Self.gap) {
+                    ForEach(Array(choices.enumerated()), id: \.element) { index, choice in
+                        listRow(tv.controlCenterChoice(choice), focused: index == panel.listRow, panel) {
+                            tv.controlCenter?.listRow = index
+                            tv.chooseControlCenter(choice)
+                        }
+                    }
                 }
-                .equatable()
             }
         }
-        .padding(18)
-        .frame(width: Self.width)
-        .tvGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .frame(width: Self.width, alignment: .leading)
+    }
+
+    private func listRow(_ content: SettingsRowContent, focused: Bool, _ panel: ControlCenterPanel,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(content.title).font(Self.tileText).lineLimit(1)
+                Spacer(minLength: 0)
+                if let value = content.value {
+                    Text(value).font(Self.tileText).opacity(0.6).monospacedDigit()
+                        .contentTransition(.numericText())
+                }
+                Image(systemName: content.checked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 28, weight: .regular))
+                    .opacity(content.checked ? 1 : 0.8)
+            }
+            .padding(.leading, Self.row / 2 - 14)
+            .padding(.trailing, Self.row / 2 - 17)   // the ring on the centre of the rounded end
+            .foregroundStyle(focused ? .black : .white)
+            .frame(width: Self.width, height: Self.row)
+            .focusPlatter(Capsule(), focused: focused)
+            .contentShape(Capsule())
+            .lifted(focused, in: Capsule())
+        }
+        .buttonStyle(PressDip(presses: panel.presses, focused: focused))
     }
 }
 

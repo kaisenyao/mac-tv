@@ -1154,8 +1154,10 @@ struct SettingsPages: View {
             .animation(.easeInOut(duration: 0.18), value: hero.symbol)
             .padding(.leading, SettingsMetrics.heroCentre.x - side / 2)
             .padding(.top, SettingsMetrics.heroCentre.y - side / 2)
-            Text(hero.title).font(.tv(.title2, emphasized: true)).lineLimit(1).opacity(0.35)
-                .id(hero.title)
+            // The page's own name: "Settings" on the list of sections (the picture, not the name, follows the row in focus)
+            let title = panel.open || panel.connectRemote ? hero.title : "Settings"
+            Text(title).font(.tv(.title2, emphasized: true)).lineLimit(1).opacity(0.35)
+                .id(title)
                 .transition(.opacity)
                 .frame(maxWidth: .infinity)
                 .frame(height: SettingsMetrics.titleCentre * 2)   // its middle 91 down
@@ -1285,18 +1287,15 @@ struct SettingsRow: View, Equatable {
     let content: SettingsRowContent
     let focused: Bool
     var presses = 0
-    /// Control Center's lists: a row at Control Center's own scale, in a panel as wide as its tiles.
-    var compact = false
     let focusSpace: Namespace.ID
     let action: () -> Void
 
     nonisolated static func == (lhs: SettingsRow, rhs: SettingsRow) -> Bool {
-        lhs.content == rhs.content && lhs.focused == rhs.focused && lhs.presses == rhs.presses && lhs.compact == rhs.compact
-            && lhs.focusSpace == rhs.focusSpace
+        lhs.content == rhs.content && lhs.focused == rhs.focused && lhs.presses == rhs.presses && lhs.focusSpace == rhs.focusSpace
     }
 
-    private var titleFont: Font { compact ? .tv(.body) : SettingsMetrics.title }
-    private var valueFont: Font { compact ? .tv(.caption1) : SettingsMetrics.value }
+    private var titleFont: Font { SettingsMetrics.title }
+    private var valueFont: Font { SettingsMetrics.value }
 
     var body: some View {
         Button(action: action) {
@@ -1340,12 +1339,8 @@ struct SettingsRow: View, Equatable {
         } else {
             HStack(spacing: 18) {
                 // As Apple TV's rows: text only. A person's row keeps their picture; a row's symbol is the big picture
-                // on the left while the row has focus. Control Center's small lists keep theirs.
-                if let avatar = content.avatar {
-                    ProfileAvatar(profile: avatar, size: 44)
-                } else if compact, let symbol = content.symbol {
-                    Image(systemName: symbol).font(.system(size: 30, weight: .medium)).frame(width: 44)
-                }
+                // on the left while the row has focus.
+                if let avatar = content.avatar { ProfileAvatar(profile: avatar, size: 44) }
                 Text(content.title).font(titleFont).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if let value = content.value {
@@ -1364,9 +1359,8 @@ struct SettingsRow: View, Equatable {
                 if let battery = content.battery { Image(systemName: battery).font(.system(size: 30)) }
                 if content.checked { Image(systemName: "checkmark").font(.system(size: 25, weight: .bold)) }
                 switch content.accessory {
-                // On or Off in words, as Apple TV's Settings say it (Control Center's small lists keep the switch)
-                case .toggle(let on):
-                    if compact { SettingSwitch(on: on) } else { Text(on ? "On" : "Off").font(valueFont).opacity(0.55) }
+                // On or Off in words, as Apple TV's Settings say it
+                case .toggle(let on): Text(on ? "On" : "Off").font(valueFont).opacity(0.55)
                 case .chevron: Image(systemName: "chevron.right").font(.system(size: 30, weight: .semibold)).opacity(0.45)
                 case .none, .stepper: EmptyView()
                 }
