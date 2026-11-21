@@ -18,6 +18,21 @@ struct YouTubeTVTests {
         #expect(try BraveSession.streamingURL(YouTubeTV.home).absoluteString == "https://www.youtube.com/")
     }
 
+    /// 返回键在 YouTube 的最外层（首页、左边栏的分页、它自己的"Who's watching?"）回 Mac TV 主屏，
+    /// 看视频、搜索时照旧交给 YouTube
+    @Test
+    func backLeavesYouTubeOnlyAtItsTopLevel() {
+        let base = "https://www.youtube.com/tv?force_startup_screen=none"
+        for top in [base, base + "#/", base + "#/browse?c=FEsubscriptions", base + "#/account_selector"] {
+            #expect(YouTubeTV.isTopLevel(URL(string: top)), "\(top)")
+        }
+        for inside in [base + "#/watch?v=aqz-KE-bpKQ", base + "#/search?q=cats"] {
+            #expect(!YouTubeTV.isTopLevel(URL(string: inside)), "\(inside)")
+        }
+        #expect(YouTubeTV.isAccountPicker(URL(string: base + "#/account_selector")))
+        #expect(!YouTubeTV.isAccountPicker(URL(string: base + "#/")))
+    }
+
     @Test
     func scriptOnlyRefusesAbsurdFrameRates() {
         let page = FakePage(width: 1920, height: 1080, ratio: 1)

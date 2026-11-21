@@ -8,6 +8,19 @@ enum YouTubeTV {
     /// 这是 YouTube 自己认的调试参数，哪天不认了，就是又要选一次账号，不会出别的错
     static let home = URL(string: "https://www.youtube.com/tv?force_startup_screen=none")!
 
+    /// YouTube 电视版的最外层：首页和左边栏的几个分页（地址里 # 后面是空的、"/" 或 "/browse…"），以及它自己的
+    /// "Who's watching?"。在这里按返回，Mac TV 直接回主屏（见 PlaybackCoordinator），不交给 YouTube：
+    /// YouTube 自己会在首页弹出"Who's watching?"，在那里再按返回又弹回来，像在闪
+    static func isTopLevel(_ url: URL?) -> Bool {
+        let route = url?.fragment ?? ""
+        return route.isEmpty || route == "/" || route.hasPrefix("/browse") || isAccountPicker(url)
+    }
+
+    /// YouTube 自己的"Who's watching?"（选账号）那一页
+    static func isAccountPicker(_ url: URL?) -> Bool {
+        (url?.fragment ?? "").lowercased().contains("account")
+    }
+
     /// 直接放某个视频（主屏顶部、手机"发到电视"）
     static func watch(_ id: String) -> URL? {
         guard !id.isEmpty, id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else { return nil }

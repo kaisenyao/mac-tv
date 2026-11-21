@@ -350,6 +350,8 @@ struct ControlCenterView: View {
     private static let row: CGFloat = 95
     private static let gap: CGFloat = 17
     private static let width = column * 2 + gap
+    /// The box every round button's symbol is fitted to.
+    private static let glyph = CGSize(width: 40, height: 36)
     /// The blue of a connected remote or the sound output, as on Apple TV.
     private static let tint = Color(hex: "#5AC8FA")
 
@@ -572,8 +574,13 @@ struct ControlCenterView: View {
                 tv.activateControl(item)
             }
         } label: {
+            // Every symbol fitted to one box, so a wide one (Play/Pause, Mute, the screens) is no bigger than a square
+            // or round one (Settings, Search): the same size to the eye.
             Image(systemName: look.symbol)
-                .font(.system(size: 36, weight: .medium))
+                .resizable()
+                .fontWeight(.medium)
+                .scaledToFit()
+                .frame(maxWidth: Self.glyph.width, maxHeight: Self.glyph.height)
                 .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(focused || on ? .black : .white)
                 .frame(width: Self.row, height: Self.row)

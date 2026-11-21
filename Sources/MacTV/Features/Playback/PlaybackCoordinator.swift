@@ -364,7 +364,13 @@ final class PlaybackCoordinator: NSObject, ObservableObject {
         case .move(let direction): sendKey(.direction(direction), to: web)
         case .select: sendKey(.enter, to: web)
         case .back:
-            if !service.dpadNavigation {
+            if service.id == "youtube", YouTubeTV.isTopLevel(web.url) {
+                // YouTube's own Back on its home opens its "Who's watching?", and Back there flickers between the
+                // two: at the app's top level Mac TV's Back goes Home, as in every app. Left on "Who's watching?",
+                // YouTube goes back to its home first, so it opens there next time.
+                if YouTubeTV.isAccountPicker(web.url) { web.evaluateJavaScript("location.hash = '#/'") }
+                tv?.goHome()
+            } else if !service.dpadNavigation {
                 sendKey(.escape, to: web)
             } else if web.canGoBack {
                 web.goBack()
