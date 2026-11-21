@@ -190,11 +190,10 @@ import Testing
             #expect(rig.microphone.running, "still down")
             f5Down = false                                      // let go, and no keyUp came
             presses.checkWatched()
-            #expect(rig.tv.activeSheet == .search, "a press")
-            #expect(!rig.microphone.running)
-            // The next press works
+            #expect(rig.tv.jasmine.phase == .listening && rig.transcribers.last?.handsFree == true, "a press: she listens")
+            // The next press works: it ends her listening
             presses.siriDown(from: .keyboard, at: 1)
-            #expect(rig.microphone.running && rig.transcribers.count == 2)
+            #expect(rig.transcribers.last?.finished == true && !rig.microphone.running)
             #expect(presses.siriUp(from: .keyboard, at: 1.1))
         }
     }
@@ -295,18 +294,19 @@ import Testing
     @Test func aKeyUpWithoutItsKeyDownIsAPress() async throws {
         try await Self.withJasmine { rig in
             let presses = rig.tv.inputPresses
-            // macOS kept the 🎤 key's keyDown: its keyUp alone is a press (Search), so the key is never dead
+            // macOS kept the 🎤 key's keyDown: its keyUp alone is a press (she listens), so the key is never dead
             #expect(presses.siriKeyUp(from: .keyboard, at: 0))
-            #expect(rig.tv.activeSheet == .search && !rig.microphone.running && !presses.siriIsDown(from: .keyboard))
-            rig.tv.closeSystemSearch()
+            #expect(rig.tv.jasmine.phase == .listening && !presses.siriIsDown(from: .keyboard))
+            rig.tv.handle(.back, from: .siriRemote)
+            #expect(!rig.tv.jasmine.shown)
             // A press the watch let go (fn up first): its keyUp, coming after all, does nothing more
             presses.siriDown(from: .keyboard, at: 1)
             presses.watchSiri(from: .keyboard) { false }
             presses.checkWatched()
-            #expect(rig.tv.activeSheet == .search)
-            rig.tv.closeSystemSearch()
+            #expect(rig.tv.jasmine.phase == .listening)
+            rig.tv.handle(.back, from: .siriRemote)
             #expect(presses.siriKeyUp(from: .keyboard, at: 1.2))
-            #expect(rig.tv.activeSheet == nil, "not a second press")
+            #expect(!rig.tv.jasmine.shown, "not a second press")
             // With a press open, the keyUp is its release
             presses.siriDown(from: .keyboard, at: 2)
             presses.advance(to: 2 + InputTiming.hold)
@@ -400,20 +400,31 @@ import Testing
         }
     }
 
-    @Test func aPressNeverListens() async throws {
+    @Test func aPressListensUntilYouStopSpeaking() async throws {
         try await Self.withJasmine { rig in
-            // Home: a press opens Search; what the microphone heard meanwhile is thrown away
+            // Home: a press and she listens without the button held, as Control Center's Jasmine button; what the
+            // microphone heard while the button was down is thrown away
             rig.siri(.down)
             rig.microphone.hear(1)
             rig.siri(.tap)
-            #expect(rig.tv.activeSheet == .search)
-            #expect(!rig.microphone.running)
             #expect(rig.transcribers[0].cancelled && rig.transcribers[0].sent.isEmpty)
-            #expect(rig.chimes.played.isEmpty && !rig.tv.jasmine.shown)
-            // With the field highlighted, a press does nothing
+            #expect(rig.tv.jasmine.phase == .listening && rig.tv.jasmine.mode == .assistant)
+            #expect(rig.microphone.running && rig.transcribers.count == 2 && rig.transcribers[1].handsFree)
+            #expect(rig.chimes.played == [.listen] && rig.tv.activeSheet == nil)
+            // Pressed again, she stops listening and answers what she heard
             rig.siri(.down, .tap)
-            #expect(rig.tv.activeSheet == .search && rig.tv.systemSearch?.query == "")
-            #expect(rig.transcribers.allSatisfy { $0.sent.isEmpty })
+            #expect(rig.chimes.played == [.listen, .done])
+            #expect(rig.transcribers[1].finished && !rig.microphone.running)
+            #expect(rig.transcribers.count == 2)
+        }
+    }
+
+    @Test func aPressInAFieldDictatesUntilYouStopSpeaking() async throws {
+        try await Self.withJasmine { rig in
+            rig.tv.openSystemSearch()
+            rig.siri(.down, .tap)
+            #expect(rig.tv.jasmine.phase == .listening && rig.tv.jasmine.mode == .dictation)
+            #expect(rig.transcribers.last?.handsFree == true)
         }
     }
 

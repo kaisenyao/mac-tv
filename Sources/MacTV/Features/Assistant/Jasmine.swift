@@ -75,6 +75,9 @@ final class Jasmine: ObservableObject {
         var holding = false
         /// Jasmine was showing when it went down: a press stops her; a hold listens again.
         var interrupting = false
+        /// She was listening hands-free when it went down: this press ended that (she answers what she heard), and
+        /// does nothing more, whether it turns out a press or a hold.
+        var ends = false
     }
     private var press: Press?
     private var session: Transcribing?
@@ -157,6 +160,13 @@ final class Jasmine: ObservableObject {
 
     private func down() {
         guard let tv, press == nil else { return }
+        // Listening hands-free (a press of the button started it, or Control Center's): pressed again, she stops
+        // listening and answers.
+        if phase == .listening, handsFree {
+            self.press = Press(ends: true)
+            endListening()
+            return
+        }
         var press = Press(field: tv.dictationField)
         press.interrupting = shown
         if shown { stopEverything() }   // she stops as the button goes down; a press then closes her, a hold listens
@@ -171,7 +181,7 @@ final class Jasmine: ObservableObject {
     }
 
     private func hold() {
-        guard var press else { return }
+        guard var press, !press.ends else { return }
         press.holding = true
         self.press = press
         if press.field?.isSecure == true {
@@ -266,12 +276,22 @@ final class Jasmine: ObservableObject {
         stopHearing()
         session?.cancel()
         session = nil
+        if press.ends { return }
         if press.interrupting || shown {
             dismiss()
             return
         }
-        // A press never listens: with a field in focus it does nothing; otherwise it opens search.
-        if press.field == nil { tv?.openSearchForSiri() }
+        // A press: she listens without the button held, until you stop speaking (as Control Center's Jasmine button),
+        // into the field in focus if there is one. With her turned off the press is Search (in a field, nothing).
+        guard settings.enabled else {
+            if press.field == nil { tv?.openSearchForSiri() }
+            return
+        }
+        if press.field?.isSecure == true {
+            chimes.play(.unavailable)
+            return
+        }
+        _ = listen(field: press.field, hearing: false, handsFree: true)
     }
 
     private func release() {

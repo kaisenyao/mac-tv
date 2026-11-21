@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Mac TV's own Search, over Home (and over apps without a search of their own): what's on this Mac only, the apps,
-/// Settings' rows and the Movies library, listed as you type. A press of the Siri button opens it with the field
-/// highlighted; a hold then dictates into it, as on Apple TV. Online content isn't searched here: 哔哩哔哩 and
-/// 网易云 have their own search.
+/// Settings' rows and the Movies library, listed as you type. Control Center's Search opens it with the field
+/// highlighted (so does a press of the Siri button while Jasmine is off); the Siri button then dictates into it.
+/// Online content isn't searched here: 哔哩哔哩 and 网易云 have their own search.
 struct SystemSearch: Equatable {
     var query = ""
     /// The keyboard (or the phone's Type on TV) types into the field.
