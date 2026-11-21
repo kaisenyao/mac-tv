@@ -145,6 +145,14 @@ import WebKit
         Row(state: .homeFirstApp, key: .home, hold: true) { $0.controlCenter != nil },
     ]
 
+    @Test func aProgramWithNoIdentifierIsNeverTheAppMacTVOpened() {
+        #expect(!TVController.takesKeys(front: nil, launched: nil), "nothing opened, and an unnamed program in front")
+        #expect(!TVController.takesKeys(front: nil, launched: "com.example.player"))
+        #expect(!TVController.takesKeys(front: "com.example.other", launched: nil))
+        #expect(!TVController.takesKeys(front: "com.example.other", launched: "com.example.player"))
+        #expect(TVController.takesKeys(front: "com.example.player", launched: "com.example.player"))
+    }
+
     @Test(arguments: Device.allCases)
     func everyButtonInEveryState(_ device: Device) async throws {
         for (number, row) in Self.table.enumerated() {
