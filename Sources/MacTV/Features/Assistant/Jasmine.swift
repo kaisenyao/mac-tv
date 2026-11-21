@@ -127,6 +127,7 @@ final class Jasmine: ObservableObject {
     // MARK: The Siri button
 
     func siri(_ phase: SiriPhase) {
+        Log.app.notice("Jasmine: Siri button \(phase.rawValue, privacy: .public)")
         switch phase {
         case .down: down()
         case .hold: hold()
@@ -186,39 +187,44 @@ final class Jasmine: ObservableObject {
     /// speaking (the server's end of speech, as PianaSoul hears), or 8 s with nothing said. Called again while she
     /// listens, she stops and answers what she heard; Back cancels. The same Jasmine as the held Siri button.
     func summon() {
+        Log.app.notice("Jasmine: summoned (\(String(describing: self.phase), privacy: .public))")
         if phase == .listening, handsFree { return endListening() }
-        guard press == nil else { return }
+        guard press == nil else {
+            Log.app.notice("Jasmine: summon ignored, the Siri button is down")
+            return
+        }
         if shown { stopEverything() }
         _ = listen(field: nil, hearing: false, handsFree: true)
     }
 
     /// Starts listening, when it may: Jasmine on, a key, the microphone allowed. False (having said why) when not.
     private func listen(field: DictationField?, hearing: Bool, handsFree: Bool) -> Bool {
-        guard settings.enabled else { return false }
-        guard settings.added.contains(.openAI) else {
-            say("Add an OpenAI API key in Settings › General › Jasmine.", chime: .unavailable)
-            return false
+        // Held, off does nothing (the button is still Search); asked for (Control Center), she says she's off.
+        guard settings.enabled else {
+            return refuse("she's off", saying: handsFree ? "Jasmine is turned off in Settings › General › Jasmine." : nil)
         }
         switch access() {
         case .denied:
-            say("Allow Mac TV to use the microphone in System Settings › Privacy & Security.", chime: .unavailable)
-            return false
+            return refuse("the microphone isn't allowed",
+                          saying: "Allow Mac TV to use the microphone in System Settings › Privacy & Security.")
         case .notAsked:
             // macOS's question now; the next try listens. Never in a test run.
             if SystemGuard.allows("ask for the microphone") { MicrophoneAccess.ask { _ in } }
-            return false
+            return refuse("the microphone was asked for", saying: "Allow Mac TV to use the microphone, then try again.")
         case .allowed:
             break
         }
         if !hearing {
-            // The microphone didn't start when the button went down (she was showing, or it failed), or there's no
-            // button: now, then.
-            guard startHearing(), let key = settings.key(.openAI) else {
-                say("Can’t use the microphone.", chime: .unavailable)
-                return false
+            // The microphone didn't start when the button went down (she was showing, the key couldn't be read, or
+            // it failed), or there's no button: now, then.
+            guard let key = settings.key(.openAI) else {
+                return refuse(settings.unreadable[.openAI] != nil ? "the OpenAI key can't be read" : "there's no OpenAI key",
+                              saying: settings.problem(.openAI))
             }
+            guard startHearing() else { return refuse("the microphone didn't start", saying: "Can’t use the microphone.") }
             connect(key, handsFree: handsFree)
         }
+        Log.app.notice("Jasmine: listening (\(handsFree ? "hands-free" : field == nil ? "held" : "dictation", privacy: .public))")
         self.handsFree = handsFree
         mode = field == nil ? .assistant : .dictation
         dictating = field
@@ -244,6 +250,13 @@ final class Jasmine: ObservableObject {
         duck(Self.duckedTo)
         chimes.play(.listen)
         return true
+    }
+
+    /// She can't listen: why, in the log; and in her caption, when there's something to say.
+    private func refuse(_ why: String, saying line: String?) -> Bool {
+        Log.app.notice("Jasmine can't listen: \(why, privacy: .public)")
+        if let line { say(line, chime: .unavailable) }
+        return false
     }
 
     private func tap() {

@@ -771,6 +771,49 @@ import Testing
         }
     }
 
+    /// F5 is the Siri button with fn or without, before any text field: both monitors ask this first.
+    @Test func f5IsTheSiriButtonWhateverHasTheKeyboard() async throws {
+        #expect(SiriKey.matches(keyCode: 96, modifiers: []))
+        #expect(SiriKey.matches(keyCode: 96, modifiers: [.function]), "fn-F5, and every function key AppKit marks")
+        #expect(!SiriKey.matches(keyCode: 96, modifiers: [.command]) && !SiriKey.matches(keyCode: 96, modifiers: [.shift]))
+        #expect(!SiriKey.matches(keyCode: 97, modifiers: []), "F6 isn't")
+        try await Self.withJasmine { rig in
+            // A text field being typed in: the Siri path still has the key (dictation into it)
+            rig.tv.openSystemSearch()
+            rig.tv.handle(.select)
+            #expect(rig.tv.tvTextFieldEditing)
+            let presses = rig.tv.inputPresses
+            presses.siriDown(from: .keyboard, at: 0)
+            presses.advance(to: InputTiming.hold)
+            #expect(rig.tv.jasmine.phase == .listening && rig.tv.jasmine.mode == .dictation)
+            #expect(presses.siriKeyUp(from: .keyboard, at: 1))
+            rig.tv.jasmine.dismiss()
+            rig.tv.closeSystemSearch()
+            // No field: Jasmine
+            presses.siriDown(from: .keyboard, at: 2)
+            presses.advance(to: 2 + InputTiming.hold)
+            #expect(rig.tv.jasmine.phase == .listening && rig.tv.jasmine.mode == .assistant)
+        }
+    }
+
+    @Test func summonedSheAlwaysAnswers() async throws {
+        try await Self.withJasmine { rig in
+            rig.settings.enabled = false
+            rig.tv.jasmine.summon()
+            #expect(rig.tv.jasmine.line == "Jasmine is turned off in Settings › General › Jasmine.")
+            #expect(rig.chimes.played == [.unavailable] && rig.microphone.starts == 0)
+        }
+        try await Self.withJasmine(key: false) { rig in
+            rig.tv.jasmine.summon()
+            #expect(rig.tv.jasmine.line == "Add an OpenAI API key in Settings › General › Jasmine.")
+        }
+        try await Self.withJasmine(access: .notAsked) { rig in
+            rig.tv.jasmine.summon()
+            #expect(rig.tv.jasmine.line == "Allow Mac TV to use the microphone, then try again.")
+            #expect(SystemGuard.refused.contains("ask for the microphone"), "macOS's question, not in a test run")
+        }
+    }
+
     // MARK: API keys
 
     @Test func anAPIKeyIsTypedSavedAndNeverShown() async throws {

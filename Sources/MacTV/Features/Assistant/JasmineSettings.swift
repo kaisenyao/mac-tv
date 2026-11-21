@@ -33,14 +33,31 @@ enum JasmineKeychain {
         _ = SystemKeychain.add(item)
     }
 
-    static func value(_ key: JasmineKey) -> String? {
-        if let memory { return memory.withLock { $0[key.rawValue] }.flatMap { String(data: $0, encoding: .utf8) } }
+    /// What reading a key found: the key, no key, or a Keychain (or keys helper) that couldn't be read.
+    enum Read: Equatable {
+        case found(String), missing, unreadable(OSStatus)
+    }
+
+    static func read(_ key: JasmineKey) -> Read {
+        if let memory {
+            return memory.withLock { $0[key.rawValue] }.flatMap { String(data: $0, encoding: .utf8) }.map(Read.found) ?? .missing
+        }
         var item = query(key)
         item[kSecReturnData as String] = true
         item[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SystemKeychain.copyMatching(item, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SystemKeychain.copyMatching(item, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else { return .unreadable(status) }
+            return .found(value)
+        case errSecItemNotFound: return .missing
+        default: return .unreadable(status)
+        }
+    }
+
+    static func value(_ key: JasmineKey) -> String? {
+        if case .found(let value) = read(key) { value } else { nil }
     }
 
     static func delete(_ key: JasmineKey) {
@@ -83,17 +100,49 @@ final class JasmineSettings: ObservableObject {
     @Published var microphone: String? { didSet { defaults.set(microphone, forKey: Key.microphone) } }
     /// Which keys are added. Only that is kept here; the keys themselves are read from the Keychain when used.
     @Published private(set) var added: Set<JasmineKey>
+    /// Keys the Keychain (through the keys helper) couldn't be read for, and its status: said in the log and by her.
+    @Published private(set) var unreadable: [JasmineKey: OSStatus] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         enabled = defaults.object(forKey: Key.enabled) as? Bool ?? true
         voice = defaults.string(forKey: Key.voice) ?? JasmineVoice.all[0].id
         microphone = defaults.string(forKey: Key.microphone)
-        added = Set(JasmineKey.allCases.filter { JasmineKeychain.value($0) != nil })
+        added = []
+        for key in JasmineKey.allCases {
+            switch JasmineKeychain.read(key) {
+            case .found: added.insert(key)
+            case .missing: break
+            case .unreadable(let status):
+                unreadable[key] = status
+                Log.app.error("Jasmine: couldn't read the \(key.title, privacy: .public) from the Keychain (\(status, privacy: .public))")
+            }
+        }
     }
 
+    /// The key, read now; nil when there's none or it can't be read (`problem` says which).
     func key(_ key: JasmineKey) -> String? {
-        added.contains(key) ? JasmineKeychain.value(key) : nil
+        guard added.contains(key) || unreadable[key] != nil else { return nil }
+        switch JasmineKeychain.read(key) {
+        case .found(let value):
+            unreadable[key] = nil
+            added.insert(key)
+            return value
+        case .missing:
+            unreadable[key] = nil
+            added.remove(key)
+            return nil
+        case .unreadable(let status):
+            unreadable[key] = status
+            Log.app.error("Jasmine: couldn't read the \(key.title, privacy: .public) from the Keychain (\(status, privacy: .public))")
+            return nil
+        }
+    }
+
+    /// Why a key can't be used, in her caption.
+    func problem(_ key: JasmineKey) -> String {
+        if let status = unreadable[key] { return "Can’t read the \(key.title) from the Keychain (\(status))." }
+        return key == .openAI ? "Add an OpenAI API key in Settings › General › Jasmine." : "Add an ElevenLabs API key in Settings › General › Jasmine."
     }
 
     func save(_ value: String, for key: JasmineKey) {
@@ -101,6 +150,7 @@ final class JasmineSettings: ObservableObject {
         guard !value.isEmpty else { return }
         JasmineKeychain.save(value, for: key)
         added.insert(key)
+        unreadable[key] = nil
     }
 
     func remove(_ key: JasmineKey) {
@@ -194,7 +244,8 @@ extension TVController {
             let chosen = settings.microphone.flatMap { uid in AudioInputs.list().first { $0.uid == uid } }
             return SettingsRowContent(title: "Microphone", value: chosen?.name ?? "Automatic", accessory: .chevron)
         case .key(let key):
-            return SettingsRowContent(title: key.title, value: settings.added.contains(key) ? "Added" : "Not Added", accessory: .chevron)
+            let value = settings.added.contains(key) ? "Added" : settings.unreadable[key] != nil ? "Unavailable" : "Not Added"
+            return SettingsRowContent(title: key.title, value: value, accessory: .chevron)
         case .automaticInput:
             let automatic = AudioInputs.choose(nil, from: AudioInputs.list())
             return SettingsRowContent(title: "Automatic", value: automatic?.name, checked: settings.microphone == nil)

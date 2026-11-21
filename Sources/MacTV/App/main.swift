@@ -388,7 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             guard let self else { return event }
             if event.charactersIgnoringModifiers?.lowercased() == "q" { tv.quitKeyUp() }
-            if event.keyCode == 96 {   // F5 (🎤): the Siri button; a keyUp alone is a press (InputPresses.siriKeyUp)
+            if SiriKey.matches(keyCode: event.keyCode, modifiers: event.modifierFlags) {   // the Siri button; a keyUp alone is a press
                 Log.app.notice("F5 up")
                 return tv.inputPresses.siriKeyUp(from: .keyboard) ? nil : event
             }
@@ -438,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if event.keyCode == 96 {
                 Log.app.notice("F5 keyDown: window \(event.window == nil ? "none" : event.window === self?.window ? "Mac TV's" : "another", privacy: .public), flags \(event.modifierFlags.rawValue, privacy: .public), repeat \(event.isARepeat, privacy: .public)")
             }
-            if event.keyCode == 96, mods.isEmpty {
+            if SiriKey.matches(keyCode: event.keyCode, modifiers: mods) {
                 if !event.isARepeat {
                     let presses = tv.inputPresses
                     // A press still open (its keyUp never came) is cancelled first: what it heard is dropped, never

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 extension TVController {
@@ -64,5 +65,15 @@ extension TVController {
         if movies?.typing == true { withAnimation(Motion.focus) { movies?.typing = false } }
         if systemSearch?.typing == true { systemSearch?.typing = false }
         window?.makeFirstResponder(nil)
+    }
+}
+
+/// The keyboard's Siri button: F5 (the 🎤 key on a Mac keyboard, with fn or as a standard function key), alone. main.swift
+/// asks this first in both its keyDown and keyUp monitors, before the window check and before any text field gets
+/// the key, so the Siri button works over a web page, a video and a field being typed in alike. (`modifiers` without
+/// fn: AppKit marks every function key with it.)
+enum SiriKey {
+    static func matches(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        keyCode == UInt16(kVK_F5) && modifiers.subtracting([.function, .numericPad, .capsLock, .help]).isEmpty
     }
 }
