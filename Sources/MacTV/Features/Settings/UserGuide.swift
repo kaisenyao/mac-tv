@@ -59,7 +59,7 @@ enum UserGuide {
         ]),
         Section(title: "Control Center", symbol: "switch.2", blocks: [
             .paragraph("Press and hold the TV button, or choose the Control Center button at the top right of the Home Screen. It opens over what you’re watching."),
-            .paragraph("Control Center has Sleep Now, which puts the TV in standby; Remotes, Display, Audio and Sleep Timer; and buttons for the screen saver, turning off the display, keeping the Mac awake (or awake with the lid closed), and Settings. Press Back or the TV button to close it."),
+            .paragraph("Control Center has Sleep, which puts the TV in standby; Remotes, Display, Audio and Sleep Timer; and buttons for the screen saver, turning off the display, keeping the Mac awake (or awake with the lid closed), and Settings. Press Back or the TV button to close it."),
         ]),
         Section(title: "Apps", symbol: "square.stack.fill", blocks: [
             .heading("Web"),

@@ -618,8 +618,10 @@ struct ControlCenterView: View {
         let shape = RoundedRectangle(cornerRadius: Self.row / 2, style: .continuous)   // the capsules' own radius
         return Button { tv.activateControl(.sleepNow) } label: {
             VStack(spacing: 12) {
-                Image(systemName: "power").font(.system(size: 94, weight: .medium))   // Apple TV's: 94 by 98, its stroke about 9
-                Text("Sleep Now").font(Self.tileText)
+                // Apple's symbol for Sleep, a ring with a line across its lower part (the ring with a gap and a bar is
+                // Shut Down), drawn as heavy as Apple TV's power symbol was here: 94 across, its stroke about 9
+                Image(systemName: "sleep").font(.system(size: 94, weight: .medium))
+                Text("Sleep").font(Self.tileText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
             }
