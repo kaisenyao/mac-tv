@@ -6,6 +6,9 @@ import SwiftUI
 /// button, or by holding the TV button, over whatever is in front, which dims (see DesignSystem/Layers).
 struct ControlCenterPanel: Equatable {
     enum Item: String, CaseIterable {
+        /// Control Center's own button in the status row. Opened over Home, where that row is, focus starts on it,
+        /// as Apple TV's Control Center opens on its tab: Down goes into the tiles, Right to the profiles.
+        case tab
         case sleepNow, remotes, display, audio, sleepTimer
         /// The round buttons.
         case jasmine, screenOff, screenSaver, mute, playPause, search, appSwitcher, settings
@@ -40,9 +43,10 @@ struct ControlCenterPanel: Equatable {
     var lifted: Item?
 
     /// Where each direction goes from each item. `controls` are the round buttons shown, in order; while editing,
-    /// `available` are the ones that can be added, under them, and the tiles aren't reachable.
+    /// `available` are the ones that can be added, under them, and the tiles aren't reachable. `tab`: the status row
+    /// is on screen (Control Center is over Home), so Up from the top tiles reaches Control Center's own button.
     static func neighbour(of item: Item, _ direction: RemoteCommand.Direction, controls: [Item], available: [Item] = [],
-                          editing: Bool = false) -> Item? {
+                          editing: Bool = false, tab: Bool = false) -> Item? {
         let rows = Item.perRow
         // A place in a group laid out four to a row: where an arrow goes inside it, nil past its edge.
         func step(_ index: Int, _ direction: RemoteCommand.Direction, count: Int) -> Int? {
@@ -72,6 +76,8 @@ struct ControlCenterPanel: Equatable {
             }
         }
         switch (item, direction) {
+        case (.tab, .down): return .remotes   // the tile under it
+        case (.remotes, .up) where tab, (.sleepNow, .up) where tab: return .tab
         case (.edit, .up): return controls.last ?? .sleepTimer
         case (.done, .up): return available.last ?? controls.last
         case (.sleepNow, .right): return .remotes
@@ -91,9 +97,12 @@ struct ControlCenterPanel: Equatable {
 
 extension TVController {
     func openControlCenter() {
-        controlCenter = ControlCenterPanel()
+        controlCenter = ControlCenterPanel(item: controlCenterTabShown ? .tab : .remotes)
         remoteCoordinator.refreshRemoteStatus()
     }
+
+    /// Control Center's own button is on screen: it's in Home's status row, so only while Home is what's in front.
+    var controlCenterTabShown: Bool { appInFront == nil }
 
     /// This Mac has a lid: the Lid Closed round button, otherwise Keep Mac Awake.
     var macHasLid: Bool { displayCoordinator.hasLid }
@@ -137,9 +146,15 @@ extension TVController {
         case .back:
             controlCenter = nil
             return
+        case .move(.right) where panel.item == .tab:
+            // The next tab, as Apple TV's: the profiles, dropped down from the avatar beside it
+            controlCenter = nil
+            activateStatus(.profile)
+            return
         case .move(let direction):
             // 和 Apple TV 一样：走到边上就停住，不会把控制中心关掉（遥控器一滑容易冲过头）。按返回才关
-            if let next = ControlCenterPanel.neighbour(of: panel.item, direction, controls: controlCenterControls) {
+            if let next = ControlCenterPanel.neighbour(of: panel.item, direction, controls: controlCenterControls,
+                                                       tab: controlCenterTabShown) {
                 panel.item = next
             }
         case .select:
@@ -235,6 +250,7 @@ extension TVController {
         controlCenter?.item = item
         controlCenter?.presses += 1
         switch item {
+        case .tab: controlCenter = nil   // its own button: closes it, as a click on it does
         case .sleepNow, .screenOff:
             // TV standby, at once: any wake button undoes it, and the Mac stays awake (see Standby)
             controlCenter = nil
@@ -372,22 +388,27 @@ struct ControlCenterView: View {
     /// A tile's symbol is centred on its rounded end's own centre, half a row in, and its text starts here, as Apple TV's.
     private static let tileTextLeading: CGFloat = 88
     private static let tileText = Font.tv(.caption2)
+    private static func tileText(_ scale: CGFloat) -> Font { .system(size: TVText.caption2.size * scale, weight: .medium) }
     /// The text's own width: to 16 points short of the tile's edge, clear of its rounded end.
     private static let tileTextWidth = column - tileTextLeading - 16
 
-    /// A name that doesn't fit on one line, broken where its two lines come out most even, so neither is cut and both
-    /// shrink as little as they can; between breaks about as even, the later one ("MacBook Pro / Speakers", not
-    /// "MacBook / Pro Speakers").
-    static func overTwoLines(_ name: String) -> String {
+    /// A tile's text set to fit its width: one line as it is; a name of several words that doesn't fit, over two
+    /// lines, broken where they come out most even (of breaks about as even, the later: "MacBook Pro / Speakers", not
+    /// "MacBook / Pro Speakers"); and all of it drawn smaller, down to three quarters, when a line is still too long
+    /// (one long word, a display's model name). Worked out here rather than left to the text to wrap and shrink,
+    /// which breaks a line it could have shrunk and then cuts the next.
+    static func fitted(_ text: String, lines: Int) -> (lines: [String], scale: CGFloat) {
         let font = NSFont.systemFont(ofSize: TVText.caption2.size, weight: .medium)
         func width(_ text: String) -> CGFloat { (text as NSString).size(withAttributes: [.font: font]).width }
-        let words = name.split(separator: " ").map(String.init)
-        guard words.count > 1, width(name) > tileTextWidth else { return name }
-        let breaks = (1..<words.count).map { (words[..<$0].joined(separator: " "), words[$0...].joined(separator: " ")) }
-        func longer(_ lines: (String, String)) -> Int { Int(max(width(lines.0), width(lines.1)) / 8) }   // to 8 points
-        let best = breaks.reversed().min { longer($0) < longer($1) }!   // reversed: of equals, min keeps the later break
-        return best.0 + "\n" + best.1
+        func scale(_ longest: CGFloat) -> CGFloat { max(0.75, min(1, tileTextWidth / longest)) }
+        let words = text.split(separator: " ").map(String.init)
+        guard lines > 1, words.count > 1, width(text) > tileTextWidth else { return ([text], scale(width(text))) }
+        let breaks = (1..<words.count).map { [words[..<$0].joined(separator: " "), words[$0...].joined(separator: " ")] }
+        func longest(_ pair: [String]) -> CGFloat { max(width(pair[0]), width(pair[1])) }
+        let best = breaks.reversed().min { Int(longest($0) / 8) < Int(longest($1) / 8) }!   // to 8 points; of equals, the later
+        return (best, scale(longest(best)))
     }
+
     /// The blue of a connected remote or the sound output, as on Apple TV.
     private static let tint = Color(hex: "#5AC8FA")
 
@@ -591,17 +612,15 @@ struct ControlCenterView: View {
                     }
                 }
                 .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
+                let name = Self.fitted(title, lines: value == nil ? 2 : 1)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(value == nil ? Self.overTwoLines(title) : title).lineLimit(value == nil ? 2 : 1)
+                    ForEach(name.lines, id: \.self) { Text($0).font(Self.tileText(name.scale)) }
                     if let value {
-                        Text(value).opacity(0.6).lineLimit(1)
+                        Text(value).font(Self.tileText(Self.fitted(value, lines: 1).scale)).opacity(0.6)
                             .contentTransition(value.first?.isNumber == true ? .numericText() : .opacity)
                     }
                 }
-                .font(Self.tileText)
-                .multilineTextAlignment(.leading)
-                .minimumScaleFactor(0.75)
-                // A width of its own, so a long name shrinks to fit before it's cut
+                .lineLimit(1)
                 .frame(width: Self.tileTextWidth, alignment: .leading)
             }
             .padding(.leading, Self.row / 2 - Self.tileGlyph.width / 2)
@@ -708,8 +727,8 @@ struct ControlCenterView: View {
 private extension View {
     /// Control Center's focus: the focused control lifts and casts a shadow, as everywhere else on the TV. The
     /// shadow is the platter's alone, not cast by the text and symbol on it.
-    func lifted<S: Shape>(_ focused: Bool, in shape: S) -> some View {
-        background { shape.fill(.white).opacity(focused ? 1 : 0).shadow(color: .black.opacity(0.4), radius: 16, y: 12) }
+    func lifted<S: InsettableShape>(_ focused: Bool, in shape: S) -> some View {
+        background { PillOutline(shape).fill(.white).opacity(focused ? 1 : 0).shadow(color: .black.opacity(0.4), radius: 16, y: 12) }
             .scaleEffect(focused ? 1.06 : 1)
     }
 }

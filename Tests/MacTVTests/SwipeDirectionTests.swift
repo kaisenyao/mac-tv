@@ -155,8 +155,10 @@ struct SwipeDirectionTests {
         try withTV { tv in
             let home = tv.focus
             tv.handle(.controlCenter)
-            #expect(tv.controlCenter?.item == .remotes)
+            #expect(tv.controlCenter?.item == .tab)  // 在主屏上打开：焦点先在它自己的按钮上
             swipe(tv, source, dx: 4, dy: 150)        // 手指往下：下一格，惯性不再走
+            #expect(tv.controlCenter?.item == .remotes)
+            swipe(tv, source, dx: 4, dy: 150)
             #expect(tv.controlCenter?.item == .display)
             swipe(tv, source, dx: 0, dy: -150)       // 往上
             #expect(tv.controlCenter?.item == .remotes)

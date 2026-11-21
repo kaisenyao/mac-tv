@@ -56,7 +56,8 @@ extension View {
     /// glass white instead reads milky grey over dark artwork, and dark text on it loses contrast. The glass
     /// switches to `.identity` rather than going away, so focus moving never changes the view's identity.
     func focusPlatter<S: InsettableShape>(_ shape: S, focused: Bool, color: Color = .white, glass: Bool = true) -> some View {
-        background { shape.fill(color).opacity(focused ? 1 : 0) }
+        // Filled as a plain path (PillOutline): SwiftUI's own Capsule leaves a short straight bar just outside each end
+        background { PillOutline(shape).fill(color).opacity(focused ? 1 : 0) }
             .tvGlass(in: shape, enabled: glass && !focused)
     }
 

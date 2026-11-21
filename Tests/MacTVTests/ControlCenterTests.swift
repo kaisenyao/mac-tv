@@ -27,9 +27,10 @@ import Testing
         let shown = ControlCenterPanel.Item.allCases.filter { $0 != .done && (!ControlCenterPanel.Item.controls.contains($0) || controls.contains($0)) }
         for item in shown {
             for (direction, back) in opposite {
-                guard let next = ControlCenterPanel.neighbour(of: item, direction, controls: controls) else { continue }
+                // Over Home, where the status row and Control Center's own button are on screen
+                guard let next = ControlCenterPanel.neighbour(of: item, direction, controls: controls, tab: true) else { continue }
                 // Coming back lands on the item, or (from the wide Sleep Now tile, or a short row) on one beside it.
-                let returned = ControlCenterPanel.neighbour(of: next, back, controls: controls)
+                let returned = ControlCenterPanel.neighbour(of: next, back, controls: controls, tab: true)
                 #expect(returned != nil, "\(item) → \(direction) → \(next) has no way back")
             }
         }
@@ -140,10 +141,38 @@ import Testing
         }
     }
 
+    /// As Apple TV's opens on its tab: over Home focus starts on Control Center's own button in the status row. Down
+    /// goes into the tiles and Up comes back; Right is the next tab, the profiles; Select on it closes Control Center.
+    @Test func itOpensOnItsOwnButtonOverHome() throws {
+        try withTV { tv in
+            tv.openControlCenter()
+            #expect(tv.controlCenterTabShown && tv.controlCenter?.item == .tab)
+            tv.handleControlCenter(.move(.left))
+            tv.handleControlCenter(.move(.up))
+            #expect(tv.controlCenter?.item == .tab, "nothing to its left or above it")
+            tv.handleControlCenter(.move(.down))
+            #expect(tv.controlCenter?.item == .remotes)
+            tv.handleControlCenter(.move(.left))
+            tv.handleControlCenter(.move(.up))
+            #expect(tv.controlCenter?.item == .tab, "up from Sleep Now too")
+            tv.handleControlCenter(.select)
+            #expect(tv.controlCenter == nil, "Select on it closes Control Center, as a click on it does")
+
+            tv.openControlCenter()
+            tv.handleControlCenter(.move(.right))
+            #expect(tv.controlCenter == nil && tv.profilePicker?.dropdown == true && tv.focus == .status(.profile))
+        }
+        // Where the row isn't on screen (over an app), there's no way up to it
+        let controls = ControlCenterPanel.Item.standardControls
+        #expect(ControlCenterPanel.neighbour(of: .remotes, .up, controls: controls) == nil)
+        #expect(ControlCenterPanel.neighbour(of: .sleepNow, .up, controls: controls) == nil)
+    }
+
     @Test func remotesOpensConnectARemoteOverControlCenter() throws {
         try withTV { tv in
             tv.openControlCenter()
-            tv.handleControlCenter(.select)   // Remotes has focus first
+            tv.handleControlCenter(.move(.down))   // from its own button to Remotes, the tile under it
+            tv.handleControlCenter(.select)
             #expect(tv.pairing && tv.controlCenter != nil && tv.activeSheet == .pairing)
             tv.handlePairing(.back)
             #expect(!tv.pairing && tv.activeSheet == .controlCenter)
@@ -159,12 +188,17 @@ import Testing
         }
     }
 
-    @Test func aLongNameBreaksIntoTwoEvenLines() {
-        #expect(ControlCenterView.overTwoLines("Speakers") == "Speakers")   // fits: one line
-        #expect(ControlCenterView.overTwoLines("Sleep Timer") == "Sleep\nTimer")
-        #expect(ControlCenterView.overTwoLines("Mac mini Speakers") == "Mac mini\nSpeakers")
-        #expect(ControlCenterView.overTwoLines("MacBook Pro Speakers") == "MacBook Pro\nSpeakers")   // not "MacBook / Pro Speakers"
-        #expect(ControlCenterView.overTwoLines("XG27UCSR") == "XG27UCSR")   // one word: it shrinks instead
+    @Test func aLongNameIsSetToFit() {
+        func fit(_ text: String) -> (lines: [String], scale: CGFloat) { ControlCenterView.fitted(text, lines: 2) }
+        #expect(fit("Speakers").lines == ["Speakers"] && fit("Speakers").scale == 1)   // fits: one line, full size
+        #expect(fit("Sleep Timer").lines == ["Sleep", "Timer"] && fit("Sleep Timer").scale == 1)
+        #expect(fit("Mac mini Speakers").lines == ["Mac mini", "Speakers"])
+        // Not "MacBook / Pro Speakers"; and "MacBook Pro" is wider than the tile's text, so both lines shrink together
+        let macBook = fit("MacBook Pro Speakers")
+        #expect(macBook.lines == ["MacBook Pro", "Speakers"] && macBook.scale < 1 && macBook.scale >= 0.75)
+        // One word can't break: it shrinks. Asked for one line (a tile with a value under its title), nothing breaks
+        #expect(fit("XG27UCSR").lines == ["XG27UCSR"] && fit("XG27UCSR").scale < 1)
+        #expect(ControlCenterView.fitted("Game Controller", lines: 1).lines == ["Game Controller"])
     }
 
     @Test func remotesSaysWhatIsConnected() throws {

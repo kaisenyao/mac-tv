@@ -137,7 +137,9 @@ struct HomeStatusRow: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.trailing, TopBar.trailing)
             .padding(.top, TopBar.top)
-            .modifier(ClearsCornerForNotices(notices: tv.notices, inGrid: tv.inGrid))
+            // In the grid the row is away, except while a panel is open from it (Control Center by holding the TV button)
+            .modifier(ClearsCornerForNotices(notices: tv.notices,
+                                             inGrid: tv.inGrid && tv.controlCenter == nil && tv.profilePicker?.dropdown != true))
             .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
             .clipped()
             .foregroundStyle(.white)
@@ -168,22 +170,26 @@ private struct StatusCapsule: View {
         let controlCenterOpen = tv.controlCenter != nil, profilesOpen = tv.profilePicker?.dropdown == true
         let open = controlCenterOpen || profilesOpen
         let expanded = open || { if case .status = tv.focus { true } else { false } }()
-        HStack(spacing: 13) {
+        // As Apple TV's row: its glyphs, the Control Center button and the avatar a steady 60 points apart, centre to
+        // centre (each in a 50-point place, 10 between); closed, the time sits 13 from the avatar.
+        HStack(spacing: 10) {
             StatusClock(twentyFour: tv.preferences.twentyFourHourTime)
-                .padding(.trailing, expanded ? 6 : 0)
+                .padding(.trailing, expanded ? 1 : 3)
                 .contentShape(Rectangle())
                 .onTapGesture { tv.setFocus(.status(.controlCenter)) }   // a click on the time opens the row up
             if expanded {
                 ForEach(glyphs, id: \.self) { symbol in
-                    Image(systemName: symbol).font(.system(size: 22, weight: .medium)).opacity(0.9)
+                    Image(systemName: symbol).font(.system(size: 24, weight: .medium))
+                        .frame(width: TopBar.avatar)
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
-                // Control Center, like Apple TV's: white with focus; while it's open (focus is in its tiles) a pale disc
-                let focused = tv.focus == .status(.controlCenter) && !controlCenterOpen
+                // Control Center, like Apple TV's tab: white with focus (on Home, and when Control Center opens, where
+                // focus starts on it); a pale disc while focus is down in its tiles
+                let focused = controlCenterOpen ? tv.controlCenter?.item == .tab : tv.focus == .status(.controlCenter)
                 let lit = focused || controlCenterOpen
                 Button { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) } label: {
                     Image(systemName: "switch.2")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 25.5, weight: .semibold))   // lit, about 29 points tall in its 58: Apple TV's
                         .foregroundStyle(focused ? .black : .white)
                         .frame(width: TopBar.avatar, height: TopBar.avatar)
                         .background(Circle().fill(.white).opacity(focused ? 1 : controlCenterOpen ? 0.3 : 0))

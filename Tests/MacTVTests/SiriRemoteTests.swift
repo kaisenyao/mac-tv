@@ -379,8 +379,10 @@ struct PanelSwipeTests {
         try withTV { tv in
             let home = tv.focus
             tv.handle(.controlCenter)
-            #expect(tv.controlCenter?.item == .remotes)
+            #expect(tv.controlCenter?.item == .tab)      // 在主屏上打开：焦点先在它自己的按钮上
             phoneSwipe(tv, dx: 4, dy: 150)               // 手指往下：下一格，甩出去的惯性不再走
+            #expect(tv.controlCenter?.item == .remotes)
+            phoneSwipe(tv, dx: 4, dy: 150)
             #expect(tv.controlCenter?.item == .display)
             phoneSwipe(tv, dx: 0, dy: -150)              // 往上
             #expect(tv.controlCenter?.item == .remotes)
@@ -405,6 +407,7 @@ struct PanelSwipeTests {
             // 控制中心也是
             tv.settings = nil
             tv.handle(.controlCenter)
+            tv.handle(.move(.down))   // 从它自己的按钮下到 Remotes
             siriSwipe(tv, from: .init(x: 0.9, y: 0.5), to: .init(x: 0.1, y: 0.45), at: 20)  // 往左
             #expect(tv.controlCenter?.item == .sleepNow)
         }
