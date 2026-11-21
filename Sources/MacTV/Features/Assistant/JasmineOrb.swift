@@ -2,10 +2,13 @@ import AppKit
 import MetalKit
 import SwiftUI
 
-/// The orb: PianaSoul's (web/orb.js), the same picture on the same clock. A bright sky over a slow tide of light,
-/// with a fine grain, in her blue (ORB_COLORS.blue) on a dark page, drawn by orb.js's fragment shader ported to Metal.
-/// A plain circle, nothing around it. Drawn only while it shows (60 frames a second at most, none while the window
-/// is hidden); Reduce Motion keeps one still frame.
+/// The orb: PianaSoul's picture (web/orb.js) on the same clock, inside a ball of glass. A bright sky over a slow tide
+/// of light, with a fine grain, in her blue (ORB_COLORS.blue), drawn by orb.js's fragment shader ported to Metal; then
+/// clear glass over it, a ball as Siri's orb on Apple TV is: the picture swells in the middle and gathers at the edge
+/// as it would through a drop of water, a little light lies on it upper left and gathers low opposite. The picture
+/// stays whole and bright to the edge, and there is no line round it. A ball from first to last, nothing around it.
+/// Drawn only while it shows (60 frames a second at most, none while the window is hidden);
+/// Reduce Motion keeps one still frame.
 struct JasmineOrb: View {
     let phase: Jasmine.Phase
     let level: Float
@@ -21,6 +24,33 @@ struct JasmineOrb: View {
                 .frame(width: side, height: side)
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+/// The orb as a still picture, for where she is a button rather than herself (Control Center's round button): the
+/// same ball, one frame of it. Nothing while Metal isn't there: the caller shows a symbol instead.
+struct JasmineOrbStill: View {
+    let side: CGFloat
+
+    var body: some View {
+        if let image = OrbStill.image(pixels: Int((side * OrbMotion.room * 4).rounded())) {
+            Image(decorative: image, scale: 1).resizable().interpolation(.high)
+                .frame(width: side * OrbMotion.room, height: side * OrbMotion.room)
+                .frame(width: side, height: side)
+        }
+    }
+}
+
+/// One frame of the orb, drawn once for each size asked for and kept.
+@MainActor
+enum OrbStill {
+    private static var kept: [Int: CGImage] = [:]
+
+    static func image(pixels: Int) -> CGImage? {
+        if let image = kept[pixels] { return image }
+        let image = OrbPipeline.shared?.image(side: pixels, frame: OrbMotion.Frame(time: 12, level: 0, scale: 1))?.image
+        kept[pixels] = image
+        return image
     }
 }
 
@@ -75,8 +105,9 @@ struct OrbMotion {
 // MARK: Drawing
 
 /// orb.js's shaders in Metal Shading Language, compiled from source when first needed (no metal toolchain step).
-/// The picture is line for line orb.js's `moonlight` and `main`; GLSL's smoothstep with its edges reversed and
-/// pow(x, 2.) (x may be negative) are written out as WebGL computes them.
+/// The picture is line for line orb.js's `moonlight`; GLSL's smoothstep with its edges reversed and pow(x, 2.)
+/// (x may be negative) are written out as WebGL computes them. The glass is Mac TV's own, drawn over that picture
+/// in `orb_fragment`: the picture itself is never changed.
 enum OrbShader {
     static let source = """
     #include <metal_stdlib>
@@ -117,18 +148,44 @@ enum OrbShader {
       return clamp(color*(1.-.035*ss(.6, 1., length(p))), 0., 1.);
     }
 
+    // The picture seen through the ball. A ball of glass magnifies what is behind its middle and gathers it at the
+    // rim, and bends each colour a little differently there; the middle of that lens drifts, slowly, as liquid would.
+    static float3 through_glass(float2 p, float r, constant Uniforms &u) {
+      float t = u.time*1.6;
+      float2 drift = float2(sin(u.time*.53), cos(u.time*.41))*(.022+.03*u.level);
+      float2 q = p-drift*(1.-r*r);
+      float bend = mix(1., asin(min(r, .9999))/(max(r, 1e-4)*1.5708), .55);
+      float spread = .02*r*r;
+      return float3(moonlight(q*(bend-spread), t, u.level, u).r, moonlight(q*bend, t, u.level, u).g,
+                    moonlight(q*(bend+spread), t, u.level, u).b);
+    }
+
     fragment float4 orb_fragment(Varying in [[stage_in]], constant Uniforms &u [[buffer(0)]]) {
       float2 p = in.p;
       float r = length(p);
-      float3 base = moonlight(p, u.time*1.6, u.level, u);
-      float d = ss(.55, 1., r);
-      float3 dark = base*(1.-.07*d*d);
-      float l = ss(.5, 1., r);
-      float3 light = mix(base, float3(1.), l*l*.22);
-      float3 color = mix(dark, light, u.page)+(hash(floor(in.position.xy))-.5)*.024;
+      float3 picture = through_glass(p, r, u);
+      float2 around = r > 1e-4 ? p/r : float2(0.);
+
+      // Clear glass: the picture is whole and bright right to the edge, with only a breath of shade where the ball
+      // turns away (of light, on a light page). No line round it.
+      float deep = ss(.62, 1., r);
+      float3 color = mix(picture*(1.-.09*deep*deep), mix(picture, float3(1.), deep*deep*.22), u.page);
+
+      // The light on the ball, from the upper left and swaying a little: a faint arc, as a window lies on glass, with
+      // a small bright point in it; and opposite, low in the ball, the light the glass gathers.
+      float3 n = float3(p, sqrt(max(1.-r*r, 0.)));
+      float3 light = normalize(float3(-.46+.05*sin(u.time*.37), .60+.04*cos(u.time*.29), .65));
+      float facing = max(dot(n, normalize(light+float3(0., 0., 1.))), 0.);
+      float lit = dot(around, normalize(light.xy));
+      float arc = ss(.52, .72, r)*(1.-ss(.80, .95, r))*pow(max(lit, 0.), 3.);
+      color += float3(1.)*(arc*.14+pow(facing, 320.)*.42)*(1.+.5*u.level);
+      float pool = ss(.55, .88, r)*(1.-ss(.90, 1., r))*pow(max(-lit, 0.), 2.);
+      color += float3(.86, .93, 1.)*pool*.11;
+
+      color += (hash(floor(in.position.xy))-.5)*.024;
       float gray = dot(color, float3(.22, .65, .13));
       color = mix(color, float3(mix(gray*.82+.08, gray*.62+.26, u.page)), u.quiet);
-      // A plain circle (orb.js's border-radius: 50%), its edge a pixel soft.
+      // A ball's outline is a circle, its edge a pixel soft.
       float alpha = 1.0 - ss(1.0 - u.edge, 1.0, r);
       return float4(clamp(color, 0., 1.)*alpha, alpha);
     }
