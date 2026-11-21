@@ -238,55 +238,25 @@ struct BrowserTests {
     }
 
     @Test @MainActor
-    func keepsAtMostTwelveTabsAndNoTabsRowOnTheStartPage() throws {
+    func tabsAreNotCappedAndNoTabsRowOnTheStartPage() throws {
         let (storage, cleanup) = Self.storage()
         defer { cleanup() }
         let store = BrowserStore(storage: storage)
-        for index in 0..<14 {
+        for index in 0..<15 {
             store.newTab(try #require(URL(string: "https://site\(index).example/")))
         }
-        #expect(store.tabs.count == BrowserStore.maxTabs)
-        #expect(store.tabs.last?.url.host == "site13.example")      // 最早开的那几个关掉了
-        #expect(store.tabs.first?.url.host == "site2.example")
+        // 不限个数：最早开的那几个还在（只有正在看的那个有网页视图），放不下就横着滚
+        #expect(store.tabs.count == 15)
+        #expect(store.tabs.first?.url.host == "site0.example" && store.tabs.last?.url.host == "site14.example")
         // 同一个网址已经开着：换到那个，不再开一个
         store.open(try #require(URL(string: "https://site13.example/")))
-        #expect(store.tabs.count == BrowserStore.maxTabs)
+        #expect(store.tabs.count == 15)
         store.closeTab(try #require(store.tabs.first?.id))
-        #expect(store.tabs.count == BrowserStore.maxTabs - 1)
+        #expect(store.tabs.count == 14)
         #expect(BrowserTabStorage(suite: storage.suite, folder: storage.folder).load().tabs == store.tabs)
         // 标签页只在网页上面的标签栏里，开始页不再有"Tabs"一排
         store.rebuildRows()
         #expect(!store.rows.contains { $0.id == "tabs" })
-    }
-
-    @Test @MainActor
-    func privateTabsAreNeverSavedAndDropTheirDataWithTheLastOne() throws {
-        let (storage, cleanup) = Self.storage()
-        defer { cleanup() }
-        let store = BrowserStore(storage: storage)
-        store.newTab(try #require(URL(string: "https://normal.example/")))
-        store.newTab(try #require(URL(string: "https://secret.example/")), isPrivate: true)
-        store.newTab(try #require(URL(string: "https://secret2.example/")), isPrivate: true)
-        #expect(store.hasPrivateSession)
-        // 存下来的只有普通的；无痕的编码出来也没有"isPrivate"（读回来一律是普通的，所以从来不存）
-        let saved = BrowserTabStorage(suite: storage.suite, folder: storage.folder).load().tabs
-        #expect(saved.map(\.url.host) == ["normal.example"])
-        let encoded = String(decoding: try JSONEncoder().encode(store.tabs), as: UTF8.self)
-        #expect(!encoded.contains("isPrivate"))
-
-        let privateIDs = store.tabs.filter(\.isPrivate).map(\.id)
-        store.closeTab(privateIDs[0])
-        #expect(store.hasPrivateSession)          // 还有一个无痕的：数据留着
-        store.closeTab(privateIDs[1])
-        #expect(!store.hasPrivateSession)         // 最后一个也关了：那份数据扔掉
-        // Web in the background keeps its private tabs; quitting it (or a profile switch, or Mac TV quitting) closes
-        // them and drops their data
-        store.newTab(try #require(URL(string: "https://secret3.example/")), isPrivate: true)
-        store.leave()
-        #expect(store.tabs.filter(\.isPrivate).count == 1 && store.hasPrivateSession)
-        store.closePrivateTabs()
-        #expect(store.tabs.filter(\.isPrivate).isEmpty)
-        #expect(!store.hasPrivateSession)
     }
 
     @Test
@@ -298,13 +268,17 @@ struct BrowserTests {
         #expect(BrowserStore.step(in: items, from: .tab("b"), by: 1) == .newTab)
         #expect(BrowserStore.step(in: items, from: .more, by: 1) == nil)
         #expect(BrowserStore.barItems(tabs: [], canGoBack: true, canGoForward: false) == [.back, .newTab, .more])
+        // 无痕浏览："+"前面是 Private
+        #expect(BrowserStore.barItems(tabs: ["p"], canGoBack: false, canGoForward: false, privateBrowsing: true)
+                == [.tab("p"), .privateBrowsing, .newTab, .more])
+        #expect(BrowserStore.barStep(in: [.tab("p"), .privateBrowsing, .newTab, .more], from: .tab("p"), .right) == .privateBrowsing)
     }
 
     @Test
     func moreMenuMovesByRowsAndZoomIsAStepper() {
         typealias Item = BrowserStore.MenuItem
-        #expect(BrowserStore.menuStep(from: .newPrivateTab, .up) == nil)        // 第一行再往上：收起菜单
-        #expect(BrowserStore.menuStep(from: .newPrivateTab, .down) == .reload)
+        #expect(BrowserStore.menuStep(from: .privateBrowsing, .up) == nil)      // 第一行再往上：收起菜单
+        #expect(BrowserStore.menuStep(from: .privateBrowsing, .down) == .reload)
         #expect(BrowserStore.menuStep(from: .reload, .down) == .zoom)           // Zoom 是一行（步进）
         #expect(BrowserStore.menuStep(from: .zoom, .down) == .addFavorite)    // Add to Favorites
         #expect(BrowserStore.menuStep(from: .addFavorite, .down) == .history) // Show All History
@@ -320,9 +294,9 @@ struct BrowserTests {
         #expect(BrowserStore.menuStep(from: .startPage, .down) == nil)
         #expect(BrowserStore.menuStep(from: .reload, .right) == nil)
         #expect(Item.allCases.allSatisfy { !$0.name.isEmpty })
-        // 开始页上的菜单：New Private Tab、Show All History、Close Tab
+        // 开始页上的菜单：Private Browsing、Show All History、Close Tab
         let start = Item.startPageRows
-        #expect(BrowserStore.menuStep(from: .newPrivateTab, .down, rows: start) == .history)
+        #expect(BrowserStore.menuStep(from: .privateBrowsing, .down, rows: start) == .history)
         #expect(BrowserStore.menuStep(from: .history, .down, rows: start) == .closeTab)
         #expect(BrowserStore.menuStep(from: .closeTab, .down, rows: start) == nil)
     }
@@ -422,16 +396,19 @@ struct BrowserTests {
         // 四个撑满：别的变窄，正在看的还是 560
         let four = BrowserTopBar.tabWidths(count: 4, current: 2, available: available, gap: gap)
         #expect(four[2] == 560 && four[0] == four[1] && four[1] == four[3] && abs(total(four) - available) < 0.5)
-        // 十二个：正在看的让到 440，别的只剩图标那么宽，正好撑满，不滚
-        let twelve = BrowserTopBar.tabWidths(count: 12, current: 6, available: available, gap: gap)
-        #expect(twelve[6] == 440 && twelve[0] < 160 && abs(total(twelve) - available) < 0.5)
-        // 太多了：窄到 72 为止，横着滚
+        // 七个：正在看的让到 440，别的变窄，正好撑满，不滚
+        let seven = BrowserTopBar.tabWidths(count: 7, current: 3, available: available, gap: gap)
+        #expect(seven[3] == 440 && seven[0] > BrowserTopBar.minWidth && abs(total(seven) - available) < 0.5)
+        // 再多：别的最窄 180（还看得见图标和标题的开头，不缩成一颗颗图标），放不下就横着滚
+        let eight = BrowserTopBar.tabWidths(count: 8, current: 3, available: available, gap: gap)
+        #expect(eight.enumerated().allSatisfy { $0.offset == 3 || $0.element == BrowserTopBar.minWidth } && total(eight) > available)
         let many = BrowserTopBar.tabWidths(count: 24, current: 3, available: available, gap: gap)
-        #expect(many.enumerated().allSatisfy { $0.offset == 3 || $0.element == 72 } && total(many) > available)
+        #expect(many.enumerated().allSatisfy { $0.offset == 3 || $0.element == 180 } && total(many) > available)
         // 改地址的那个要 720（不让），别的让一让
         let editing = BrowserTopBar.tabWidths(count: 3, current: 1, editing: true, available: available, gap: gap)
         #expect(editing == [360, BrowserTopBar.editWidth, 360])
-        #expect(BrowserTopBar.tabWidths(count: 12, current: 11, editing: true, available: available, gap: gap).dropLast().allSatisfy { $0 >= 72 })
+        #expect(BrowserTopBar.tabWidths(count: 12, current: 11, editing: true, available: available, gap: gap).dropLast()
+                    .allSatisfy { $0 == BrowserTopBar.minWidth })
         // 从网页回到开始页（没有正在看的）：一样宽
         #expect(Set(BrowserTopBar.tabWidths(count: 3, current: nil, available: available, gap: gap)) == [360])
     }
@@ -622,18 +599,23 @@ struct BrowserTests {
     }
 
     @Test @MainActor
-    func startPageMenuOpensAPrivateEmptyTab() throws {
+    func startPageMenuTurnsOnPrivateBrowsing() throws {
         let (storage, cleanup) = Self.storage()
         defer { cleanup() }
         let store = BrowserStore(storage: storage)
         store.newBlankTab()
-        // "⋯"菜单：开始页上是 New Private Tab、Show All History、Close Tab；只有一个空白标签页时没有 Close Tab
+        let normal = store.tabs
+        // "⋯"菜单：开始页上是 Private Browsing、Show All History、Close Tab；只有一个空白标签页时没有 Close Tab
         #expect(store.openMenu())
-        #expect(store.menu == .newPrivateTab)
-        #expect(store.menuRows == [[.newPrivateTab], [.history]])
-        store.handle(.select)                                              // New Private Tab：再开一个无痕的空白标签页
-        #expect(store.tabs.count == 2 && store.tabs.last?.isPrivate == true)
-        #expect(store.startsPrivate && store.barIsPrivate && store.barFocus == nil && store.menu == nil)
+        #expect(store.menu == .privateBrowsing)
+        #expect(store.menuRows == [[.privateBrowsing], [.history]])
+        store.handle(.select)                                              // Private Browsing：标签栏换成一个无痕的 Start Page
+        #expect(store.privateBrowsing && store.tabs.count == 1 && store.tabs[0].isPrivate && store.tabs[0].isBlank)
+        #expect(store.barFocus == nil && store.menu == nil && store.focus == .field && store.onStartPage)
+        // 再选一次：出来，原来的标签回来
+        #expect(store.openMenu())
+        store.handle(.select)
+        #expect(!store.privateBrowsing && store.tabs == normal)
     }
 
     @Test

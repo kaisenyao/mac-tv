@@ -331,7 +331,7 @@ struct BrowserHistoryView: View {
             Text("History").font(.tv(.title1, emphasized: true)).foregroundStyle(.white)
             HStack(spacing: 24) {
                 HStack(spacing: 16) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 26, weight: .semibold))
+                    Image(systemName: "magnifyingglass").font(.tv(.body, emphasized: true))
                     if store.editing {
                         TextField("Search History", text: text)
                             .textFieldStyle(.plain)
@@ -345,7 +345,7 @@ struct BrowserHistoryView: View {
                         Spacer(minLength: 0)
                     }
                 }
-                .font(.system(size: 27, weight: .medium))
+                .font(.tv(.body))
                 .foregroundStyle(searchLit ? .black : .white.opacity(0.85))
                 .padding(.horizontal, 32)
                 .frame(width: 900, height: 76)

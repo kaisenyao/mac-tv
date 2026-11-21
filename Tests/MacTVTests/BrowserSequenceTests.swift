@@ -30,8 +30,8 @@ struct BrowserSequenceTests {
         case left, right, up, down, select, back, holdSelect, tapBar, tapClose, tapMenu, clickOutside, shortcut, typeLetter
     }
 
-    /// 1920 的画布去掉两边的边距（各 32）、两组按钮（各 116）、和胶囊之间的空（各 16）
-    static let track: CGFloat = 1592
+    /// 1920 的画布去掉两边的边距（各 32）、两组按钮（各 116）、和中间那一排之间的空（各 16）
+    static let track = BrowserTopBar.trackWidth(canvas: 1920, privateBrowsing: false)
 
     @Test
     func theBarKeepsItsRulesThroughManySequences() throws {
@@ -60,6 +60,7 @@ struct BrowserSequenceTests {
                 let op = Op.allCases.randomElement(using: &random)!
                 let count = store.tabs.count
                 let wasInBar = store.barFocus != nil
+                let wasPrivate = store.privateBrowsing
                 let label = apply(op, store: store, tv: tv, random: &random)
                 log.append(label)
                 if !tv.browserOpen {   // 返回到主屏了：再开浏览器
@@ -67,7 +68,8 @@ struct BrowserSequenceTests {
                     tv.browserOpen = true
                     log.append("reopen")
                 }
-                let closed = store.tabs.count < count
+                // 进出无痕浏览是换了一组标签，不是关掉了一个
+                let closed = store.tabs.count < count && store.privateBrowsing == wasPrivate
                 let problems = Self.problems(store, closedOne: closed, wasInBar: wasInBar, afterClick: op == .clickOutside)
                 if !problems.isEmpty {
                     Issue.record("seed \(seed): \(problems.joined(separator: "; ")) after \(log.joined(separator: " → "))")
@@ -128,6 +130,7 @@ struct BrowserSequenceTests {
         default: break
         }
         if store.menu != nil, store.barFocus != .more { problems.append("menu open without ⋯ focused") }
+        if store.barFocus == .privateBrowsing, !store.privateBrowsing { problems.append("focus on a Private control that isn't there") }
         // 关掉一个以后只剩一个：焦点不留在标签栏上（那个标签不是白的）
         if closedOne, wasInBar, store.tabs.count == 1, store.barFocus != nil { problems.append("the last tab stayed focused (white) after a close") }
         // 地址栏：不留下改了一半的
@@ -146,9 +149,13 @@ struct BrowserSequenceTests {
                 problems.append("Left reaches a × on the only Start Page tab")
             }
         }
-        // 无痕标签页还在，无痕的那份网站数据就得在
-        if store.tabs.contains(where: \.isPrivate), !store.hasPrivateSession { problems.append("private tab without its private session") }
-        // 胶囊：一个标签是 720，多了跟着变长（比一个的宽），最宽撑满；两头浮起来的不被切掉
+        // 无痕浏览：标签栏上全是无痕的，那份网站数据在；不在无痕浏览时一个无痕的也没有，那份数据也没了
+        if store.tabs.contains(where: { $0.isPrivate != store.privateBrowsing }) { problems.append("a tab from the other set in the bar") }
+        if store.hasPrivateSession != store.privateBrowsing {
+            problems.append("private session \(store.hasPrivateSession), private browsing \(store.privateBrowsing)")
+        }
+        // 这一排：一个标签是 720，多了跟着变长（比一个的宽），最宽撑满；两头浮起来的不被切掉
+        let track = BrowserTopBar.trackWidth(canvas: 1920, privateBrowsing: store.privateBrowsing)
         let current = store.tabs.firstIndex { $0.id == store.barCurrentID }
         let widths = BrowserTopBar.tabWidths(count: store.tabs.count, current: current, editing: store.editing && store.editingInBar,
                                              available: track - BrowserTopBar.inset * 2, gap: BrowserTopBar.tabGap)

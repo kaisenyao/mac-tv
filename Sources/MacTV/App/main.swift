@@ -617,6 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(browserShortcut(_:)) else { return true }
         guard let raw = item.representedObject as? String, let shortcut = BrowserStore.Shortcut(rawValue: raw) else { return false }
+        item.state = shortcut == .privateBrowsing && tv.browserStore.privateBrowsing ? .on : .off
         return tv.browserStore.canPerform(shortcut)
     }
 
@@ -652,7 +653,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         // 浏览器：和 Safari 一样的菜单、一样的键
         let file = NSMenu(title: "File")
-        for shortcut in [BrowserStore.Shortcut.newTab, .newPrivateTab, .openLocation] { file.addItem(browserItem(shortcut)) }
+        for shortcut in [BrowserStore.Shortcut.newTab, .privateBrowsing, .openLocation] { file.addItem(browserItem(shortcut)) }
+        // ⌘N（新标签页）、⌘=（放大）：同一项的另外一个键，不显示
+        for shortcut in BrowserStore.Shortcut.allCases { for key in shortcut.hiddenKeys { file.addItem(browserItem(shortcut, hidden: key)) } }
         file.addItem(.separator())
         file.addItem(browserItem(.closeTab))
         main.addItem(submenu: file, title: "File")
@@ -675,7 +678,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         view.addItem(.separator())
         view.addItem(browserItem(.actualSize))
         view.addItem(browserItem(.zoomIn))
-        view.addItem(browserItem(.zoomIn, hidden: "="))   // ⌘= 也是放大（不用按 ⇧）
         view.addItem(browserItem(.zoomOut))
         main.addItem(submenu: view, title: "View")
 

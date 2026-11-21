@@ -4,7 +4,7 @@ import SwiftUI
 /// 下面一条地址栏，再下面个人收藏、常去网站是一个个大方块（网站自己的图标），最近浏览、阅读列表是卡片（标题、网站、多久以前）。
 /// 选中的那一个和 tvOS 一样浮起来。焦点下到那几排里时标签栏收上去，地址栏和那几排跟着上移（一整块一起挪，一个位移动画）。
 /// 一排放不下、被屏幕边截掉的那一头淡出去（每排一张静态的渐变遮罩，见 EdgeFade）。
-/// 开无痕标签页时，地址栏上面写着 Private Browsing，地址栏是深紫色的。
+/// 无痕浏览时，地址栏上面写着 Private Browsing，地址栏是深紫色的，下面只有个人收藏。
 /// 网站图标只向那个网站自己要，不经过别人（不把你去过哪些网站告诉第三方，见 SiteIcons）。
 /// 浏览器是系统的界面，字都是英文（跟系统语言走）
 struct BrowserRoot: View {
@@ -53,21 +53,22 @@ struct BrowserScreen: View {
                     .frame(width: canvas.width, height: canvas.height - rowsTop + collapse, alignment: .topLeading)
                     .clipped()
                     .offset(y: rowsTop)
-                if store.startsPrivate {
-                    // 无痕：选的网站开成无痕标签页
+                if store.privateBrowsing {
+                    // 无痕浏览：选的网站开成无痕标签页
                     Label("Private Browsing", systemImage: "hand.raised.fill")
                         .font(.tv(.caption2, emphasized: true))
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
-                        .background(Capsule().fill(Color(hex: "#5B4BA8").opacity(0.6)))
+                        .background(Capsule().fill(BrowserTopBar.privateTint.opacity(0.6)))
                         .frame(width: canvas.width, height: fieldTop - BrowserTopBar.height)
                         .offset(y: BrowserTopBar.height)
                 }
                 addressBar
                     .frame(width: canvas.width)
                     .padding(.top, fieldTop)
-                BrowserTopBar(store: store, hoverable: store.startBarSettled)
+                // 开始页上标签栏不垫底色：开始页的底色一直到屏幕顶上
+                BrowserTopBar(store: store, surface: .clear, hoverable: store.startBarSettled)
             }
             .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
             // 标签栏收起、出来：整块一起上下挪（BrowserStore 里那一下是 Motion.navigate）
@@ -111,7 +112,7 @@ struct BrowserScreen: View {
         let lit = focused || editingHere
         let text = Binding(get: { store.query }, set: { store.typed($0) })
         return HStack(spacing: 19) {
-            Image(systemName: "magnifyingglass").font(.system(size: 28, weight: .semibold))
+            Image(systemName: "magnifyingglass").font(.tv(.body, emphasized: true))
             if editingHere {
                 TextField("Search or enter website name", text: text)
                     .textFieldStyle(.plain)
@@ -133,13 +134,13 @@ struct BrowserScreen: View {
                 Spacer(minLength: 0)
             }
         }
-        .font(.system(size: 27, weight: .medium))
+        .font(.tv(.body))
         .foregroundStyle(lit ? .black : .white.opacity(0.85))
         .padding(.horizontal, 35)
         .frame(width: 1050, height: fieldHeight)
         .background {
             // 影子只投在胶囊上，不投在字上（字周围不糊一圈）
-            Capsule().fill(lit ? Color.white : store.startsPrivate ? Color(hex: "#5B4BA8").opacity(0.35) : .white.opacity(0.1))
+            Capsule().fill(lit ? Color.white : store.privateBrowsing ? BrowserTopBar.privateTint.opacity(0.35) : .white.opacity(0.1))
                 .shadow(color: .black.opacity(focused ? 0.45 : 0), radius: 21, y: 12)
             PillOutline().strokeBorder(.white.opacity(lit ? 0 : 0.14))   // 不用 Capsule 描：两头会多出竖线（见 PillOutline）
         }
@@ -191,7 +192,7 @@ struct BrowserScreen: View {
         let end = margin + CGFloat(row.pages.count) * (width + gap) - gap - shift
         return VStack(alignment: .leading, spacing: 24) {
             Text(row.title)
-                .font(.system(size: 33, weight: .bold))
+                .font(.tv(.callout, emphasized: true))
                 .foregroundStyle(.white.opacity(focusedRow == index ? 1 : 0.7))
                 .padding(.leading, margin)
             if row.style == .notice {
@@ -281,9 +282,9 @@ struct BrowserScreen: View {
     private func permissionCard(focused: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
         return HStack(spacing: 28) {
-            Image(systemName: "lock.shield").font(.system(size: 60, weight: .medium))
+            Image(systemName: "lock.shield").font(.tv(.title2))
             VStack(alignment: .leading, spacing: 10) {
-                Text("Let Mac TV read Safari's favorites and history").font(.system(size: 27, weight: .bold))
+                Text("Let Mac TV read Safari's favorites and history").font(.tv(.body, emphasized: true))
                 Text("Turn on Mac TV in Privacy & Security › Full Disk Access.")
                     .font(.tv(.caption2)).opacity(0.7)
                     .fixedSize(horizontal: false, vertical: true)

@@ -326,7 +326,7 @@ struct BrowserSheetRow: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
         HStack(spacing: 20) {
-            if let symbol { Image(systemName: symbol).font(.system(size: 26, weight: .semibold)).frame(width: 36) }
+            if let symbol { Image(systemName: symbol).font(.tv(.caption1, emphasized: true)).frame(width: 36) }
             Text(title)
             Spacer(minLength: 0)
         }

@@ -17,8 +17,10 @@ import WebKit
 ///
 /// 只有正在看的那个标签页有网页视图（一个网页的进程要一两百兆，多的近一个 G），别的只留地址、标题、
 /// 前进后退的记录和一张截图，换过去时重新载入（先放截图，载好了换成真的网页）。
-/// 无痕标签页用自己的一份不落盘的网站数据（WKWebsiteDataStore.nonPersistent），什么都不记：
-/// 不进"最近浏览"、不存标签页、截图只在内存里；最后一个无痕标签页关掉（或离开浏览器）时那份数据一起扔掉。
+/// 无痕浏览（Private Browsing）是这一个浏览器的一种状态，不是另一个窗口：进去时标签栏换成另一组、新的无痕标签页
+/// （从一个 Start Page 开始），普通的那一组原样收起来；再按一次（标签栏右上角的 Private、⇧⌘N、"⋯"里的 Private Browsing）
+/// 出来，无痕的那一组和它的网站数据一起扔掉，普通的标签页原样回来。无痕的用自己的一份不落盘的网站数据
+/// （WKWebsiteDataStore.nonPersistent），什么都不记：不进"最近浏览"、不存标签页、截图只在内存里。
 ///
 /// Safari 的记录要 Mac TV 有"完全磁盘访问权限"才读得到（见 SafariLibrary）；没有的时候这里放一张卡片告诉你怎么打开。
 /// 在 Mac TV 里看过的页面自己也记一份，和 Safari 的历史混在一起按时间排
@@ -26,8 +28,6 @@ import WebKit
 final class BrowserStore: ObservableObject {
     static let appID = "browser"
     static let pageID = "browser-page"
-    /// 最多留几个标签页（再开新的，最早的那个关掉）
-    static let maxTabs = 12
 
     struct Row: Identifiable, Equatable {
         enum Style: Equatable { case tiles, cards, notice }
@@ -40,24 +40,26 @@ final class BrowserStore: ObservableObject {
     /// 开始页的焦点：地址栏，或者某一排的某一个
     enum Focus: Equatable { case field, item(row: Int, column: Int) }
 
-    /// 标签栏上的焦点（nil：焦点在网页里，或者开始页的地址栏、那几排里）。close：那个标签的关闭按钮（×）
-    enum BarFocus: Hashable { case back, forward, tab(String), close(String), newTab, more }
+    /// 标签栏上的焦点（nil：焦点在网页里，或者开始页的地址栏、那几排里）。close：那个标签的关闭按钮（×）。
+    /// privateBrowsing：无痕浏览时"+"左边的 Private（选它出来）
+    enum BarFocus: Hashable { case back, forward, tab(String), close(String), privateBrowsing, newTab, more }
 
     /// 空白标签页（还没打开网站，Safari 叫它 Start Page）的网址。和别的标签页一样存着
     nonisolated static let blankURL = URL(string: "about:blank")!
 
     /// "⋯"菜单里的一项。网页缩放是一行"Zoom  ‹ Medium ›"，和设置里的步进行一样：左右换一档，到头停住
     enum MenuItem: CaseIterable {
-        case newPrivateTab, reload, zoom, addFavorite, removeFavorite, history, closeTab, startPage
+        case privateBrowsing, reload, zoom, addFavorite, removeFavorite, history, closeTab, startPage
 
         /// 网页上的；Add to Favorites 在这一页已经是个人收藏时换成 Remove from Favorites（见 menuRows）
-        static let rows: [[MenuItem]] = [[.newPrivateTab], [.reload], [.zoom], [.addFavorite], [.history], [.closeTab], [.startPage]]
+        static let rows: [[MenuItem]] = [[.privateBrowsing], [.reload], [.zoom], [.addFavorite], [.history], [.closeTab], [.startPage]]
         /// 开始页上没有网页：不能重新载入、缩放，已经在开始页了
-        static let startPageRows: [[MenuItem]] = [[.newPrivateTab], [.history], [.closeTab]]
+        static let startPageRows: [[MenuItem]] = [[.privateBrowsing], [.history], [.closeTab]]
 
+        /// Private Browsing 是开关：开着时这一行后面打勾（BrowserMenu）
         var name: String {
             switch self {
-            case .newPrivateTab: "New Private Tab"
+            case .privateBrowsing: "Private Browsing"
             case .reload: "Reload Page"
             case .zoom: "Zoom"
             case .closeTab: "Close Tab"
@@ -70,7 +72,7 @@ final class BrowserStore: ObservableObject {
 
         var symbol: String {
             switch self {
-            case .newPrivateTab: "hand.raised"
+            case .privateBrowsing: "hand.raised"
             case .reload: "arrow.clockwise"
             case .zoom: "textformat.size"
             case .closeTab: "xmark"
@@ -86,7 +88,7 @@ final class BrowserStore: ObservableObject {
     enum Origin: Equatable {
         /// 从网页的标签栏返回到这里：没有"正在看的"标签，选的网站开成新标签页，返回回主屏
         case home
-        /// 一个空白标签页（"+"、New Private Tab、Open Start Page，或者换到了它）：选的网站就开在它里面
+        /// 一个空白标签页（"+"、进无痕浏览、Open Start Page，或者换到了它）：选的网站就开在它里面
         case blank(String)
     }
 
@@ -126,10 +128,17 @@ final class BrowserStore: ObservableObject {
     private var safari = SafariLibrary.Snapshot(access: .missing)
 
     // 标签页
+    /// 标签栏上的这一组：平时是普通的，无痕浏览时是无痕的（普通的那一组在 normal 里等着）
     @Published private(set) var tabs: [BrowserTab] = []
     @Published private(set) var activeID: String?
-    /// 最后看的普通标签页（正在看无痕的时候，存下来的是它）
-    private var lastNormalID: String?
+    /// 无痕浏览时收起来的普通标签页，和离开时在看什么（出来时原样回到那里）。nil：不在无痕浏览
+    private struct NormalTabs {
+        let tabs: [BrowserTab]
+        let activeID: String?
+        let onStartPage: Bool
+        let origin: Origin
+    }
+    @Published private var normal: NormalTabs?
     /// 这次运行里离开过的标签页的样子（前进后退、滚到哪），换回去时恢复。只在内存里
     private var states: [String: Any] = [:]
     /// 标签页离开时的截图：换回去、网页还没载好时先放着它。内存里只留最近四张（一张两兆左右），普通标签页的在磁盘上也有
@@ -140,7 +149,7 @@ final class BrowserStore: ObservableObject {
     private var storage: BrowserTabStorage
     /// 开始页上 Safari 的那几排（个人收藏、常去的网站、Safari 的历史、阅读列表）是这台 Mac 主人自己的：只给第一个人看
     private(set) var showsSafari = true
-    /// 无痕标签页共用的一份网站数据（不落盘）。最后一个无痕标签页关掉就扔掉
+    /// 无痕浏览的那一份网站数据（不落盘）：进无痕浏览时新开一份，出来时扔掉
     private var privateStore: WKWebsiteDataStore?
     /// 无痕标签页里调的缩放：只在内存里，不记
     private var privateZoom: [String: Double] = [:]
@@ -183,14 +192,14 @@ final class BrowserStore: ObservableObject {
         let saved = own.load()
         tabs = saved.tabs
         activeID = saved.active
-        lastNormalID = saved.active
         snapshots.countLimit = 4
     }
 
     var activeTab: BrowserTab? { tabs.first { $0.id == activeID } }
+    /// 在无痕浏览：标签栏上是无痕的那一组
+    var privateBrowsing: Bool { normal != nil }
+    /// 无痕的那一份网站数据还在（出来以后就没了）
     var hasPrivateSession: Bool { privateStore != nil }
-    /// 开始页是一个无痕的空白标签页
-    var startsPrivate: Bool { tabs.first { $0.id == blankID }?.isPrivate ?? false }
     /// 标签栏露着：平时一直在；视频铺满时只有焦点在它上面才出来（盖在视频上）
     var barShown: Bool { !videoMode || barFocus != nil }
 
@@ -212,12 +221,11 @@ final class BrowserStore: ObservableObject {
 
     /// 标签栏上"正在看的"那个（描一圈边，选它就是改地址）。从网页返回到开始页时没有
     var barCurrentID: String? { onStartPage ? blankID : activeID }
-    var barIsPrivate: Bool { tabs.first { $0.id == barCurrentID }?.isPrivate ?? false }
     /// 开始页上没有网页：后退、前进不能用
     var barCanGoBack: Bool { !onStartPage && page.canGoBack }
     var barCanGoForward: Bool { !onStartPage && page.canGoForward }
     var menuRows: [[MenuItem]] {
-        var rows = !onStartPage ? MenuItem.rows : barCurrentID == nil ? [[.newPrivateTab], [.history]] : MenuItem.startPageRows
+        var rows = !onStartPage ? MenuItem.rows : barCurrentID == nil ? [[.privateBrowsing], [.history]] : MenuItem.startPageRows
         if isFavorite(currentPageURL) { rows = rows.map { $0 == [.addFavorite] ? [.removeFavorite] : $0 } }
         // 只剩一个空白标签页：没有可关的（离开浏览器是按住返回）
         return tabsClosable ? rows : rows.filter { $0 != [.closeTab] }
@@ -227,7 +235,7 @@ final class BrowserStore: ObservableObject {
     /// 标签能关：不止一个，或者剩下的那一个开着网站（关掉它就变回开始页）。只剩一个空白标签页时没有 ×，也不在菜单里
     var tabsClosable: Bool { tabs.count > 1 || tabs.contains { !$0.isBlank } }
 
-    /// refreshRows: false 是从一个开始页换到另一个（"+"、New Private Tab）：那几排还是刚才那些，不重排、不重读
+    /// refreshRows: false 是从一个开始页换到另一个（"+"）：那几排还是刚才那些，不重排、不重读
     /// （重读 Safari 要一会儿，读完再重排一次，就是开新标签页一秒后又闪一下的那一下）
     func opened(origin: Origin = .home, refreshRows: Bool = true) {
         self.origin = origin
@@ -260,7 +268,19 @@ final class BrowserStore: ObservableObject {
         withAnimation(Motion.navigate) { rebuildRows() }
     }
 
+    /// 无痕浏览的开始页只有个人收藏（像 Safari 的无痕窗口）：去过哪儿、常去哪儿不摆出来
     func rebuildRows() {
+        var built: [Row] = []
+        if privateBrowsing {
+            if !favoritePages.isEmpty { built.append(Row(id: "favorites", title: "Favorites", style: .tiles, pages: favoritePages)) }
+        } else {
+            built = normalRows
+        }
+        if built != rows { rows = built }   // 一样的不再赋一遍（不然读完 Safari 又整个重画一次）
+        if case .item(let row, _) = focus, !rows.indices.contains(row) { focus = .field; placeStartBar(true) }
+    }
+
+    private var normalRows: [Row] {
         var built: [Row] = []
         if safari.access == .needsPermission {
             // 读不到 Safari：放一张说明，选它打开系统设置里那一页（打勾要你自己来）
@@ -275,8 +295,7 @@ final class BrowserStore: ObservableObject {
             .filter { seen.insert($0.id).inserted }
         if !recent.isEmpty { built.append(Row(id: "recent", title: "Recently Visited", style: .cards, pages: Array(recent.prefix(40)))) }
         if !safari.readingList.isEmpty { built.append(Row(id: "reading", title: "Reading List", style: .cards, pages: safari.readingList)) }
-        if built != rows { rows = built }   // 一样的不再赋一遍（不然读完 Safari 又整个重画一次）
-        if case .item(let row, _) = focus, !rows.indices.contains(row) { focus = .field; placeStartBar(true) }
+        return built
     }
 
     // MARK: 开始页的按键
@@ -502,7 +521,7 @@ final class BrowserStore: ObservableObject {
         query = ""
         if let id = blankID, let tab = tabs.first(where: { $0.id == id }) {
             show(tab, loading: url)
-        } else if let same = tabs.first(where: { !$0.isPrivate && $0.url == url }) {
+        } else if let same = tabs.first(where: { $0.url == url }) {
             show(same)
         } else {
             newTab(url)
@@ -524,27 +543,19 @@ final class BrowserStore: ObservableObject {
         return tv.webView
     }
 
-    func newTab(_ url: URL, isPrivate: Bool = false) {
-        let tab = BrowserTab(url: url, title: "", isPrivate: isPrivate)
-        if isPrivate, privateStore == nil { privateStore = .nonPersistent() }
+    /// 新开一个标签页，在标签栏的这一组里（无痕浏览时是无痕的）。标签页不限个数：只有正在看的那个有网页视图
+    func newTab(_ url: URL) {
+        let tab = BrowserTab(url: url, title: "", isPrivate: privateBrowsing)
         tabs.append(tab)
-        // 太多了：最早开的那个（不是正在看的）关掉
-        while tabs.count > Self.maxTabs, let oldest = tabs.firstIndex(where: { $0.id != activeID && $0.id != tab.id }) {
-            forget(tabs.remove(at: oldest))
-        }
         save()
         show(tab)
     }
 
-    /// 新开一个空白标签页（"+"、New Private Tab、Open Start Page）：标签栏最后多一个 Start Page，开始页是它的。
+    /// 新开一个空白标签页（"+"、⌘T、⌘N、Open Start Page）：标签栏最后多一个 Start Page，开始页是它的。
     /// from：开它时看着的那个标签（在开始页上按返回就回到那一个，这个空白的当没开过）
-    func newBlankTab(isPrivate: Bool = false, from: String? = nil) {
-        let tab = BrowserTab(url: Self.blankURL, title: "", isPrivate: isPrivate)
-        if isPrivate, privateStore == nil { privateStore = .nonPersistent() }
+    func newBlankTab(from: String? = nil) {
+        let tab = BrowserTab(url: Self.blankURL, title: "", isPrivate: privateBrowsing)
         tabs.append(tab)
-        while tabs.count > Self.maxTabs, let oldest = tabs.firstIndex(where: { $0.id != activeID && $0.id != tab.id && $0.id != from }) {
-            forget(tabs.remove(at: oldest))
-        }
         showBlank(tab)
         returnTo = from.map { (tab.id, $0) }
     }
@@ -558,10 +569,11 @@ final class BrowserStore: ObservableObject {
         if let tab = tabs.first(where: { $0.id == id }) { open(tab) } else { tv?.goHome() }
     }
 
-    /// 从主屏打开浏览器：上次看的普通标签页还在就直接回到它（像 Safari；空白的就是它的开始页）。
+    /// 从主屏打开浏览器：上次看的标签页还在就直接回到它（像 Safari；空白的就是它的开始页）。
+    /// 无痕浏览留在后台时回到无痕的那一个（退出 Web、换人、退出 Mac TV 时无痕浏览才结束，见 closePrivateTabs）。
     /// 一个都没有就开一个空白标签页
     func resumeLastTab() {
-        guard let tab = tabs.first(where: { $0.id == activeID && !$0.isPrivate }) ?? tabs.last(where: { !$0.isPrivate }) else {
+        guard let tab = activeTab ?? tabs.last else {
             newBlankTab()
             return
         }
@@ -573,7 +585,6 @@ final class BrowserStore: ObservableObject {
         returnTo = nil
         openStartPage(origin: .blank(tab.id))
         activeID = tab.id
-        if !tab.isPrivate { lastNormalID = tab.id }
         save()
     }
 
@@ -582,9 +593,7 @@ final class BrowserStore: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }), tabs[index].isBlank else { return }
         forget(tabs.remove(at: index))
         if activeID == id { activeID = nil }
-        if lastNormalID == id { lastNormalID = nil }
         returnTo = nil
-        dropPrivateSessionIfUnused()
         save()
     }
 
@@ -603,7 +612,6 @@ final class BrowserStore: ObservableObject {
         menu = nil
         videoMode = false
         activeID = tab.id
-        if !tab.isPrivate { lastNormalID = tab.id }
         let address = url ?? tab.url
         if url != nil { update(tab.id) { $0.url = address; $0.title = "" } }
         let host = address.host ?? ""
@@ -644,7 +652,7 @@ final class BrowserStore: ObservableObject {
         save()
     }
 
-    /// 离开浏览器（回主屏、开别的应用）：标签页都留着，无痕的也留着，再进来还在（Mac TV decision）
+    /// 离开浏览器（回主屏、开别的应用）：标签页都留着，无痕浏览也留着，再进来还在（Mac TV decision）
     func leave() {
         if pageWebView != nil { suspendPage() }
         onStartPage = false
@@ -657,17 +665,67 @@ final class BrowserStore: ObservableObject {
         save()
     }
 
-    /// Web quits (the App Switcher), someone else starts watching, or Mac TV quits: the private tabs close and their
-    /// data goes (a TV is shared by the family; the next person mustn't find them).
-    func closePrivateTabs() {
-        let privateTabs = tabs.filter(\.isPrivate)
-        if !privateTabs.isEmpty {
-            tabs.removeAll(where: \.isPrivate)
-            privateTabs.forEach(forget)
-            if activeTab == nil { activeID = lastNormalID }
+    /// Web quits (the App Switcher), someone else starts watching, or Mac TV quits: Private Browsing ends, its tabs
+    /// close and their data goes (a TV is shared by the family; the next person mustn't find them). Nothing is shown.
+    func closePrivateTabs() { endPrivateBrowsing(show: false) }
+
+    // MARK: 无痕浏览
+
+    /// 进出无痕浏览（标签栏上的 Private、⇧⌘N、"⋯"里的 Private Browsing 都走这里）
+    func togglePrivateBrowsing() {
+        if privateBrowsing { endPrivateBrowsing(show: true) } else { startPrivateBrowsing() }
+    }
+
+    /// 进无痕浏览：正在看的网页像换标签页一样收起来（记下样子、截图），普通的那一组原样放到一边；
+    /// 标签栏换成新的一组，只有一个无痕的 Start Page，焦点在它的搜索框。网站数据是新的一份，不落盘
+    private func startPrivateBrowsing() {
+        guard !privateBrowsing else { return }
+        if pageWebView != nil {
+            suspendPage()
+            tv?.playbackCoordinator.closeWebPlayback()
         }
-        dropPrivateSessionIfUnused()
+        stopEditing()
+        itemMenu = nil
+        normal = NormalTabs(tabs: tabs, activeID: activeID, onStartPage: onStartPage, origin: origin)
+        returnTo = nil
+        privateStore = .nonPersistent()
+        privateZoom = [:]
+        tabs = []
+        activeID = nil
+        newBlankTab()
+        rebuildRows()
+    }
+
+    /// 出无痕浏览：无痕的标签页、它们的样子和截图、那一份网站数据都扔掉（网页视图关掉，不截图）；
+    /// 普通的那一组原样回来，回到进去时在看的那一页（show：false 是浏览器不在前面，只换回来、不打开）
+    private func endPrivateBrowsing(show: Bool) {
+        guard let normal else { return }
+        if pageWebView != nil {
+            placeholderTask?.cancel()
+            placeholder = nil
+            detach()
+            tv?.playbackCoordinator.closeWebPlayback()
+        }
+        stopEditing()
+        itemMenu = nil
+        tabs.forEach(forget)
+        tabs = normal.tabs
+        activeID = normal.activeID
+        origin = normal.origin
+        self.normal = nil
+        returnTo = nil
+        privateStore = nil
+        privateZoom = [:]
         save()
+        rebuildRows()
+        guard show else { return }
+        if normal.onStartPage {
+            openStartPage(origin: normal.origin)
+        } else if let tab = activeTab {
+            open(tab)
+        } else {
+            newBlankTab()
+        }
     }
 
     /// Memory pressure: the tab pictures kept decoded go (they're on disk; private tabs' come back when shown).
@@ -713,11 +771,9 @@ final class BrowserStore: ObservableObject {
             // 同一个标签（同一个 id、同一块胶囊）换成空白的：标题从网站名换成 Start Page，网页换成开始页
             stopEditing()
             forget(tabs[index])
-            let blank = BrowserTab(id: id, url: Self.blankURL, title: "")
+            let blank = BrowserTab(id: id, url: Self.blankURL, title: "", isPrivate: privateBrowsing)
             tabs[index] = blank
-            if id == lastNormalID { lastNormalID = nil }
             showBlank(blank)
-            dropPrivateSessionIfUnused()
             return
         }
         let current = barCurrentID, wasInBar = barFocus != nil
@@ -726,7 +782,6 @@ final class BrowserStore: ObservableObject {
         let closed = tabs.remove(at: index)
         forget(closed)
         if closed.id == activeID { activeID = nil }
-        if closed.id == lastNormalID { lastNormalID = nil }
         if returnTo?.blank == id || returnTo?.to == id { returnTo = nil }
         let stayInBar = wasInBar && tabs.count > 1
         if id != current {
@@ -737,15 +792,7 @@ final class BrowserStore: ObservableObject {
             if stayInBar { focusBar(on: .tab(tab.id)) }
             else if wasInBar { leaveBar() }
         }
-        dropPrivateSessionIfUnused()
         save()
-    }
-
-    /// 最后一个无痕标签页没了：那份网站数据扔掉（网页视图关掉以后它就没了）
-    private func dropPrivateSessionIfUnused() {
-        guard !tabs.contains(where: \.isPrivate) else { return }
-        privateStore = nil
-        privateZoom = [:]
     }
 
     private func update(_ id: String, _ change: (inout BrowserTab) -> Void) {
@@ -759,10 +806,9 @@ final class BrowserStore: ObservableObject {
         if !tab.isPrivate { storage.removeSnapshot(tab.id) }
     }
 
-    /// 只存普通标签页；正在看的是无痕的，存最后看的那个普通的
+    /// 只存普通标签页：无痕浏览时存的是收起来的那一组
     private func save() {
-        let active = activeTab?.isPrivate == true ? lastNormalID : activeID
-        storage.save(tabs.filter { !$0.isPrivate }, active: active)
+        if let normal { storage.save(normal.tabs, active: normal.activeID) } else { storage.save(tabs, active: activeID) }
     }
 
     // MARK: 截图
@@ -826,8 +872,7 @@ final class BrowserStore: ObservableObject {
     func opensAsNewTab(_ action: WKNavigationAction, features: WKWindowFeatures, from web: WKWebView) -> Bool {
         guard web === pageWebView, let url = action.request.url, url.scheme?.hasPrefix("http") == true,
               action.navigationType == .linkActivated || (features.width == nil && features.height == nil) else { return false }
-        let isPrivate = activeTab?.isPrivate ?? false
-        Task { @MainActor [weak self] in self?.newTab(url, isPrivate: isPrivate) }
+        Task { @MainActor [weak self] in self?.newTab(url) }
         return true
     }
 
@@ -917,12 +962,15 @@ final class BrowserStore: ObservableObject {
 
     private var currentTabFocus: BarFocus? { barCurrentID.map(BarFocus.tab) }
 
-    /// 标签栏上能走到的，从左到右（不能用的后退、前进跳过）。关闭按钮不在这里面，见 barStep
-    nonisolated static func barItems(tabs: [String], canGoBack: Bool, canGoForward: Bool) -> [BarFocus] {
-        (canGoBack ? [.back] : []) + (canGoForward ? [.forward] : []) + tabs.map(BarFocus.tab) + [.newTab, .more]
+    /// 标签栏上能走到的，从左到右（不能用的后退、前进跳过；无痕浏览时"+"前面多一个 Private）。关闭按钮不在这里面，见 barStep
+    nonisolated static func barItems(tabs: [String], canGoBack: Bool, canGoForward: Bool, privateBrowsing: Bool = false) -> [BarFocus] {
+        (canGoBack ? [.back] : []) + (canGoForward ? [.forward] : []) + tabs.map(BarFocus.tab)
+            + (privateBrowsing ? [.privateBrowsing] : []) + [.newTab, .more]
     }
 
-    var barItems: [BarFocus] { Self.barItems(tabs: barTabs.map(\.id), canGoBack: barCanGoBack, canGoForward: barCanGoForward) }
+    var barItems: [BarFocus] {
+        Self.barItems(tabs: barTabs.map(\.id), canGoBack: barCanGoBack, canGoForward: barCanGoForward, privateBrowsing: privateBrowsing)
+    }
 
     nonisolated static func step(in items: [BarFocus], from focus: BarFocus, by delta: Int) -> BarFocus? {
         guard let index = items.firstIndex(of: focus), items.indices.contains(index + delta) else { return nil }
@@ -1099,9 +1147,14 @@ final class BrowserStore: ObservableObject {
             open(tab)
             focusBar(on: .tab(id))   // 换过去，焦点留在标签栏上，可以接着换；按下回到网页（开始页上回地址栏）
         case .newTab:
-            // 总是再开一个空白标签页（开始页上也是），无痕的里面开的也是无痕的
-            newBlankTab(isPrivate: barIsPrivate, from: barCurrentID)
+            // 总是再开一个空白标签页（开始页上也是），无痕浏览时开的也是无痕的
+            newBlankTab(from: barCurrentID)
             focusBar(on: .newTab)   // 焦点留在"+"上：看得见新标签长出来，可以接着再开；按下到地址栏
+        case .privateBrowsing:
+            // 只有无痕浏览时才有：出来，普通的标签页回来。Private 不在了，焦点到它右边的"+"上
+            guard privateBrowsing else { return }
+            togglePrivateBrowsing()
+            focusBar(on: .newTab)
         case .more: _ = openMenu()
         case .close: break
         }
@@ -1120,15 +1173,15 @@ final class BrowserStore: ObservableObject {
 
     func activateMenu(_ item: MenuItem) {
         switch item {
-        case .newPrivateTab:
+        case .privateBrowsing:
             closeMenu()
-            newBlankTab(isPrivate: true, from: barCurrentID)
+            togglePrivateBrowsing()
         case .reload: closeMenu(); pageWebView?.reload()
         case .addFavorite: closeMenu(); addFavorite(currentPage)
         case .removeFavorite: closeMenu(); confirmRemoveFavorite(currentPage)   // 取消收藏先问
         case .zoom: break   // 换档是左右（和设置里的步进行一样），确认不做别的
         case .closeTab: closeMenu(); if let id = barCurrentID { closeTab(id) }
-        case .startPage: closeMenu(); newBlankTab(isPrivate: barIsPrivate, from: barCurrentID)
+        case .startPage: closeMenu(); newBlankTab(from: barCurrentID)
         case .history: closeMenu(); leaveBar(); openHistory()
         }
     }
@@ -1183,12 +1236,13 @@ final class BrowserStore: ObservableObject {
 
     /// 菜单里的一项快捷键。名字是 Apple 的菜单标题（rawValue 存在 NSMenuItem.representedObject 里）
     enum Shortcut: String, CaseIterable {
-        case newTab, newPrivateTab, openLocation, closeTab, back, forward, previousTab, nextTab, zoomIn, zoomOut, actualSize, showAllHistory
+        case newTab, privateBrowsing, openLocation, closeTab, back, forward, previousTab, nextTab, zoomIn, zoomOut, actualSize, showAllHistory
 
+        /// Private Browsing 是开关：开着时菜单里这一项打勾（main.swift 的 validateMenuItem）
         var title: String {
             switch self {
             case .newTab: "New Tab"
-            case .newPrivateTab: "New Private Tab"
+            case .privateBrowsing: "Private Browsing"
             case .openLocation: "Open Location…"
             case .closeTab: "Close Tab"
             case .back: "Back"
@@ -1206,7 +1260,7 @@ final class BrowserStore: ObservableObject {
         var key: (String, NSEvent.ModifierFlags) {
             switch self {
             case .newTab: ("t", [.command])
-            case .newPrivateTab: ("N", [.command, .shift])
+            case .privateBrowsing: ("N", [.command, .shift])
             case .openLocation: ("l", [.command])
             case .closeTab: ("w", [.command])
             case .back: ("[", [.command])
@@ -1217,6 +1271,15 @@ final class BrowserStore: ObservableObject {
             case .zoomOut: ("-", [.command])
             case .actualSize: ("0", [.command])
             case .showAllHistory: ("y", [.command])
+            }
+        }
+
+        /// 同一项的另外几个键（菜单里不显示，修饰键和 key 一样）：⌘N 也是新标签页（这里只有一个窗口），⌘= 也是放大（不用按 ⇧）
+        var hiddenKeys: [String] {
+            switch self {
+            case .newTab: ["n"]
+            case .zoomIn: ["="]
+            default: []
             }
         }
     }
@@ -1233,7 +1296,7 @@ final class BrowserStore: ObservableObject {
         if historyState != nil { return false }   // History 开着：⌘Y 也不再开一次，返回关它
         switch shortcut {
         case .showAllHistory: return true
-        case .newTab, .newPrivateTab, .openLocation: return true
+        case .newTab, .privateBrowsing, .openLocation: return true
         case .closeTab: return barCurrentID != nil && tabsClosable
         case .back: return barCanGoBack
         case .forward: return barCanGoForward
@@ -1250,7 +1313,7 @@ final class BrowserStore: ObservableObject {
         menu = nil
         switch shortcut {
         case .newTab: activate(.newTab)
-        case .newPrivateTab: activateMenu(.newPrivateTab)
+        case .privateBrowsing: togglePrivateBrowsing()
         case .openLocation:
             if let id = barCurrentID {
                 if !(editing && editingInBar) { tapBar(.tab(id)) }   // 和选正在看的那个标签一样：就地改地址
@@ -1290,7 +1353,7 @@ extension BrowserStore: ProfileApp {
         let saved = storage.load()
         tabs = saved.tabs
         activeID = saved.active
-        lastNormalID = saved.active
+        normal = nil
         states = [:]
         snapshots.removeAllObjects()
         privateStore = nil
