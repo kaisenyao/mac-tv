@@ -161,10 +161,24 @@ struct DisplayPickerSheet: View {
             let screen = NSScreen.screens.first { screen in
                 CGDisplayCreateUUIDFromDisplayID(screen.displayID).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String } == id
             }
-            return screen.map { CGDisplayIsBuiltin($0.displayID) != 0 } == true ? "macbook" : "tv"
+            return screen?.symbol ?? NSScreen.externalSymbol
         default: return "display"
         }
     }
+}
+
+extension NSScreen {
+    /// A TV or a monitor, wherever one is shown (the display list, Control Center's Display and Audio): Apple TV's
+    /// own TV glyph, in outline.
+    static let externalSymbol = "tv"
+
+    /// This screen's symbol: the Mac's own, or a TV's.
+    var symbol: String { CGDisplayIsBuiltin(displayID) != 0 ? "macbook" : Self.externalSymbol }
+}
+
+extension TVController {
+    /// The symbol of the screen Mac TV is on, for Control Center's Display.
+    var displaySymbol: String { (window?.screen ?? NSScreen.main)?.symbol ?? NSScreen.externalSymbol }
 }
 
 struct DisplayBrightnessSlider: View {
