@@ -918,27 +918,27 @@ private struct MoviesMenuView: View {
     var body: some View {
         let items = tv.moviesMenuItems(menu)
         let library = tv.movieLibrary
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             if menu.confirming, case .source(let id) = menu.target {
                 Text("Remove “\(library.source(id)?.name ?? "")”?")
                     .font(.tv(.callout, emphasized: true))
-                    .padding(.horizontal, 22).padding(.vertical, 12)
+                    .padding(.horizontal, TVMenu.leading).padding(.vertical, 12)
             }
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 let focused = index == menu.index
                 let (symbol, title, on) = describe(item)
-                HStack(spacing: 18) {
-                    Image(systemName: symbol).font(.tvMenuSymbol).frame(width: 36)
+                HStack(spacing: TVMenu.symbolGap) {
+                    Image(systemName: symbol).font(.tvMenuSymbol).frame(width: TVMenu.symbolColumn)
                     Text(title).font(.tvMenuItem).fixedSize()
                     Spacer(minLength: 20)
                     if let on { SettingSwitchMini(on: on) }
                 }
                 .foregroundStyle(focused ? (item == .confirmRemove ? .white : .black) : .white.opacity(0.8))
-                .padding(.horizontal, 22)
-                .frame(minWidth: 460, minHeight: 74)
+                .padding(.horizontal, TVMenu.leading)
+                .frame(minWidth: 460, minHeight: TVMenu.row)
                 .background {
                     if focused {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        PillOutline()
                             .fill(item == .confirmRemove ? Color.destructive : .white)
                     }
                 }
@@ -947,8 +947,8 @@ private struct MoviesMenuView: View {
                 .onTapGesture { tv.tapMoviesMenu(index) }
             }
         }
-        .padding(16)
-        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .padding(TVMenu.inset)
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .fixedSize()
         .animation(Motion.slide, value: menu)

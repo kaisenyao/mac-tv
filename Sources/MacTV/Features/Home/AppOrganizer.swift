@@ -520,22 +520,22 @@ struct AppMenuCard: View {
     /// How tall the card is, to keep it on the screen: its rows, or the question and its two answers.
     static func height(_ menu: AppOrganizer.Menu, actions: [AppOrganizer.Action]) -> CGFloat {
         let count = actions.count
-        let line: CGFloat = actions.contains(where: isQuick) && !actions.allSatisfy(isQuick) ? 21 : 0   // under quick actions
+        let line: CGFloat = actions.contains(where: isQuick) && !actions.allSatisfy(isQuick) ? TVMenu.divider * 2 + 1 : 0
         switch menu {
-        case .actions: return 44 + CGFloat(count) * 66 + CGFloat(max(0, count - 1)) * 10 + line
-        case .confirmDelete: return 316   // the question (about 60), Cancel and Delete (66 each), their gaps and padding
+        case .actions: return TVMenu.height(rows: count) + line
+        case .confirmDelete: return TVMenu.height(rows: 2) + 82   // the question (about 60) and the space round it
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             switch menu {
             case .actions(let row):
                 let actions = tv.organizerActions(for: id)
                 ForEach(Array(actions.enumerated()), id: \.offset) { offset, action in
                     // A line between the app's quick actions and Home's own (as on an iPhone's Haptic Touch menu).
                     if offset > 0, case .quick = actions[offset - 1], !Self.isQuick(action) {
-                        Rectangle().fill(.white.opacity(0.18)).frame(height: 1).padding(.horizontal, 12).padding(.vertical, 5)
+                        TVMenuDivider()
                     }
                     switch action {
                     case .quick(let quick):
@@ -560,7 +560,9 @@ struct AppMenuCard: View {
                 Text("Delete “\(name)” for Everyone?")
                     .font(.tv(.callout, emphasized: true))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, TVMenu.leading - TVMenu.inset)
+                    .padding(.top, 10)
+                    .padding(.bottom, 12)
                 menuRow("Cancel", systemImage: nil, focused: row == AppOrganizer.Menu.cancelRow, destructive: false) {
                     tv.chooseOrganizerMenuRow(AppOrganizer.Menu.cancelRow)
                 }
@@ -569,25 +571,29 @@ struct AppMenuCard: View {
                 }
             }
         }
-        .padding(22)
+        .padding(TVMenu.inset)
         .frame(width: Self.width, alignment: .leading)
-        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .foregroundStyle(.white)
     }
 
     private func menuRow(_ title: String, systemImage: String?, focused: Bool, destructive: Bool,
                          action: @escaping () -> Void) -> some View {
-        HStack(spacing: 16) {
-            if let systemImage { Image(systemName: systemImage).frame(width: 34) }
-            Text(title)
+        // The measures every menu shares (TVMenu): the symbols in one column, the titles on one line, a row with no
+        // symbol too; the highlight a whole capsule.
+        HStack(spacing: TVMenu.symbolGap) {
+            Group {
+                if let systemImage { Image(systemName: systemImage).font(.tvMenuSymbol) } else { Color.clear.frame(height: 1) }
+            }
+            .frame(width: TVMenu.symbolColumn)
+            Text(title).font(.tvMenuItem).lineLimit(1)
             Spacer(minLength: 0)
         }
-        .font(.tv(.body, emphasized: true))
         .foregroundStyle(destructive ? Color.destructive : (focused ? .black : .white))
-        .padding(.horizontal, 22)
-        .frame(height: 66)
-        .focusPlatter(RoundedRectangle(cornerRadius: 18, style: .continuous), focused: focused, glass: false)
+        .padding(.horizontal, TVMenu.leading)
+        .frame(height: TVMenu.row)
+        .focusPlatter(Capsule(), focused: focused, glass: false)
         .contentShape(Rectangle())
         .onTapGesture(perform: action)
     }

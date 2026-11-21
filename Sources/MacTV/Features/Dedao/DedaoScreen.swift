@@ -677,7 +677,7 @@ private struct DedaoMenuLayer: View {
 
     /// 菜单宽度：同网易云的 360；右边要写值、有"›"的宽一点，字不挤
     static func width(_ menu: DedaoStore.Menu) -> CGFloat {
-        menu.items.contains { !$0.detail.isEmpty || $0.chevron || $0.action == .sleepMenu } ? 420 : 360
+        menu.items.contains { !$0.detail.isEmpty || $0.chevron || $0.action == .sleepMenu } ? 460 : 400
     }
     private var canvas: CGSize { proxy.size }
 
@@ -707,12 +707,11 @@ private struct DedaoMenuLayer: View {
     }
 
     /// 一项多高（加上间隔）、一次最多露出几项（"左边栏显示"有十几个分类：高亮走到中间以后，列表在底下滚）
-    private static let step: CGFloat = 82
     private static let visible = 10
 
     /// 菜单多高
     private func height(_ menu: DedaoStore.Menu) -> CGFloat {
-        CGFloat(min(menu.items.count, Self.visible)) * Self.step - 8 + 32 + (menu.title == nil ? 0 : 56)
+        TVMenu.height(rows: min(menu.items.count, Self.visible)) + (menu.title == nil ? 0 : 56)
     }
 
     /// 账号菜单：账号正下方，右边对齐。设置里的一列：那一行下面放得下就在下面，放不下就在上面，
@@ -749,18 +748,18 @@ private struct DedaoMenuLayer: View {
                     .font(.tvMenuDetail)
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
-                    .padding(.horizontal, 22)
-                    .frame(width: Self.width(menu) - 32, height: 44, alignment: .leading)
+                    .padding(.horizontal, TVMenu.leading)
+                    .frame(width: Self.width(menu) - TVMenu.inset * 2, height: 44, alignment: .leading)
             }
-            list(items, index: index, danger: danger, width: Self.width(menu) - 32)
-                .offset(y: -CGFloat(first) * Self.step)
-                .frame(width: Self.width(menu) - 32, height: CGFloat(shown) * Self.step - 8, alignment: .top)
+            list(items, index: index, danger: danger, width: Self.width(menu) - TVMenu.inset * 2)
+                .offset(y: -CGFloat(first) * TVMenu.row)
+                .frame(width: Self.width(menu) - TVMenu.inset * 2, height: CGFloat(shown) * TVMenu.row, alignment: .top)
                 .clipped()
                 // 上下还有没露出来的：那一头淡出去（一整条渐变，不拼接，见 ListFadeMask）
                 .mask { ListFadeMask(above: first > 0, below: first + shown < items.count, length: 40) }
         }
-        .padding(16)
-        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .padding(TVMenu.inset)
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .fixedSize()
         .animation(Motion.focus, value: index)
@@ -769,14 +768,14 @@ private struct DedaoMenuLayer: View {
 
     /// 一列选项，白色高亮在后面跟着走
     private func list(_ items: [DedaoStore.MenuItem], index: Int, danger: Bool, width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: Self.step - 74) {
+        VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.offset) { row, item in
                     let focused = row == index
-                    HStack(spacing: 18) {
+                    HStack(spacing: TVMenu.symbolGap) {
                         if item.symbol.isEmpty {
-                            Color.clear.frame(width: 36, height: 1)   // 没打勾的档位：字照样对齐
+                            Color.clear.frame(width: TVMenu.symbolColumn, height: 1)   // 没打勾的档位：字照样对齐
                         } else {
-                            Image(systemName: item.symbol).font(.tvMenuSymbol).frame(width: 36)
+                            Image(systemName: item.symbol).font(.tvMenuSymbol).frame(width: TVMenu.symbolColumn)
                         }
                         Text(item.title).font(.tvMenuItem).lineLimit(1)
                         Spacer(minLength: 0)
@@ -792,14 +791,13 @@ private struct DedaoMenuLayer: View {
                         }
                     }
                     .foregroundStyle(focused ? (danger ? .white : .black) : .white.opacity(0.8))
-                    .padding(.horizontal, 22)
-                    .frame(width: width, height: 74)
+                    .padding(.horizontal, TVMenu.leading)
+                    .frame(width: width, height: TVMenu.row)
                     .contentShape(Rectangle())
-                    // 一组到这里为止：在和下一行的空隙里画一条细线（不占地方，高亮照样一格一格走）
+                    // 一组到这里为止：在和下一行交界的地方画一条细线（不占地方，高亮照样一格一格走）
                     .overlay(alignment: .bottom) {
                         if item.groupEnd {
-                            Rectangle().fill(.white.opacity(0.18)).frame(height: 1).padding(.horizontal, 22)
-                                .offset(y: (Self.step - 74) / 2)
+                            Rectangle().fill(.white.opacity(0.18)).frame(height: 1).padding(.horizontal, TVMenu.leading)
                         }
                     }
                     .onHover { inside in if inside { store.hoverMenu(row) } }
@@ -807,10 +805,10 @@ private struct DedaoMenuLayer: View {
                 }
         }
         .background(alignment: .top) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            PillOutline()
                 .fill(danger ? Color.destructive : .white)
-                .frame(height: 74)
-                .offset(y: CGFloat(index) * Self.step)
+                .frame(height: TVMenu.row)
+                .offset(y: CGFloat(index) * TVMenu.row)
         }
     }
 }

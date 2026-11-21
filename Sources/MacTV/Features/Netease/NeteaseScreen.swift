@@ -37,7 +37,7 @@ struct NeteaseScreen: View {
     /// 播放界面已经完全盖住了：下面的首页、歌单页先不画（看不见，不用跟着每次换歌、换句重算）
     @State private var covered = false
 
-    private let menuWidth: CGFloat = 360
+    private let menuWidth: CGFloat = 400
     private let margin: CGFloat = 120
     private let cardSize: CGFloat = 300
     private let cardGap: CGFloat = 40
@@ -274,17 +274,17 @@ struct NeteaseScreen: View {
                     .font(.tvMenuDetail)
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
-                    .padding(.horizontal, 22)
-                    .frame(width: menuWidth - 32, height: 44, alignment: .leading)
+                    .padding(.horizontal, TVMenu.leading)
+                    .frame(width: menuWidth - TVMenu.inset * 2, height: 44, alignment: .leading)
             }
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.offset) { row, item in
                     let focused = row == index
-                    HStack(spacing: 18) {
+                    HStack(spacing: TVMenu.symbolGap) {
                         if item.symbol.isEmpty {
-                            Color.clear.frame(width: 36, height: 1)   // 没有图标的一行（比如没打勾的档位）：字照样对齐
+                            Color.clear.frame(width: TVMenu.symbolColumn, height: 1)   // 没有图标的一行（比如没打勾的档位）：字照样对齐
                         } else {
-                            Image(systemName: item.symbol).font(.tvMenuSymbol).frame(width: 36)
+                            Image(systemName: item.symbol).font(.tvMenuSymbol).frame(width: TVMenu.symbolColumn)
                         }
                         if store.naming == item.action {
                             TextField("歌单标题", text: $store.newName)
@@ -307,23 +307,23 @@ struct NeteaseScreen: View {
                         }
                     }
                     .foregroundStyle(focused ? (danger ? .white : .black) : .white.opacity(0.8))
-                    .padding(.horizontal, 22)
-                    .frame(width: menuWidth - 32, height: 74)
+                    .padding(.horizontal, TVMenu.leading)
+                    .frame(width: menuWidth - TVMenu.inset * 2, height: TVMenu.row)
                     .contentShape(Rectangle())
                     .onHover { inside in if inside { store.hoverMenu(row) } }
                     .onTapGesture { store.tapMenu(row) }
                 }
             }
             .background(alignment: .top) {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                PillOutline()
                     .fill(danger ? Color.destructive : .white)   // 确认"删除""退出登录""取消收藏"时，高亮是红的
-                    .frame(height: 74)
-                    .offset(y: CGFloat(index) * 82)
+                    .frame(height: TVMenu.row)
+                    .offset(y: CGFloat(index) * TVMenu.row)
                     .opacity(items.isEmpty ? 0 : 1)
             }
         }
-        .padding(16)
-        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .padding(TVMenu.inset)
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .fixedSize()
         .onChange(of: store.naming) { _, naming in namingField = naming != nil }
@@ -335,7 +335,7 @@ struct NeteaseScreen: View {
     /// 菜单摆在哪、从哪个点长出来：贴着它是从哪儿弹出来的，出不了屏幕
     private func menuPlacement(_ menu: NeteaseStore.Menu, _ anchors: [String: Anchor<CGRect>],
                                _ proxy: GeometryProxy) -> (origin: CGPoint, size: CGSize, from: CGPoint) {
-        let size = CGSize(width: menuWidth, height: CGFloat(menu.items.count) * 82 + 24 + (menu.title == nil ? 0 : 56))
+        let size = CGSize(width: menuWidth, height: TVMenu.height(rows: menu.items.count) + (menu.title == nil ? 0 : 56))
         let screen = proxy.size
         let key = switch menu.anchor {
         case .nowPlaying: "more"

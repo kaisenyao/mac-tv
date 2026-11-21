@@ -672,42 +672,41 @@ enum BrowserZoomLevel: CaseIterable, Equatable {
 
 // MARK: "⋯"菜单
 
-/// 从"⋯"下面拉出来的菜单（tvOS 菜单的样子：一块圆角板，选中的那一行变白）。
+/// 从"⋯"下面拉出来的菜单（各处菜单同一套尺寸，见 TVMenu：一块圆角板，选中的那一行是一整条白色胶囊）。
 /// 网页缩放是一行"Zoom  ‹ Medium ›"，和设置里的步进行一样：‹ › 只在这一行选中时出来，左右换一档，到头停住
 struct BrowserMenu: View {
     @ObservedObject var store: BrowserStore
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 34, style: .continuous)
-        return VStack(spacing: 6) {
+        return VStack(spacing: 0) {
             // 开始页上只有 Private Browsing、Show All History、Close Tab（见 BrowserStore.menuRows）
             ForEach(store.menuRows, id: \.self) { items in
                 if let item = items.first { row(item) }
             }
         }
-        .padding(12)
+        .padding(TVMenu.inset)
         .frame(width: 640)
-        .tvPanelSurface(in: shape)
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .environment(\.colorScheme, .dark)
     }
 
     private func row(_ item: BrowserStore.MenuItem) -> some View {
-        let lit = store.menu == item, shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
-        return HStack(spacing: 20) {
-            Image(systemName: item.symbol).font(.tv(.caption1, emphasized: true)).frame(width: 36)
+        let lit = store.menu == item, shape = Capsule()   // 各处菜单同一套尺寸，见 TVMenu
+        return HStack(spacing: TVMenu.symbolGap) {
+            Image(systemName: item.symbol).font(.tvMenuSymbol).frame(width: TVMenu.symbolColumn)
             Text(item.name)
             Spacer(minLength: 0)
             if item == .zoom { zoomValue(lit: lit) }
             // 开关：开着时打勾（和设置里选中的一行一样）
             if item == .privateBrowsing, store.privateBrowsing { Image(systemName: "checkmark").font(.tv(.caption1, emphasized: true)) }
         }
-        .font(.tv(.callout))
+        .font(.tvMenuItem)
         .foregroundStyle(lit ? .black : .white.opacity(0.9))
-        .padding(.horizontal, 24)
-        .frame(height: 72)
-        .background(shape.fill(lit ? Color.white : .clear))
-        .browserLift(focused: lit, in: shape, scale: 1.03, shadow: 12)
+        .padding(.horizontal, TVMenu.leading)
+        .frame(height: TVMenu.row)
+        // 高亮不放大：和别处的菜单一样，一整条胶囊正好嵌在面板里（放大的话两头就贴到面板边上了）
+        .background(PillOutline().fill(lit ? Color.white : .clear))
         .animation(Motion.focus, value: lit)
         .contentShape(shape)
         .onTapGesture { store.tapMenu(item) }

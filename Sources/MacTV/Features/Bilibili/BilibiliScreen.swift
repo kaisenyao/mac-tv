@@ -240,11 +240,11 @@ struct BilibiliScreen: View {
     private var accountMenu: some View {
         let open = store.accountMenuOpen
         let actions = store.accountActions
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
                 let focused = index == store.accountIndex
-                HStack(spacing: 18) {
-                    Image(systemName: symbol(for: action)).font(.tvMenuSymbol).frame(width: 36)
+                HStack(spacing: TVMenu.symbolGap) {
+                    Image(systemName: symbol(for: action)).font(.tvMenuSymbol).frame(width: TVMenu.symbolColumn)
                     Text(title(for: action)).font(.tvMenuItem).lineLimit(1)
                     Spacer(minLength: 0)
                     if action == .switchAccount {   // 进下一层（登录过的账号）
@@ -252,21 +252,21 @@ struct BilibiliScreen: View {
                     }
                 }
                 .foregroundStyle(focused ? (action == .confirmLogout ? .white : .black) : .white.opacity(0.8))
-                .padding(.horizontal, 22)
-                .frame(width: 300, height: 74)
+                .padding(.horizontal, TVMenu.leading)
+                .frame(width: 330, height: TVMenu.row)
                 .contentShape(Rectangle())
                 .onTapGesture { store.tapAccountAction(index) }
             }
         }
         .background(alignment: .top) {
             let index = min(store.accountIndex, max(0, actions.count - 1))
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            PillOutline()
                 .fill(actions.indices.contains(index) && actions[index] == .confirmLogout ? Color.destructive : .white)
-                .frame(height: 74)
-                .offset(y: CGFloat(index) * 82)
+                .frame(height: TVMenu.row)
+                .offset(y: CGFloat(index) * TVMenu.row)
         }
-        .padding(16)
-        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .padding(TVMenu.inset)
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .fixedSize()
         .scaleEffect(open ? 1 : 0.04, anchor: .topTrailing)
@@ -481,29 +481,29 @@ struct BilibiliScreen: View {
         let labels: [BilibiliStore.CardAction: (String, String)] = [.upPage: ("person.crop.circle", "UP主主页"),
                                                                     .favorite: ("star", "收藏"),
                                                                     .watchLater: ("clock", "稍后再看")]
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
                 let focused = index == store.cardMenuIndex
-                HStack(spacing: 18) {
-                    Image(systemName: labels[action]?.0 ?? "circle").font(.tvMenuSymbol).frame(width: 36)
+                HStack(spacing: TVMenu.symbolGap) {
+                    Image(systemName: labels[action]?.0 ?? "circle").font(.tvMenuSymbol).frame(width: TVMenu.symbolColumn)
                     Text(labels[action]?.1 ?? "").font(.tvMenuItem)
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(focused ? .black : .white.opacity(0.8))
-                .padding(.horizontal, 22)
-                .frame(width: 320, height: 74)
+                .padding(.horizontal, TVMenu.leading)
+                .frame(width: 350, height: TVMenu.row)
                 .contentShape(Rectangle())
                 .onTapGesture { store.tapCardMenu(index) }
             }
         }
         .background(alignment: .top) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.white)
-                .frame(height: 74)
-                .offset(y: CGFloat(min(store.cardMenuIndex, max(0, actions.count - 1))) * 82)
+            PillOutline().fill(.white)
+                .frame(height: TVMenu.row)
+                .offset(y: CGFloat(min(store.cardMenuIndex, max(0, actions.count - 1))) * TVMenu.row)
                 .opacity(actions.isEmpty ? 0 : 1)
         }
-        .padding(16)
-        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .padding(TVMenu.inset)
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .fixedSize()
         .scaleEffect(open ? 1 : 0.04, anchor: .topLeading)
@@ -518,8 +518,8 @@ struct BilibiliScreen: View {
     /// 清空搜索历史的那一问（和主屏上"Delete for Everyone"前问的那一句同一种样子）：一句话，下面"取消"（默认）和红色的"清空"。
     /// 贴在"清空"那个胶囊下面，出不了屏幕；屏幕压暗，点暗处同"取消"
     private static let confirmWidth: CGFloat = 380
-    /// 大约多高（问的那一句、两项各 66、中间的间隔和四边的边距）：只用来让它待在屏幕里
-    private static let confirmHeight: CGFloat = 250
+    /// 大约多高（问的那一句和它上下的空、两行）：只用来让它待在屏幕里
+    private static let confirmHeight: CGFloat = TVMenu.height(rows: 2) + 82
 
     private func clearConfirmLayer(_ chip: Anchor<CGRect>?, _ proxy: GeometryProxy) -> some View {
         let open = store.clearConfirmOpen
@@ -547,17 +547,19 @@ struct BilibiliScreen: View {
     }
 
     private var clearConfirmCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("清空搜索历史？")
                 .font(.tv(.callout, emphasized: true))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.bottom, 8)
+                .padding(.horizontal, TVMenu.leading - TVMenu.inset)
+                .padding(.top, 10)
+                .padding(.bottom, 12)
             clearConfirmRow("取消", systemImage: nil, choice: .cancel, destructive: false)
             clearConfirmRow("清空", systemImage: "trash", choice: .clear, destructive: true)
         }
-        .padding(22)
+        .padding(TVMenu.inset)
         .frame(width: Self.confirmWidth, alignment: .leading)
-        .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .tvPanelSurface(in: TVMenu.panel)
         .tvShadow(.float)
         .foregroundStyle(.white)
         .animation(Motion.focus, value: store.clearChoice)
@@ -566,15 +568,19 @@ struct BilibiliScreen: View {
     private func clearConfirmRow(_ title: String, systemImage: String?, choice: BilibiliStore.ClearChoice,
                                  destructive: Bool) -> some View {
         let focused = store.clearChoice == choice
-        return HStack(spacing: 16) {
-            if let systemImage { Image(systemName: systemImage).font(.tvMenuSymbol).frame(width: 34) }
+        // 各处菜单同一套尺寸（TVMenu）：图标在同一列，字在同一条线上（没有图标的一行也是），高亮是一整条胶囊
+        return HStack(spacing: TVMenu.symbolGap) {
+            Group {
+                if let systemImage { Image(systemName: systemImage).font(.tvMenuSymbol) } else { Color.clear.frame(height: 1) }
+            }
+            .frame(width: TVMenu.symbolColumn)
             Text(title).font(.tvMenuItem)
             Spacer(minLength: 0)
         }
         .foregroundStyle(destructive ? Color.destructive : (focused ? .black : .white))
-        .padding(.horizontal, 22)
-        .frame(height: 66)
-        .focusPlatter(RoundedRectangle(cornerRadius: 18, style: .continuous), focused: focused, glass: false)
+        .padding(.horizontal, TVMenu.leading)
+        .frame(height: TVMenu.row)
+        .focusPlatter(Capsule(), focused: focused, glass: false)
         .contentShape(Rectangle())
         .onTapGesture { store.tapClearChoice(choice) }
     }
