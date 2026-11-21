@@ -80,7 +80,11 @@ struct ShelfPage<Content: View>: NSViewRepresentable {
     struct Hosted: View {
         let content: Content
         let environment: EnvironmentValues
-        var body: some View { content.environment(\.self, environment).ignoresSafeArea() }
+        // From the top left corner: a page never sits off to the left in a box measured for a smaller one
+        var body: some View {
+            content.environment(\.self, environment).ignoresSafeArea()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
     }
 
     final class Coordinator {
@@ -192,14 +196,21 @@ final class ShelfPageView<Hosted: View>: NSView {
         back?.box.layer?.opacity = 0
         front.box.layer?.opacity = 1
         front.controller.rootView = hosted
-        sizes = [:]
+        remeasure()
     }
 
     /// 同一页里的东西变了：在原地重画
     func update(_ hosted: Hosted) {
         if pending != nil { pending = hosted; return }
         front.controller.rootView = hosted
+        remeasure()
+    }
+
+    /// New content: the sizes measured for the last are forgotten and SwiftUI asks again (a wider page, say "继续学习"
+    /// with its progress after a narrower one, gets its own width instead of being squeezed into the old box)
+    private func remeasure() {
         sizes = [:]
+        invalidateIntrinsicContentSize()
     }
 
     /// 翻页：前面那一层滑走、淡掉；后面那一层换上新的一页，晚 0.14 秒从 offset 那边弹簧滑进来、淡进来
@@ -218,6 +229,7 @@ final class ShelfPageView<Hosted: View>: NSView {
                 guard let self, self.pendingTurn == turn, let hosted = self.pending else { return }
                 self.pending = nil
                 coming.controller.rootView = hosted
+                self.remeasure()
             }
         } else {
             coming = Layer(hosted)
@@ -225,6 +237,7 @@ final class ShelfPageView<Hosted: View>: NSView {
             coming.controller.view.frame = coming.box.bounds
             addSubview(coming.box)
             pending = nil
+            remeasure()
         }
         // 滑进来的那一层放在上面
         addSubview(coming.box, positioned: .above, relativeTo: leaving.box)

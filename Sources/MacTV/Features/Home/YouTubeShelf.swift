@@ -240,6 +240,9 @@ extension TVController {
     func openYouTubeVideo(_ id: String) {
         guard let base = services.first(where: { $0.id == "youtube" }) ?? Catalog.services.first(where: { $0.id == "youtube" }),
               let url = YouTubeTV.watch(id) else { return }
+        // YouTube kept in the background since Home would come back as it was: the video picked here goes first
+        // (the sign-in stays: it's the profile's website data, not the page)
+        playbackCoordinator.dropParkedWeb(base.id)
         open(Service(id: base.id, name: base.name, kind: .web(url), icon: base.icon, iconFile: base.iconFile,
                      accent: base.accent, deep: base.deep, userAgent: base.userAgent, dpadNavigation: base.dpadNavigation))
     }
