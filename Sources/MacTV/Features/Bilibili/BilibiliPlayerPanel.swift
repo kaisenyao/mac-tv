@@ -11,11 +11,15 @@ struct BilibiliPlayerPanel: View {
     private let rowHeight: CGFloat = 76
     private let gap: CGFloat = 8
     private let pink = Color(hex: "#FB7299")
+    /// 面板收起时正开着的小列表：推回去的途中还照原样画着，面板和里面的东西（连同白色高亮）一起收回去，
+    /// 不会在半路换成第一层、白色高亮在空中淡掉
+    @State private var closingList: BilibiliNativePlayer.PanelList?
 
     var body: some View {
         let open = player.panelVisible
+        let shownList = open ? player.panelList : closingList
         VStack(alignment: .leading, spacing: 14) {
-            if let list = player.panelList {
+            if let list = shownList {
                 listHeader(list)
                 options(list)
             } else {
@@ -35,8 +39,10 @@ struct BilibiliPlayerPanel: View {
         .animation(BiliMotion.slide, value: open)
         .animation(BiliMotion.slide, value: player.panelIndex)
         .animation(BiliMotion.slide, value: player.panelListIndex)
-        .animation(Motion.press, value: player.panelList)
+        .animation(Motion.press, value: shownList)
         .animation(Motion.press, value: player.relation)
+        .onChange(of: player.panelList) { old, _ in if !player.panelVisible { closingList = old } }
+        .onChange(of: player.panelVisible) { _, visible in if visible { closingList = nil } }
     }
 
     // MARK: 第一层：一行一项
