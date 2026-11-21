@@ -189,16 +189,24 @@ import Testing
     }
 
     @Test func aLongNameIsSetToFit() {
-        func fit(_ text: String) -> (lines: [String], scale: CGFloat) { ControlCenterView.fitted(text, lines: 2) }
+        func fit(_ text: String, _ lines: Int = 2) -> (lines: [String], scale: CGFloat, fits: Bool) { ControlCenterView.fitted(text, lines: lines) }
+        func drawn(_ text: String, _ scale: CGFloat) -> CGFloat {
+            (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 23 * scale, weight: .medium)]).width
+        }
         #expect(fit("Speakers").lines == ["Speakers"] && fit("Speakers").scale == 1)   // fits: one line, full size
         #expect(fit("Sleep Timer").lines == ["Sleep", "Timer"] && fit("Sleep Timer").scale == 1)
         #expect(fit("Mac mini Speakers").lines == ["Mac mini", "Speakers"])
-        // Not "MacBook / Pro Speakers"; and "MacBook Pro" is wider than the tile's text, so both lines shrink together
+        // Not "MacBook / Pro Speakers"; "MacBook Pro" is wider than the tile's text (110 points), so both lines shrink
+        // together, to a size at which it fits with room to spare
         let macBook = fit("MacBook Pro Speakers")
-        #expect(macBook.lines == ["MacBook Pro", "Speakers"] && macBook.scale < 1 && macBook.scale >= 0.75)
-        // One word can't break: it shrinks. Asked for one line (a tile with a value under its title), nothing breaks
-        #expect(fit("XG27UCSR").lines == ["XG27UCSR"] && fit("XG27UCSR").scale < 1)
-        #expect(ControlCenterView.fitted("Game Controller", lines: 1).lines == ["Game Controller"])
+        #expect(macBook.lines == ["MacBook Pro", "Speakers"] && macBook.scale < 1 && macBook.fits)
+        #expect(drawn("MacBook Pro", macBook.scale) <= 106)
+        // One word can't break: it shrinks
+        #expect(fit("XG27UCSR").lines == ["XG27UCSR"] && fit("XG27UCSR").scale < 1 && fit("XG27UCSR").fits)
+        // A title with a value under it has one line; one too long for that even at its smallest doesn't fit (the
+        // tile then gives it both lines and drops the value)
+        #expect(fit("Siri Remote", 1).fits && drawn("Siri Remote", fit("Siri Remote", 1).scale) <= 106)
+        #expect(!fit("Game Controller", 1).fits && fit("Game Controller").lines == ["Game", "Controller"] && fit("Game Controller").fits)
     }
 
     @Test func remotesSaysWhatIsConnected() throws {

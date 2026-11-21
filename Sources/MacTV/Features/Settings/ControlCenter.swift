@@ -390,24 +390,33 @@ struct ControlCenterView: View {
     private static let tileTextLeading: CGFloat = 88
     private static let tileText = Font.tv(.caption2)
     private static func tileText(_ scale: CGFloat) -> Font { .system(size: TVText.caption2.size * scale, weight: .medium) }
-    /// The text's own width: to 16 points short of the tile's edge, clear of its rounded end.
-    private static let tileTextWidth = column - tileTextLeading - 16
+    /// The text's own width: to 8 points short of the tile's edge.
+    private static let tileTextWidth = column - tileTextLeading - 8
 
     /// A tile's text set to fit its width: one line as it is; a name of several words that doesn't fit, over two
     /// lines, broken where they come out most even (of breaks about as even, the later: "MacBook Pro / Speakers", not
     /// "MacBook / Pro Speakers"); and all of it drawn smaller, down to three quarters, when a line is still too long
     /// (one long word, a display's model name). Worked out here rather than left to the text to wrap and shrink,
     /// which breaks a line it could have shrunk and then cuts the next.
-    static func fitted(_ text: String, lines: Int) -> (lines: [String], scale: CGFloat) {
-        let font = NSFont.systemFont(ofSize: TVText.caption2.size, weight: .medium)
-        func width(_ text: String) -> CGFloat { (text as NSString).size(withAttributes: [.font: font]).width }
-        func scale(_ longest: CGFloat) -> CGFloat { max(0.75, min(1, tileTextWidth / longest)) }
+    static func fitted(_ text: String, lines: Int) -> (lines: [String], scale: CGFloat, fits: Bool) {
+        func width(_ text: String, _ scale: CGFloat = 1) -> CGFloat {
+            (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: TVText.caption2.size * scale, weight: .medium)]).width
+        }
+        // The largest size, down to three quarters, at which every line fits with 4 points to spare. Measured at
+        // each size rather than scaled from the full one: the system font spaces its letters wider as it gets smaller.
+        func set(_ lines: [String]) -> (lines: [String], scale: CGFloat, fits: Bool) {
+            let room = tileTextWidth - 4
+            for step in 0...25 {
+                let scale = 1 - CGFloat(step) / 100
+                if lines.allSatisfy({ width($0, scale) <= room }) { return (lines, scale, true) }
+            }
+            return (lines, 0.75, false)
+        }
         let words = text.split(separator: " ").map(String.init)
-        guard lines > 1, words.count > 1, width(text) > tileTextWidth else { return ([text], scale(width(text))) }
+        guard lines > 1, words.count > 1, width(text) > tileTextWidth - 4 else { return set([text]) }
         let breaks = (1..<words.count).map { [words[..<$0].joined(separator: " "), words[$0...].joined(separator: " ")] }
         func longest(_ pair: [String]) -> CGFloat { max(width(pair[0]), width(pair[1])) }
-        let best = breaks.reversed().min { Int(longest($0) / 8) < Int(longest($1) / 8) }!   // to 8 points; of equals, the later
-        return (best, scale(longest(best)))
+        return set(breaks.reversed().min { Int(longest($0) / 8) < Int(longest($1) / 8) }!)   // to 8 points; of equals, the later
     }
 
     /// The blue of a connected remote or the sound output, as on Apple TV.
@@ -613,7 +622,11 @@ struct ControlCenterView: View {
                     }
                 }
                 .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
-                let name = Self.fitted(title, lines: value == nil ? 2 : 1)
+                // A title too long for one line even at its smallest takes both lines, and its value gives way
+                // ("Game / Controller" rather than "Game Contr…" over its battery)
+                let oneLine = Self.fitted(title, lines: 1)
+                let value = oneLine.fits ? value : nil
+                let name = value == nil ? Self.fitted(title, lines: 2) : oneLine
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(name.lines, id: \.self) { Text($0).font(Self.tileText(name.scale)) }
                     if let value {
@@ -622,6 +635,7 @@ struct ControlCenterView: View {
                     }
                 }
                 .lineLimit(1)
+                .minimumScaleFactor(0.9)   // a last resort: a line can't break here, so this only ever shrinks it
                 .frame(width: Self.tileTextWidth, alignment: .leading)
             }
             .padding(.leading, Self.row / 2 - Self.tileGlyph.width / 2)
