@@ -53,12 +53,18 @@ extension View {
     }
 
     /// tvOS focus on a control: a solid white platter when focused, the control's glass otherwise. Tinting the
-    /// glass white instead reads milky grey over dark artwork, and dark text on it loses contrast. The glass
-    /// switches to `.identity` rather than going away, so focus moving never changes the view's identity.
-    func focusPlatter<S: InsettableShape>(_ shape: S, focused: Bool, color: Color = .white, glass: Bool = true) -> some View {
+    /// glass white instead reads milky grey over dark artwork, and dark text on it loses contrast.
+    /// The glass itself never changes with focus; the platter is laid on it. Switched off under the platter and on
+    /// again as focus left, the system grew the glass anew each time: the control blurred out and in, and the backdrop
+    /// behind it rippled. `lift` is how much the focused control grows: the platter and what's on it grow, over glass
+    /// that stays its size beneath. Glass scaled along with them (in a GlassGroup) comes out of place, a crescent of it
+    /// showing at the platter's lower right.
+    func focusPlatter<S: InsettableShape>(_ shape: S, focused: Bool, color: Color = .white, glass: Bool = true,
+                                          lift: CGFloat = 1) -> some View {
         // Filled as a plain path (PillOutline): SwiftUI's own Capsule leaves a short straight bar just outside each end
         background { PillOutline(shape).fill(color).opacity(focused ? 1 : 0) }
-            .tvGlass(in: shape, enabled: glass && !focused)
+            .scaleEffect(focused ? lift : 1)
+            .tvGlass(in: shape, enabled: glass)
     }
 
     /// A plain panel for sheets that sit on the frosted backdrop. Glass there would have only blur to

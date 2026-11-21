@@ -875,14 +875,7 @@ private struct MoviesSidebarView: View {
         .offset(y: -y(first))
         .frame(width: open ? 292 : 88, height: window, alignment: .topLeading)
         .clipped()
-        .mask {
-            VStack(spacing: 0) {
-                LinearGradient(colors: [first > 0 ? .clear : .black, .black], startPoint: .top, endPoint: .bottom).frame(height: 44)
-                Color.black
-                LinearGradient(colors: [.black, first + shown < entries.count ? .clear : .black], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 44)
-            }
-        }
+        .mask { ListFadeMask(above: first > 0, below: first + shown < entries.count) }
         .padding(18)
         .background {
             Color.clear

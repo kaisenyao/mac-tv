@@ -71,6 +71,7 @@ struct BilibiliScreen: View {
                         HStack(spacing: 0) {
                             Color.clear.frame(width: 84)
                             LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 74)
+                                .padding(.trailing, -1).zIndex(1)   // 压住接缝：两块之间不留一条竖线
                             EdgeFadeMask(trailing: store.showingLanding ? 0
                                          : EdgeFadeMask.width(screen: canvas.width, inset: margin, card: cardWidth, gap: cardGap))
                         }

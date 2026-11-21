@@ -1131,7 +1131,7 @@ struct SettingsPages: View {
     private func hero(_ panel: SettingsPanel) -> some View {
         let hero = tv.settingsHero(panel)
         // As Apple TV's Settings: the page's name at the top, centred and dim, and one big picture on the left, a
-        // pale tile with the page's symbol dark in it, about a quarter of the tile tall (Apple TV's own is its logo).
+        // pale tile with the page's symbol dark in it.
         let side = SettingsMetrics.hero, corner = side * 0.235
         return ZStack(alignment: .topLeading) {
             ZStack {
@@ -1140,8 +1140,14 @@ struct SettingsPages: View {
                         .transition(.opacity)
                 } else {
                     // A quick crossfade as focus moves between sections, or between the remotes.
+                    // Fitted to one box, so every page's symbol weighs about the same in the tile: a square or round
+                    // one (the gear) fills its width, a narrow one (a remote) its greater height
                     Image(systemName: hero.symbol)
-                        .font(.system(size: side * 0.27, weight: .medium))
+                        .resizable()
+                        .symbolRenderingMode(.monochrome)
+                        .fontWeight(.medium)
+                        .scaledToFit()
+                        .frame(width: side * 0.4, height: side * 0.46)
                         .foregroundStyle(.black.opacity(0.7))
                         .frame(width: side, height: side)
                         .id(hero.symbol)

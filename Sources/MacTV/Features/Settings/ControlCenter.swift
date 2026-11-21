@@ -370,6 +370,11 @@ struct ControlCenterView: View {
     @Environment(\.canvasSize) private var canvas
     private static let column: CGFloat = 206
     private static let row: CGFloat = 95
+    /// How much the focused control grows, and a round button picked up to be moved.
+    fileprivate static let lift: CGFloat = 1.06
+    private static let pickedUp: CGFloat = 1.17
+    /// An edit badge: a third of a round button across, as an iPhone's.
+    private static let badge: CGFloat = 31
     private static let gap: CGFloat = 17
     private static let width = column * 2 + gap
     /// The box every round button's symbol is fitted to: 40 points tall for a square or round one, as Apple TV's Search
@@ -429,6 +434,7 @@ struct ControlCenterView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             } else {
                 GlassGroup(spacing: 0) { grid(panel) }
+                    .overlay(alignment: .bottom) { badges(tv.controlCenterControls, panel, adding: false) }
                     .transition(.opacity)
                 Text(caption(panel))
                     .font(.system(size: 23, weight: .semibold))
@@ -474,7 +480,7 @@ struct ControlCenterView: View {
             }
             .opacity(panel.editing ? 0.35 : 1)   // editing: the tiles rest, only the round buttons move
             .allowsHitTesting(!panel.editing)
-            rounds(tv.controlCenterControls, panel, adding: false)
+            rounds(tv.controlCenterControls, panel)
                 .padding(.top, 4)
         }
         .animation(Motion.focus, value: tv.controlCenterControls)
@@ -482,20 +488,51 @@ struct ControlCenterView: View {
 
     /// Round buttons four to a row, each placed by its place in the order, as Arrange Apps places apps: one moving
     /// glides there and the others make room, instead of the rows being laid out again.
-    private func rounds(_ items: [ControlCenterPanel.Item], _ panel: ControlCenterPanel, adding: Bool) -> some View {
-        let perRow = ControlCenterPanel.Item.perRow
-        let spacing = (Self.width - CGFloat(perRow) * Self.row) / CGFloat(perRow - 1)
-        let rowCount = (items.count + perRow - 1) / perRow
-        let height = rowCount == 0 ? 0 : CGFloat(rowCount) * Self.row + CGFloat(rowCount - 1) * Self.gap
-        return ZStack(alignment: .topLeading) {
+    private func rounds(_ items: [ControlCenterPanel.Item], _ panel: ControlCenterPanel) -> some View {
+        ZStack(alignment: .topLeading) {
             ForEach(Array(items.enumerated()), id: \.element) { index, item in
-                round(item, panel, adding: adding)
-                    .position(x: CGFloat(index % perRow) * (Self.row + spacing) + Self.row / 2,
-                              y: CGFloat(index / perRow) * (Self.row + Self.gap) + Self.row / 2)
-                    .zIndex(panel.lifted == item ? 3 : panel.item == item ? 2 : 1)
+                round(item, panel)
+                    .position(Self.roundCentre(index))
+                    // Each button keeps one layer of its own for good, whatever has focus, is picked up or changes
+                    // places: glass that changes layers among its neighbours is grown anew by the system, the
+                    // button and those beside it blinking. They don't overlap but for a moment as two change places.
+                    .zIndex(Double(ControlCenterPanel.Item.allCases.firstIndex(of: item) ?? 0))
             }
         }
-        .frame(width: Self.width, height: height, alignment: .topLeading)
+        .frame(width: Self.width, height: Self.roundsHeight(items.count), alignment: .topLeading)
+    }
+
+    /// Editing: each round button's badge, a layer of glass of its own laid over the buttons. As part of a button, or
+    /// not glass itself, a badge lies under the buttons' glass (the system draws glass over whatever else is laid on
+    /// it), tucked beneath the edge and, on the focused one, half hidden by the platter.
+    private func badges(_ items: [ControlCenterPanel.Item], _ panel: ControlCenterPanel, adding: Bool) -> some View {
+        // On the button's edge at 45°, up and to the left of its centre
+        let reach = Self.row / 2 * 0.7071
+        return GlassGroup(spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                if panel.editing {
+                    ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                        let centre = Self.roundCentre(index)
+                        badge(item, adding: adding).position(x: centre.x - reach, y: centre.y - reach)
+                    }
+                }
+            }
+            .frame(width: Self.width, height: Self.roundsHeight(items.count), alignment: .topLeading)
+        }
+        .animation(Motion.focus, value: items)
+    }
+
+    /// Where the round button at a place in the order is, in the block of them.
+    private static func roundCentre(_ index: Int) -> CGPoint {
+        let perRow = ControlCenterPanel.Item.perRow
+        let spacing = (width - CGFloat(perRow) * row) / CGFloat(perRow - 1)
+        return CGPoint(x: CGFloat(index % perRow) * (row + spacing) + row / 2,
+                       y: CGFloat(index / perRow) * (row + gap) + row / 2)
+    }
+
+    private static func roundsHeight(_ count: Int) -> CGFloat {
+        let rowCount = (count + ControlCenterPanel.Item.perRow - 1) / ControlCenterPanel.Item.perRow
+        return rowCount == 0 ? 0 : CGFloat(rowCount) * row + CGFloat(rowCount - 1) * gap
     }
 
     /// Editing: the round buttons that could be added, under a heading.
@@ -507,7 +544,7 @@ struct ControlCenterView: View {
                     .font(.system(size: 23, weight: .semibold))
                     .opacity(0.6)
                     .padding(.leading, 6)
-                rounds(available, panel, adding: true)
+                rounds(available, panel).overlay { badges(available, panel, adding: true) }
             }
         }
         .frame(width: Self.width, alignment: .leading)
@@ -524,7 +561,7 @@ struct ControlCenterView: View {
                 .foregroundStyle(focused ? .black : .white)
                 .padding(.horizontal, 26)
                 .frame(height: 46)
-                .focusPlatter(Capsule(), focused: focused)
+                .focusPlatter(Capsule(), focused: focused, lift: Self.lift)
                 .contentShape(Capsule())
                 .lifted(focused, in: Capsule())
         }
@@ -588,7 +625,7 @@ struct ControlCenterView: View {
             }
             .foregroundStyle(focused ? .black : .white)
             .frame(width: Self.column, height: Self.row * 2 + Self.gap)
-            .focusPlatter(shape, focused: focused, color: .white)
+            .focusPlatter(shape, focused: focused, lift: Self.lift)
             .contentShape(shape)
             .lifted(focused, in: shape)
         }
@@ -640,7 +677,7 @@ struct ControlCenterView: View {
             .padding(.leading, Self.row / 2 - Self.tileGlyph.width / 2)
             .foregroundStyle(focused ? .black : .white)
             .frame(width: Self.column, height: Self.row, alignment: .leading)
-            .focusPlatter(Capsule(), focused: focused)
+            .focusPlatter(Capsule(), focused: focused, lift: Self.lift)
             .contentShape(Capsule())
             .lifted(focused, in: Capsule())
         }
@@ -650,7 +687,7 @@ struct ControlCenterView: View {
     /// A round button. One that's switched on is white, as Apple TV's are; focus lifts it. Editing, as Arrange Apps:
     /// the one picked up lifts further and wiggles while it moves; each wears a badge above everything, "−" to take it
     /// out, "+" to add it (with the remote: hold Select to take one out, Select to add one).
-    private func round(_ item: ControlCenterPanel.Item, _ panel: ControlCenterPanel, adding: Bool) -> some View {
+    private func round(_ item: ControlCenterPanel.Item, _ panel: ControlCenterPanel) -> some View {
         let focused = panel.item == item
         let lifted = panel.lifted == item
         let look = look(item)
@@ -683,36 +720,31 @@ struct ControlCenterView: View {
                 .foregroundStyle(focused || on ? .black : .white)
                 .frame(width: Self.row, height: Self.row)
                 .background { if on, !focused { Circle().fill(.white.opacity(0.92)) } }
-                .focusPlatter(Circle(), focused: focused)
+                // Picked up, it grows further and its symbol wiggles: on the platter, over glass that stays as it
+                // is (see focusPlatter), not the whole button with its glass.
+                .modifier(Wiggle(active: lifted))
+                .focusPlatter(Circle(), focused: focused, lift: lifted ? Self.pickedUp : Self.lift)
                 .contentShape(Circle())
-                .lifted(focused, in: Circle())
+                .lifted(focused, in: Circle(), by: lifted ? Self.pickedUp : Self.lift)
         }
         .buttonStyle(PressDip(presses: panel.presses, focused: focused))
-        .overlay(alignment: .topLeading) {
-            if panel.editing { badge(item, adding: adding) }
-        }
-        .scaleEffect(lifted ? 1.1 : 1)
         .tvShadow(.lift, active: lifted)
-        .modifier(Wiggle(active: lifted))
     }
 
-    /// Editing: "−" takes a round button out, "+" puts one in. Dark, so it shows on a white focused button too, and
-    /// outside the button's edge even when it's lifted.
+    /// Editing: "−" takes a round button out, "+" puts one in. As on an iPhone's Control Center: a small glass circle
+    /// a third of the button across, its centre on the button's edge at the upper left. Placed by `badges`.
     private func badge(_ item: ControlCenterPanel.Item, adding: Bool) -> some View {
         Button {
             if adding { tv.addControlCenterControl(item) } else { _ = tv.removeControlCenterControl(item) }
         } label: {
             Image(systemName: adding ? "plus" : "minus")
-                .font(.system(size: 15, weight: .heavy))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(Color(hex: "#48484A"), in: Circle())
-                .overlay(Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+                .frame(width: Self.badge, height: Self.badge)
+                .tvGlass(in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .offset(x: -10, y: -10)
         .transition(.scale.combined(with: .opacity))
     }
 
@@ -759,7 +791,7 @@ struct ControlCenterView: View {
             .padding(.trailing, Self.row / 2 - 17)   // the ring on the centre of the rounded end
             .foregroundStyle(focused ? .black : .white)
             .frame(width: Self.width, height: Self.row)
-            .focusPlatter(Capsule(), focused: focused)
+            .focusPlatter(Capsule(), focused: focused, lift: Self.lift)
             .contentShape(Capsule())
             .lifted(focused, in: Capsule())
         }
@@ -768,10 +800,14 @@ struct ControlCenterView: View {
 }
 
 private extension View {
-    /// Control Center's focus: the focused control lifts and casts a shadow, as everywhere else on the TV. The
-    /// shadow is the platter's alone, not cast by the text and symbol on it.
-    func lifted<S: InsettableShape>(_ focused: Bool, in shape: S) -> some View {
-        background { PillOutline(shape).fill(.white).opacity(focused ? 1 : 0).shadow(color: .black.opacity(0.4), radius: 16, y: 12) }
-            .scaleEffect(focused ? 1.06 : 1)
+    /// Control Center's focus: the focused control casts a shadow, as everywhere else on the TV. The shadow is the
+    /// platter's alone, not cast by the text and symbol on it; it lies behind the glass, which stays its size (the
+    /// platter above grows by as much, see focusPlatter).
+    func lifted<S: InsettableShape>(_ focused: Bool, in shape: S, by lift: CGFloat = ControlCenterView.lift) -> some View {
+        background {
+            PillOutline(shape).fill(.white).opacity(focused ? 1 : 0)
+                .scaleEffect(focused ? lift : 1)
+                .shadow(color: .black.opacity(0.4), radius: 16, y: 12)
+        }
     }
 }

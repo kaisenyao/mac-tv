@@ -49,19 +49,37 @@ struct EdgeFadeMask: View {
         return min(card, screen - inset - whole * (card + gap) + gap)
     }
 
+    /// One gradient across the whole view, not three pieces side by side: where pieces meet on a fraction of a pixel
+    /// (the canvas is scaled to the window) each softens its own edge, and the joint shows as a hairline across
+    /// whatever is masked (a white focused row, most plainly).
     var body: some View {
-        if vertical {
-            VStack(spacing: 0) {
-                LinearGradient(stops: Self.ramp, startPoint: .bottom, endPoint: .top).frame(height: leading)
-                Color.black
-                LinearGradient(stops: Self.ramp, startPoint: .top, endPoint: .bottom).frame(height: trailing)
-            }
-        } else {
-            HStack(spacing: 0) {
-                LinearGradient(stops: Self.ramp, startPoint: .trailing, endPoint: .leading).frame(width: leading)
-                Color.black
-                LinearGradient(stops: Self.ramp, startPoint: .leading, endPoint: .trailing).frame(width: trailing)
-            }
+        GeometryReader { geometry in
+            let length = max(1, vertical ? geometry.size.height : geometry.size.width)
+            let start = min(0.5, leading / length), end = min(0.5, trailing / length)
+            // The ramp runs inwards from each end that fades; an end that doesn't is opaque to its edge
+            let stops: [Gradient.Stop] =
+                (leading > 0 ? Self.ramp.reversed().map { .init(color: $0.color, location: (1 - $0.location) * start) }
+                             : [.init(color: .black, location: 0)])
+                + (trailing > 0 ? Self.ramp.map { .init(color: $0.color, location: 1 - end + $0.location * end) }
+                                : [.init(color: .black, location: 1)])
+            LinearGradient(stops: stops, startPoint: vertical ? .top : .leading, endPoint: vertical ? .bottom : .trailing)
+        }
+    }
+}
+
+/// The mask of a list that scrolls inside its own window (a menu with more items than fit): opaque, fading to clear
+/// over `length` at an end that has more beyond it. One gradient, for the same reason as EdgeFadeMask.
+struct ListFadeMask: View {
+    let above: Bool
+    let below: Bool
+    var length: CGFloat = 44
+
+    var body: some View {
+        GeometryReader { geometry in
+            let part = min(0.5, length / max(1, geometry.size.height))
+            LinearGradient(stops: [.init(color: above ? .clear : .black, location: 0), .init(color: .black, location: part),
+                                   .init(color: .black, location: 1 - part), .init(color: below ? .clear : .black, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
         }
     }
 }

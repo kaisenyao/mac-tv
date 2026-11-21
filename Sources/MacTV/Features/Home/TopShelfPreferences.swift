@@ -287,15 +287,9 @@ struct TopShelfPreferencesSheet: View {
                     .offset(y: -scroll)
                     .frame(height: Self.window, alignment: .top)
                     .mask {
-                        VStack(spacing: 0) {
-                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: scroll > 1 ? 56 : 0)
-                            Rectangle()
-                            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                                .frame(height: scroll < total - Self.window - 1 ? 56 : 0)
-                        }
-                        // 左右留出焦点那一行放大、阴影的地方
-                        .padding(.horizontal, -40)
+                        ListFadeMask(above: scroll > 1, below: scroll < total - Self.window - 1, length: 56)
+                            // 左右留出焦点那一行放大、阴影的地方
+                            .padding(.horizontal, -40)
                     }
             }
         }

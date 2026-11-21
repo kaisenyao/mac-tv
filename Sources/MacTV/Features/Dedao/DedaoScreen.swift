@@ -179,7 +179,8 @@ private struct DedaoSignIn: View {
     private var qr: some View {
         let shape = RoundedRectangle(cornerRadius: 36, style: .continuous)
         return ZStack {
-            shape.fill(.white)
+            // 阴影只是这张白卡片的：加在整叠东西上的话，二维码那张图也会在卡片上投出一圈灰影
+            shape.fill(.white).shadow(color: .black.opacity(0.5), radius: 40, y: 20)
             if let data = store.loginCode?.image, let image = NSImage(data: data) {
                 Image(nsImage: image).interpolation(.none).resizable().frame(width: 400, height: 400)
             } else {
@@ -196,7 +197,6 @@ private struct DedaoSignIn: View {
             }
         }
         .frame(width: 460, height: 460)
-        .shadow(color: .black.opacity(0.5), radius: 40, y: 20)
         .animation(Motion.appear, value: store.loginExpired)
         .onTapGesture { if store.loginExpired { store.startSignIn() } }
     }
@@ -224,6 +224,7 @@ private struct DedaoBrowse: View {
                         HStack(spacing: 0) {
                             Color.clear.frame(width: 84)
                             LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 74)
+                                .padding(.trailing, -1).zIndex(1)   // 压住接缝：两块之间不留一条竖线
                             EdgeFadeMask(trailing: EdgeFadeMask.width(screen: canvas.width, inset: DedaoStyle.margin,
                                                                       card: DedaoStyle.cover.width, gap: DedaoStyle.gap))
                         }
@@ -552,15 +553,8 @@ private struct DedaoSidebar: View {
         .offset(y: -CGFloat(first) * step)
         .frame(width: open ? 292 : 88, height: window, alignment: .topLeading)
         .clipped()
-        .mask {
-            // 上下还有没露出来的：那一头淡出去
-            VStack(spacing: 0) {
-                LinearGradient(colors: [first > 0 ? .clear : .black, .black], startPoint: .top, endPoint: .bottom).frame(height: 44)
-                Color.black
-                LinearGradient(colors: [.black, first + visible < entries.count ? .clear : .black], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 44)
-            }
-        }
+        // 上下还有没露出来的：那一头淡出去
+        .mask { ListFadeMask(above: first > 0, below: first + visible < entries.count) }
         .padding(18)
         .background {
             // 玻璃底板：收起时向左缩并滑出去
@@ -755,15 +749,8 @@ private struct DedaoMenuLayer: View {
                 .offset(y: -CGFloat(first) * Self.step)
                 .frame(width: Self.width(menu) - 32, height: CGFloat(shown) * Self.step - 8, alignment: .top)
                 .clipped()
-                .mask {
-                    // 上下还有没露出来的：那一头淡出去
-                    VStack(spacing: 0) {
-                        LinearGradient(colors: [first > 0 ? .clear : .black, .black], startPoint: .top, endPoint: .bottom).frame(height: 40)
-                        Color.black
-                        LinearGradient(colors: [.black, first + shown < items.count ? .clear : .black], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 40)
-                    }
-                }
+                // 上下还有没露出来的：那一头淡出去（一整条渐变，不拼接，见 ListFadeMask）
+                .mask { ListFadeMask(above: first > 0, below: first + shown < items.count, length: 40) }
         }
         .padding(16)
         .tvPanelSurface(in: RoundedRectangle(cornerRadius: 34, style: .continuous))
