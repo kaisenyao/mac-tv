@@ -126,7 +126,7 @@ final class Jasmine: ObservableObject {
 
     /// Words that are easy to mishear: Jasmine's names, the apps, short commands.
     static let keywords = ["小茗同学", "Jasmine", "哔哩哔哩", "网易云音乐", "得到", "YouTube", "Videos", "Safari",
-                           "暂停", "继续", "下一集", "下一首", "大声一点", "小声一点"]
+                           "暂停", "继续", "下一集", "下一首", "上一首", "快进", "后退", "字幕", "倍速", "大声一点", "小声一点"]
 
     // MARK: The Siri button
 
@@ -438,13 +438,13 @@ final class Jasmine: ObservableObject {
     private func respond(to text: String) {
         guard let tv else { return dismiss() }
         if let command = LocalCommand.match(text, apps: tv.jasmineApps) {
-            let done = tv.perform(command)
+            let failure = tv.perform(command)
             timing.acted = Self.now()
             logTiming(local: true)
             duck(1)
-            line = done ? nil : "Nothing Is Playing"
+            line = failure?.line
             withAnimation(Motion.appear) { phase = .message }
-            hide(after: .seconds(done ? 1.2 : 2.5))
+            hide(after: .seconds(failure == nil ? 1.2 : 2.5))
             return
         }
         guard let key = settings.key(.openAI) else { return say("Add an OpenAI API key in Settings › General › Jasmine.", chime: .unavailable) }

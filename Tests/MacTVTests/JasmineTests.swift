@@ -553,10 +553,10 @@ import Testing
     @Test func shortCommandsNeedNoModel() {
         let apps = [(id: "bilibili", name: "哔哩哔哩"), (id: "youtube", name: "YouTube"), (id: "settings", name: "Settings"),
                     (id: "netease", name: "网易云音乐")]
-        #expect(LocalCommand.match("暂停。", apps: apps) == .pause)
-        #expect(LocalCommand.match("停", apps: apps) == .pause)
-        #expect(LocalCommand.match("播", apps: apps) == .play)
-        #expect(LocalCommand.match("Pause.", apps: apps) == .pause)
+        #expect(LocalCommand.match("暂停。", apps: apps) == .playback(.pause))
+        #expect(LocalCommand.match("停", apps: apps) == .playback(.pause))
+        #expect(LocalCommand.match("播", apps: apps) == .playback(.play))
+        #expect(LocalCommand.match("Pause.", apps: apps) == .playback(.pause))
         #expect(LocalCommand.match("大声一点", apps: apps) == .volumeStep(10))
         #expect(LocalCommand.match("Turn it down", apps: apps) == .volumeStep(-10))
         #expect(LocalCommand.match("打开 YouTube", apps: apps) == .open("youtube"))

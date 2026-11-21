@@ -800,8 +800,8 @@ final class BilibiliNativePlayer: ObservableObject {
         }
     }
 
-    /// 在选集里选了一集：选的就是正在放的那一集，只收起来接着看
-    private func playEpisode(_ index: Int) {
+    /// 在选集里选了一集：选的就是正在放的那一集，只收起来接着看。小茗同学的"下一集""上一集"也走这里
+    func playEpisode(_ index: Int) {
         guard episodes.indices.contains(index) else { return }
         if index == episodeIndex { relatedVisible = false; return }
         play(episodes[index].video, exact: true)   // 挑的就是这一集：放它（从它自己上次停的地方接着）
@@ -1209,7 +1209,8 @@ extension BilibiliNativePlayer {
         }
     }
 
-    private func choose(in list: PanelList, _ index: Int) {
+    /// 小列表里选了一项（小茗同学开关字幕、换倍速也走这里）
+    func choose(in list: PanelList, _ index: Int) {
         switch list {
         case .coins:
             if coinChoices.indices.contains(index) { addCoins(coinChoices[index]) }

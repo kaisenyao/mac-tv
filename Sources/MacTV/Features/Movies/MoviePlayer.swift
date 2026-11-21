@@ -258,6 +258,8 @@ final class MoviePlayer: ObservableObject {
     private var pressTask: Task<Void, Never>?
     private var lastSaved = Date()
     var onEnd: (() -> Void)?
+    /// Asked for the show's next episode: false when there isn't one.
+    var onNext: (() -> Bool)?
     var onFailure: ((String) -> Void)?
     var onClose: (() -> Void)?
 
@@ -454,12 +456,18 @@ final class MoviePlayer: ObservableObject {
         guard let menu else { return }
         if audioColumnShown && menu.column == 0 {
             engine.selectAudio(menu.row)
+            objectWillChange.send()
+            showControls()
         } else {
-            let choice = menu.row == 0 ? nil : menu.row - 1
-            selectedSubtitle = choice
-            let embedded = engine.subtitleOptions.count
-            engine.selectSubtitle(choice.flatMap { $0 < embedded ? $0 : nil })
+            selectSubtitle(menu.row == 0 ? nil : menu.row - 1)
         }
+    }
+
+    /// Shows these subtitles (an index into `subtitleOptions`), or none.
+    func selectSubtitle(_ choice: Int?) {
+        selectedSubtitle = choice
+        let embedded = engine.subtitleOptions.count
+        engine.selectSubtitle(choice.flatMap { $0 < embedded ? $0 : nil })
         objectWillChange.send()
         showControls()
     }

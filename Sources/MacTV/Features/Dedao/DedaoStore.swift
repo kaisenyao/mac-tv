@@ -1893,15 +1893,19 @@ extension DedaoStore {
     /// 登录了、有一讲在放（或停着）：快捷键能用
     var remoteReady: Bool { phase == .ready && player.current != nil }
 
-    /// 换下一档倍速（0.75× 到 2×，到头回到最慢；换成了几倍，手机上的按钮写着）。开着的"⋯"菜单里写的是旧的，先收起
+    /// 换下一档倍速（0.75× 到 2×，到头回到最慢；换成了几倍，手机上的按钮写着）
     @discardableResult
     func nextSpeed() -> Bool {
         guard remoteReady else { return false }
         let speeds = DedaoPlayer.speeds
-        let next = speeds[((speeds.firstIndex(of: player.speed) ?? 0) + 1) % speeds.count]
-        if menu?.anchor == .nowPlaying { dismissMenu() }
-        player.setSpeed(next)
+        setSpeed(speeds[((speeds.firstIndex(of: player.speed) ?? 0) + 1) % speeds.count])
         return true
+    }
+
+    /// 换到这一档倍速（DedaoPlayer.speeds 里的一档）。开着的"⋯"菜单里写的是旧的，先收起
+    func setSpeed(_ value: Float) {
+        if menu?.anchor == .nowPlaying { dismissMenu() }
+        player.setSpeed(value)
     }
 
     /// 文稿在播放界面右边：播放界面没开就打开，开着就收起（同返回）

@@ -1936,7 +1936,8 @@ final class NeteaseStore: ObservableObject {
     }
 
     /// delta：+1 下一首，-1 上一首。automatic = 这首放完了自己往下走（单曲循环只在这时候起作用）。
-    private func skip(_ delta: Int, automatic: Bool = false) {
+    /// 小茗同学的"下一首""上一首"也走这里
+    func skip(_ delta: Int, automatic: Bool = false) {
         guard !queue.isEmpty else { return }
         if automatic, mode == .single, current != nil {
             jump(to: 0) { [weak self] in if self?.paused == false { self?.player.play() } }
@@ -2158,6 +2159,7 @@ final class NeteaseStore: ObservableObject {
     /// 测试用：当作播放界面开着、在放这首歌（不联网、不出声）
     func pretendPlaying(_ song: NeteaseSong) {
         current = song
+        clock.duration = Double(song.duration)
         nowPlayingVisible = true
     }
 
