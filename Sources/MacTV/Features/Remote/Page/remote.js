@@ -496,7 +496,7 @@ function renderPlayerChoices(current, braveInstalled) {
 // the TV's dock (Home's top row, its first six apps), and the other apps below in Home's order. Long-press an app
 // and drag it; the others make room. Into a full dock, its last app moves to the first place below; out of the dock,
 // the first app below comes up into it. "−" offers Hide, and Delete for Everyone for an app someone added; a system
-// app (Movies, Web) has no "−", it only moves. The TV
+// app (Videos, Web) has no "−", it only moves. The TV
 // takes each drop at once (/apps/place); what changes on the TV arrives with the next state and moves the icons
 // here. One haptic on pick-up and one on drop, a tick each time the others make room. Only the jiggle runs on its
 // own, only while editing, and only as a CSS transform.
@@ -679,7 +679,7 @@ function renderArrangement(box) {
   placeTiles(appOrder());
 }
 // An app while editing: its icon with the "−" (the iPhone Home Screen's remove badge), and its name. A system app
-// (Movies, Web) can't be hidden or deleted, so it has no "−"
+// (Videos, Web) can't be hidden or deleted, so it has no "−"
 function fillArrangeTile(tile, app, look) {
   const face = document.createElement('span');
   face.className = 'tile';

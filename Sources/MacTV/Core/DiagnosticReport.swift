@@ -107,7 +107,7 @@ enum DiagnosticReport {
         case .web: "a website"
         case .app: "a Mac app"
         case .steam: "a Steam game"
-        case .movies: "Movies"
+        case .movies: "Videos"
         case .addApp, .settings: "Settings"
         }
     }

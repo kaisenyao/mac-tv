@@ -462,7 +462,7 @@ import Testing
             #expect(rows(tv)[3] == .movies)
             tv.handleSettings(.select)
             let movies = try #require(tv.settings)
-            #expect(movies.page == .movies && tv.settingsHero(movies).title == "Movies")
+            #expect(movies.page == .movies && tv.settingsHero(movies).title == "Videos")
             #expect(rows(tv).last == .addJellyfinServer && rows(tv).contains(.addMovieFolder))
             tv.addMovieFolders([films])
             #expect(library.isWatched(films))

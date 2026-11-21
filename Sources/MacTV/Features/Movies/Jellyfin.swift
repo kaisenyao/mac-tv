@@ -271,7 +271,7 @@ final class JellyfinServers: ObservableObject {
     func stream(for movie: Movie) async -> Result<Stream, Problem> {
         guard let ids = Self.ids(in: movie.path), let server = server(for: movie.path),
               let token = await JellyfinKeychain.token(server: server.id) else {
-            return .failure(Problem(message: "Sign in to \(movie.server ?? "the server") again in Settings › Apps › Movies."))
+            return .failure(Problem(message: "Sign in to \(movie.server ?? "the server") again in Settings › Apps › Videos."))
         }
         let body: [String: Any] = ["UserId": server.userID, "DeviceProfile": Self.profile, "AutoOpenLiveStream": true,
                                    "EnableDirectPlay": true, "EnableDirectStream": true, "EnableTranscoding": true,

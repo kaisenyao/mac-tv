@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Mac TV's own Search, over Home (and over apps without a search of their own): what's on this Mac only, the apps,
-/// Settings' rows and the Movies library, listed as you type. Control Center's Search opens it with the field
+/// Settings' rows and the Videos library, listed as you type. Control Center's Search opens it with the field
 /// highlighted (so does a press of the Siri button while Jasmine is off); the Siri button then dictates into it.
 /// Online content isn't searched here: 哔哩哔哩 and 网易云 have their own search.
 struct SystemSearch: Equatable {
@@ -38,7 +38,7 @@ extension TVController {
         systemSearch?.typing = true
     }
 
-    /// What the query finds, apps first, then Settings, then Movies; a few of each.
+    /// What the query finds, apps first, then Settings, then Videos; a few of each.
     func systemSearchResults(_ query: String) -> [(group: String, results: [SystemSearchResult])] {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return [] }
@@ -52,7 +52,7 @@ extension TVController {
             .prefix(6).map { SystemSearchResult.setting($0) }
         let shows = movieLibrary.shows.filter { matches($0.title) }.prefix(6).map { SystemSearchResult.show($0.id) }
         let films = movieLibrary.films.filter { matches($0.title) }.prefix(6).map { SystemSearchResult.movie($0.path) }
-        return [("APPS", Array(apps)), ("SETTINGS", Array(settings)), ("MOVIES", Array(shows + films).prefix(8).map { $0 })]
+        return [("APPS", Array(apps)), ("SETTINGS", Array(settings)), ("VIDEOS", Array(shows + films).prefix(8).map { $0 })]
             .filter { !$0.results.isEmpty }
     }
 

@@ -54,7 +54,7 @@ enum LocalCommand {
     /// An app by its name, or a name people say for it.
     static func app(named name: String, in apps: [(id: String, name: String)]) -> String? {
         let aliases = ["b站": "bilibili", "哔哩哔哩": "bilibili", "bilibili": "bilibili", "网易云": "netease", "网易云音乐": "netease",
-                       "油管": "youtube", "youtube": "youtube", "得到": "dedao", "影片": "movies", "电影": "movies", "movies": "movies",
+                       "油管": "youtube", "youtube": "youtube", "得到": "dedao", "影片": "movies", "电影": "movies", "movies": "movies", "videos": "movies",
                        "浏览器": "browser", "网页": "browser", "web": "browser", "safari": "browser"]
         if let id = aliases[name], apps.contains(where: { $0.id == id }) { return id }
         return apps.first { normalized($0.name) == name }?.id
@@ -114,14 +114,14 @@ extension TVController {
     private var jasmineScreen: String {
         if let top = sheets.top { return top.remoteName }
         switch mode {
-        case .movie: return "Movies (playing)"
+        case .movie: return "Videos (playing)"
         case .player(let service): return service.name
         case .launcher:
             if bilibiliOpen { return "哔哩哔哩" }
             if neteaseOpen { return "网易云音乐" }
             if dedaoOpen { return "得到" }
             if browserOpen { return "Web" }
-            if movies != nil { return "Movies" }
+            if movies != nil { return "Videos" }
             return "Home"
         }
     }
@@ -136,7 +136,7 @@ extension TVController {
         if let track = dedaoStore.player.current {
             return ["app": "得到", "title": track.title, "reader": track.reader, "paused": dedaoStore.player.paused]
         }
-        if mode == .movie, let player = moviePlayer { return ["app": "Movies", "paused": !player.playing] }
+        if mode == .movie, let player = moviePlayer { return ["app": "Videos", "paused": !player.playing] }
         return nil
     }
 

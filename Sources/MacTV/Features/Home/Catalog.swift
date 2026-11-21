@@ -80,7 +80,7 @@ enum Catalog {
         Service(id: "browser", name: "Web", kind: .web(URL(string: "https://www.google.com")!),
                 icon: "browser.png", accent: "#2A6CF0", deep: "#0A1F45"),
         // Home draws its own tile; movies.png (the same, square) is for the phone and the App Switcher.
-        Service(id: "movies", name: "Movies", kind: .movies, icon: "movies.png", accent: "#5E5CE6", deep: "#14133A"),
+        Service(id: "movies", name: "Videos", kind: .movies, icon: "movies.png", accent: "#5E5CE6", deep: "#14133A"),
         Service(id: "iina", name: "IINA", kind: .app(bundleID: "com.colliderli.iina"),
                 icon: "iina.png"),
         // Store：现在里面是添加 App；以后是完整的商店

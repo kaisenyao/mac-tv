@@ -410,7 +410,7 @@ extension TVController {
             let base = id.flatMap { id in profiles.all.first { $0.id == id } }
             let preview = Profile(id: id ?? "new", name: panel.typed.isEmpty ? "?" : panel.typed, color: base?.color ?? profiles.nextColor)
             return (id == nil ? "New Profile" : "Name", "person.fill", preview)
-        case .movies: return ("Movies", "film.stack.fill", nil)
+        case .movies: return ("Videos", "film.stack.fill", nil)
         case .movieFolder(let path): return (URL(fileURLWithPath: path).lastPathComponent, "folder.fill", nil)
         case .networkShare(let id):
             return (networkShares.shares.first { $0.id == id }?.name ?? "Network Share", "externaldrive.connected.to.line.below.fill", nil)
@@ -516,7 +516,7 @@ extension TVController {
         case .addApp: return Content(title: "Add App", accessory: .chevron)
         case .arrangeApps: return Content(title: "Arrange Apps", accessory: .chevron)
         case .topShelfPreferences: return Content(title: "Top Shelf", accessory: .chevron)
-        case .movies: return Content(title: "Movies", value: moviesSummary, accessory: .chevron)
+        case .movies: return Content(title: "Videos", value: moviesSummary, accessory: .chevron)
         case .movieFolder(let path):
             let folder = URL(fileURLWithPath: path, isDirectory: true)
             let parent = folder.deletingLastPathComponent()

@@ -125,7 +125,7 @@ final class Jasmine: ObservableObject {
         .appendingPathComponent("Mac TV/Jasmine", isDirectory: true)
 
     /// Words that are easy to mishear: Jasmine's names, the apps, short commands.
-    static let keywords = ["小茗同学", "Jasmine", "哔哩哔哩", "网易云音乐", "得到", "YouTube", "Movies", "Safari",
+    static let keywords = ["小茗同学", "Jasmine", "哔哩哔哩", "网易云音乐", "得到", "YouTube", "Videos", "Safari",
                            "暂停", "继续", "下一集", "下一首", "大声一点", "小声一点"]
 
     // MARK: The Siri button
