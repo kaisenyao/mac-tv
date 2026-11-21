@@ -109,8 +109,6 @@ struct BrowserTopBar: View {
     nonisolated static let editWidth: CGFloat = 720
     nonisolated static let margin: CGFloat = 32
     nonisolated static let groupGap: CGFloat = 16
-    /// 无痕浏览时"+"左边的 Private 有多宽
-    nonisolated static let privateWidth: CGFloat = 172
     /// 放不下时，被截掉的那一头淡出去的那一截（选中的标签总在它外面）
     nonisolated static let fade: CGFloat = 48
     static let privateTint = Color(hex: "#5B4BA8")
@@ -142,14 +140,8 @@ struct BrowserTopBar: View {
                 circle(.back, symbol: "chevron.left", enabled: store.barCanGoBack)
                 circle(.forward, symbol: "chevron.right", enabled: store.barCanGoForward)
             }
-            track(width: Self.trackWidth(canvas: canvas.width, privateBrowsing: privateBrowsing))
+            track(width: Self.trackWidth(canvas: canvas.width))
             HStack(spacing: Self.gap) {
-                if privateBrowsing {
-                    BarButton(store: store, item: .privateBrowsing, symbol: "hand.raised.fill", title: "Private",
-                              enabled: true, lit: store.barFocus == .privateBrowsing, pressed: store.pressed == .privateBrowsing,
-                              hoverable: hoverable && settled)
-                        .transition(.opacity)
-                }
                 circle(.newTab, symbol: "plus", enabled: true)
                 circle(.more, symbol: "ellipsis", enabled: true)
             }
@@ -179,10 +171,9 @@ struct BrowserTopBar: View {
     }
 
     /// 中间那一排有多宽：两组按钮、边距以外的（无痕浏览时右边多一个 Private）
-    nonisolated static func trackWidth(canvas: CGFloat, privateBrowsing: Bool) -> CGFloat {
+    nonisolated static func trackWidth(canvas: CGFloat) -> CGFloat {
         let buttons = control * 2 + gap
-        let trailing = buttons + (privateBrowsing ? privateWidth + gap : 0)
-        return canvas - margin * 2 - buttons - trailing - groupGap * 2
+        return canvas - margin * 2 - buttons * 2 - groupGap * 2
     }
 
     private func circle(_ item: BrowserStore.BarFocus, symbol: String, enabled: Bool) -> some View {
@@ -325,13 +316,12 @@ struct BrowserTopBar: View {
     }
 }
 
-/// 标签栏两头的按钮：圆的（后退、前进、"+"、"⋯"），和无痕浏览时的 Private（胶囊，图标加字，深紫色，表示正在无痕浏览）。
+/// 标签栏两头的圆按钮：后退、前进、"+"、"⋯"。
 /// 选中时变白、浮起来；鼠标停在上面亮一点、浮起来一点；按下去往下一沉再回来（和别处的按钮一样）
 private struct BarButton: View {
     let store: BrowserStore
     let item: BrowserStore.BarFocus
     let symbol: String
-    var title: String? = nil
     let enabled: Bool
     let lit: Bool
     let pressed: Bool
@@ -341,16 +331,13 @@ private struct BarButton: View {
     var body: some View {
         let hovered = hovering && enabled && !lit
         let shape = Capsule(style: .continuous)
-        let fill: Color = lit ? .white : title != nil ? BrowserTopBar.privateTint.opacity(hovered ? 0.8 : 0.6) : .white.opacity(hovered ? 0.2 : 0.08)
-        HStack(spacing: 10) {
-            Image(systemName: symbol)
-            if let title { Text(title).lineLimit(1) }
-        }
-        .font(title == nil ? .tv(.caption2, emphasized: true) : .tv(.caption1))
+        let fill: Color = lit ? .white : .white.opacity(hovered ? 0.2 : 0.08)
+        Image(systemName: symbol)
+        .font(.tv(.caption2, emphasized: true))
         .foregroundStyle(lit ? .black : .white.opacity(0.9))
-        .frame(width: title == nil ? BrowserTopBar.control : BrowserTopBar.privateWidth, height: BrowserTopBar.control)
+        .frame(width: BrowserTopBar.control, height: BrowserTopBar.control)
         .background(shape.fill(fill))
-        .browserLift(focused: lit, in: shape, scale: title == nil ? 1.1 : 1.05, shadow: 5)
+        .browserLift(focused: lit, in: shape, scale: 1.1, shadow: 5)
         .scaleEffect(pressed ? 0.9 : hovered ? 1.06 : 1)
         // 不能用的（没有历史的后退、前进）不显示，位置留着：中间那一排不跟着挪
         .opacity(enabled ? 1 : 0)
@@ -636,15 +623,15 @@ extension BrowserTab {
     var isBlank: Bool { url == BrowserStore.blankURL }
 }
 
-/// 网页缩放的三档（WKWebView.pageZoom）：小 150%、中 175%（每个网站的默认）、大 200%
+/// 网页缩放的三档（WKWebView.pageZoom）：小 125%、中 150%（每个网站的默认）、大 175%
 enum BrowserZoomLevel: CaseIterable, Equatable {
     case small, medium, large
 
     var zoom: Double {
         switch self {
-        case .small: 1.5
-        case .medium: 1.75
-        case .large: 2
+        case .small: 1.25
+        case .medium: 1.5
+        case .large: 1.75
         }
     }
 

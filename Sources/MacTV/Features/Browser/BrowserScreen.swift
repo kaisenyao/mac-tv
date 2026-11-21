@@ -4,7 +4,7 @@ import SwiftUI
 /// 下面一条地址栏，再下面个人收藏、常去网站是一个个大方块（网站自己的图标），最近浏览、阅读列表是卡片（标题、网站、多久以前）。
 /// 选中的那一个和 tvOS 一样浮起来。焦点下到那几排里时标签栏收上去，地址栏和那几排跟着上移（一整块一起挪，一个位移动画）。
 /// 一排放不下、被屏幕边截掉的那一头淡出去（每排一张静态的渐变遮罩，见 EdgeFade）。
-/// 无痕浏览时，地址栏上面写着 Private Browsing，地址栏是深紫色的，下面只有个人收藏。
+/// 无痕浏览时，地址栏是深紫色的（标签也是紫色的，不另外写字），下面只有个人收藏。
 /// 网站图标只向那个网站自己要，不经过别人（不把你去过哪些网站告诉第三方，见 SiteIcons）。
 /// 浏览器是系统的界面，字都是英文（跟系统语言走）
 struct BrowserRoot: View {
@@ -20,7 +20,7 @@ struct BrowserScreen: View {
     @Environment(\.canvasSize) private var canvas
     @FocusState private var typing: Bool
 
-    // 网页默认 175%（BrowserZoomLevel.medium），开始页跟着收小到原来的 0.875，和网页放在一起不显得大。
+    // 网页默认 150%（BrowserZoomLevel.medium）。
     // 一排正好放下整数个（7 个方块、4 张卡片，左右各留 margin），再往右露出下一个的一点，淡出去
     private let margin: CGFloat = 96
     private let rowHeight: CGFloat = 352
@@ -53,17 +53,6 @@ struct BrowserScreen: View {
                     .frame(width: canvas.width, height: canvas.height - rowsTop + collapse, alignment: .topLeading)
                     .clipped()
                     .offset(y: rowsTop)
-                if store.privateBrowsing {
-                    // 无痕浏览：选的网站开成无痕标签页
-                    Label("Private Browsing", systemImage: "hand.raised.fill")
-                        .font(.tv(.caption2, emphasized: true))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 8)
-                        .background(Capsule().fill(BrowserTopBar.privateTint.opacity(0.6)))
-                        .frame(width: canvas.width, height: fieldTop - BrowserTopBar.height)
-                        .offset(y: BrowserTopBar.height)
-                }
                 addressBar
                     .frame(width: canvas.width)
                     .padding(.top, fieldTop)

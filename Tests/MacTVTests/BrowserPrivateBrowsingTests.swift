@@ -60,36 +60,17 @@ struct BrowserPrivateBrowsingTests {
             #expect(store.tabs.count == 2 && store.tabs.allSatisfy(\.isBlank) && store.barCurrentID == store.tabs.last?.id)
             #expect(store.barFocus == .newTab)
             let normal = store.tabs
-            // ⇧⌘N：进无痕浏览，一个无痕的 Start Page，焦点在它的搜索框；标签栏上 Private 在"+"前面
+            // ⇧⌘N：进无痕浏览，一个无痕的 Start Page，焦点在它的搜索框；标签栏上没有另外的按钮（标签是紫色的）
             store.perform(.privateBrowsing)
             #expect(store.privateBrowsing && store.tabs.count == 1 && store.tabs[0].isPrivate && store.tabs[0].isBlank)
             #expect(store.onStartPage && store.focus == .field && store.barFocus == nil)
-            #expect(store.barItems.suffix(3) == [.privateBrowsing, .newTab, .more])
+            #expect(store.barItems.suffix(2) == [.newTab, .more])
             // 无痕浏览时 ⌘N 开的也是无痕的
             store.perform(.newTab)
             #expect(store.tabs.count == 2 && store.tabs.allSatisfy(\.isPrivate))
             // 再按 ⇧⌘N：出来，普通的两个原样回来
             store.perform(.privateBrowsing)
             #expect(!store.privateBrowsing && store.tabs == normal && !store.hasPrivateSession)
-            #expect(!store.barItems.contains(.privateBrowsing))
-        }
-    }
-
-    @Test
-    func thePrivateControlLeavesPrivateBrowsingAndFocusMovesToPlus() throws {
-        try Self.withTV { _, store in
-            store.newBlankTab()
-            let normal = store.tabs
-            store.perform(.privateBrowsing)
-            // 遥控器走得到它：从无痕的那个标签往右一格
-            store.focusBar()
-            store.handle(.move(.right))
-            #expect(store.barFocus == .privateBrowsing)
-            store.handle(.select)
-            #expect(!store.privateBrowsing && store.tabs == normal && store.barFocus == .newTab)
-            // 不在无痕浏览时没有它：选它（比如鼠标点到一个刚消失的）什么都不做
-            store.activate(.privateBrowsing)
-            #expect(!store.privateBrowsing)
         }
     }
 
@@ -166,7 +147,7 @@ struct BrowserPrivateBrowsingTests {
 
     @Test
     func theStripScrollsTheLeastToKeepTheSelectedTabInView() {
-        let available = BrowserTopBar.trackWidth(canvas: 1920, privateBrowsing: false) - BrowserTopBar.inset * 2
+        let available = BrowserTopBar.trackWidth(canvas: 1920) - BrowserTopBar.inset * 2
         let gap = BrowserTopBar.tabGap, fade = BrowserTopBar.fade
         // 十五个标签，正在看的是第八个（440 宽），别的 180
         let widths = BrowserTopBar.tabWidths(count: 15, current: 7, available: available, gap: gap)

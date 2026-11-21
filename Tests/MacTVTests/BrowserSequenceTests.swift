@@ -31,7 +31,7 @@ struct BrowserSequenceTests {
     }
 
     /// 1920 的画布去掉两边的边距（各 32）、两组按钮（各 116）、和中间那一排之间的空（各 16）
-    static let track = BrowserTopBar.trackWidth(canvas: 1920, privateBrowsing: false)
+    static let track = BrowserTopBar.trackWidth(canvas: 1920)
 
     @Test
     func theBarKeepsItsRulesThroughManySequences() throws {
@@ -130,7 +130,6 @@ struct BrowserSequenceTests {
         default: break
         }
         if store.menu != nil, store.barFocus != .more { problems.append("menu open without ⋯ focused") }
-        if store.barFocus == .privateBrowsing, !store.privateBrowsing { problems.append("focus on a Private control that isn't there") }
         // 关掉一个以后只剩一个：焦点不留在标签栏上（那个标签不是白的）
         if closedOne, wasInBar, store.tabs.count == 1, store.barFocus != nil { problems.append("the last tab stayed focused (white) after a close") }
         // 地址栏：不留下改了一半的
@@ -155,7 +154,7 @@ struct BrowserSequenceTests {
             problems.append("private session \(store.hasPrivateSession), private browsing \(store.privateBrowsing)")
         }
         // 这一排：一个标签是 720，多了跟着变长（比一个的宽），最宽撑满；两头浮起来的不被切掉
-        let track = BrowserTopBar.trackWidth(canvas: 1920, privateBrowsing: store.privateBrowsing)
+        let track = BrowserTopBar.trackWidth(canvas: 1920)
         let current = store.tabs.firstIndex { $0.id == store.barCurrentID }
         let widths = BrowserTopBar.tabWidths(count: store.tabs.count, current: current, editing: store.editing && store.editingInBar,
                                              available: track - BrowserTopBar.inset * 2, gap: BrowserTopBar.tabGap)

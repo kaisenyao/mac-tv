@@ -177,12 +177,12 @@ struct BrowserTests {
 
     @Test @MainActor
     func zoomHasThreeLevelsAndMediumIsTheDefault() throws {
-        #expect(BrowserZoomLevel.allCases.map(\.zoom) == [1.5, 1.75, 2])
+        #expect(BrowserZoomLevel.allCases.map(\.zoom) == [1.25, 1.5, 1.75])
         #expect(BrowserZoomLevel.allCases.map(\.name) == ["Small", "Medium", "Large"])
         // 以前记下的百分比：换成最近的一档，正好在中间的算"中"
-        #expect(BrowserZoomLevel.nearest(1.25) == .small)
-        #expect(BrowserZoomLevel.nearest(1.6) == .small)
-        #expect(BrowserZoomLevel.nearest(1.625) == .medium)
+        #expect(BrowserZoomLevel.nearest(1) == .small)
+        #expect(BrowserZoomLevel.nearest(1.35) == .small)
+        #expect(BrowserZoomLevel.nearest(1.375) == .medium)
         #expect(BrowserZoomLevel.nearest(1.9) == .large)
         #expect(BrowserZoomLevel.nearest(3) == .large)
         // 没记过、记的是以前的默认值（这台电视上是 200%）：中
@@ -195,12 +195,12 @@ struct BrowserTests {
         let (storage, cleanup) = Self.storage()
         defer { cleanup() }
         let store = BrowserStore(storage: storage)
-        #expect(store.zoom(for: "a.example", isPrivate: false) == 1.75)
+        #expect(store.zoom(for: "a.example", isPrivate: false) == 1.5)
         storage.setZoom(2, for: "b.example")
         storage.setZoom(1.25, for: "c.example")
-        #expect(store.zoom(for: "www.b.example", isPrivate: false) == 2)
-        #expect(store.zoom(for: "c.example", isPrivate: false) == 1.5)
-        #expect(store.page.zoom == 1.75)
+        #expect(store.zoom(for: "www.b.example", isPrivate: false) == 1.75)
+        #expect(store.zoom(for: "c.example", isPrivate: false) == 1.25)
+        #expect(store.page.zoom == 1.5)
     }
 
     // MARK: 标签页
@@ -269,9 +269,8 @@ struct BrowserTests {
         #expect(BrowserStore.step(in: items, from: .more, by: 1) == nil)
         #expect(BrowserStore.barItems(tabs: [], canGoBack: true, canGoForward: false) == [.back, .newTab, .more])
         // 无痕浏览："+"前面是 Private
-        #expect(BrowserStore.barItems(tabs: ["p"], canGoBack: false, canGoForward: false, privateBrowsing: true)
-                == [.tab("p"), .privateBrowsing, .newTab, .more])
-        #expect(BrowserStore.barStep(in: [.tab("p"), .privateBrowsing, .newTab, .more], from: .tab("p"), .right) == .privateBrowsing)
+        #expect(BrowserStore.barItems(tabs: ["p"], canGoBack: false, canGoForward: false) == [.tab("p"), .newTab, .more])
+        #expect(BrowserStore.barStep(in: [.tab("p"), .newTab, .more], from: .tab("p"), .right) == .newTab)
     }
 
     @Test

@@ -18,7 +18,7 @@ import WebKit
 /// 只有正在看的那个标签页有网页视图（一个网页的进程要一两百兆，多的近一个 G），别的只留地址、标题、
 /// 前进后退的记录和一张截图，换过去时重新载入（先放截图，载好了换成真的网页）。
 /// 无痕浏览（Private Browsing）是这一个浏览器的一种状态，不是另一个窗口：进去时标签栏换成另一组、新的无痕标签页
-/// （从一个 Start Page 开始），普通的那一组原样收起来；再按一次（标签栏右上角的 Private、⇧⌘N、"⋯"里的 Private Browsing）
+/// （从一个 Start Page 开始），普通的那一组原样收起来；再按一次（⇧⌘N、"⋯"里的 Private Browsing，开着时打勾）
 /// 出来，无痕的那一组和它的网站数据一起扔掉，普通的标签页原样回来。无痕的用自己的一份不落盘的网站数据
 /// （WKWebsiteDataStore.nonPersistent），什么都不记：不进"最近浏览"、不存标签页、截图只在内存里。
 ///
@@ -41,8 +41,7 @@ final class BrowserStore: ObservableObject {
     enum Focus: Equatable { case field, item(row: Int, column: Int) }
 
     /// 标签栏上的焦点（nil：焦点在网页里，或者开始页的地址栏、那几排里）。close：那个标签的关闭按钮（×）。
-    /// privateBrowsing：无痕浏览时"+"左边的 Private（选它出来）
-    enum BarFocus: Hashable { case back, forward, tab(String), close(String), privateBrowsing, newTab, more }
+    enum BarFocus: Hashable { case back, forward, tab(String), close(String), newTab, more }
 
     /// 空白标签页（还没打开网站，Safari 叫它 Start Page）的网址。和别的标签页一样存着
     nonisolated static let blankURL = URL(string: "about:blank")!
@@ -671,7 +670,7 @@ final class BrowserStore: ObservableObject {
 
     // MARK: 无痕浏览
 
-    /// 进出无痕浏览（标签栏上的 Private、⇧⌘N、"⋯"里的 Private Browsing 都走这里）
+    /// 进出无痕浏览（⇧⌘N、"⋯"里的 Private Browsing 都走这里）
     func togglePrivateBrowsing() {
         if privateBrowsing { endPrivateBrowsing(show: true) } else { startPrivateBrowsing() }
     }
@@ -962,14 +961,13 @@ final class BrowserStore: ObservableObject {
 
     private var currentTabFocus: BarFocus? { barCurrentID.map(BarFocus.tab) }
 
-    /// 标签栏上能走到的，从左到右（不能用的后退、前进跳过；无痕浏览时"+"前面多一个 Private）。关闭按钮不在这里面，见 barStep
-    nonisolated static func barItems(tabs: [String], canGoBack: Bool, canGoForward: Bool, privateBrowsing: Bool = false) -> [BarFocus] {
-        (canGoBack ? [.back] : []) + (canGoForward ? [.forward] : []) + tabs.map(BarFocus.tab)
-            + (privateBrowsing ? [.privateBrowsing] : []) + [.newTab, .more]
+    /// 标签栏上能走到的，从左到右（不能用的后退、前进跳过）。关闭按钮不在这里面，见 barStep
+    nonisolated static func barItems(tabs: [String], canGoBack: Bool, canGoForward: Bool) -> [BarFocus] {
+        (canGoBack ? [.back] : []) + (canGoForward ? [.forward] : []) + tabs.map(BarFocus.tab) + [.newTab, .more]
     }
 
     var barItems: [BarFocus] {
-        Self.barItems(tabs: barTabs.map(\.id), canGoBack: barCanGoBack, canGoForward: barCanGoForward, privateBrowsing: privateBrowsing)
+        Self.barItems(tabs: barTabs.map(\.id), canGoBack: barCanGoBack, canGoForward: barCanGoForward)
     }
 
     nonisolated static func step(in items: [BarFocus], from focus: BarFocus, by delta: Int) -> BarFocus? {
@@ -1150,11 +1148,6 @@ final class BrowserStore: ObservableObject {
             // 总是再开一个空白标签页（开始页上也是），无痕浏览时开的也是无痕的
             newBlankTab(from: barCurrentID)
             focusBar(on: .newTab)   // 焦点留在"+"上：看得见新标签长出来，可以接着再开；按下到地址栏
-        case .privateBrowsing:
-            // 只有无痕浏览时才有：出来，普通的标签页回来。Private 不在了，焦点到它右边的"+"上
-            guard privateBrowsing else { return }
-            togglePrivateBrowsing()
-            focusBar(on: .newTab)
         case .more: _ = openMenu()
         case .close: break
         }
