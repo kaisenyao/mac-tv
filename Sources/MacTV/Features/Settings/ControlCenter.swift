@@ -323,26 +323,31 @@ extension TVController {
         controlCenter?.list = nil
     }
 
-    /// What the Remotes tile shows: what's connected, Apple style ("Siri Remote · 87%, iPhone"), and a symbol
-    /// for it: the remote's, unless the only thing connected is a game controller or a phone.
-    var remotesSummary: (text: String, symbol: String, connected: Bool) {
+    /// What the Remotes tile shows, worded as Apple TV's tiles are: the one remote that's connected by its name (its
+    /// battery under it, when it reports one), several by how many, none as "Off"; and a symbol for it: the remote's,
+    /// unless the only thing connected is a game controller or a phone.
+    var remotesSummary: (title: String, value: String?, symbol: String, connected: Bool) {
         let siri = SiriRemoteStatus.shared.connected
         let phone = remoteCoordinator.pairingStore.connectedCount() > 0
-        let battery = remoteCoordinator.siriRemoteBattery.map { " · \($0)%" } ?? ""
-        let pad = controller.map { "Game Controller" + ($0.percent.map { " · \($0)%" } ?? "") }
-        let parts = [siri ? "Siri Remote" + battery : nil, phone ? "iPhone" : nil, pad].compactMap { $0 }
-        let symbol = !siri && !phone && pad != nil ? "gamecontroller.fill"
-            : !siri && phone && pad == nil ? "iphone" : "appletvremote.gen4.fill"
-        return (parts.isEmpty ? "Not Connected" : parts.joined(separator: ", "), symbol, !parts.isEmpty)
+        let connected: [(name: String, battery: Int?)] = [
+            siri ? ("Siri Remote", remoteCoordinator.siriRemoteBattery) : nil, phone ? ("iPhone", nil) : nil,
+            controller.map { ("Game Controller", $0.percent) }].compactMap { $0 }
+        let symbol = !siri && !phone && controller != nil ? "gamecontroller.fill"
+            : !siri && phone && controller == nil ? "iphone" : "appletvremote.gen4.fill"
+        switch connected.count {
+        case 0: return ("Remotes", "Off", symbol, false)
+        case 1: return (connected[0].name, connected[0].battery.map { "\($0)%" }, symbol, true)
+        default: return ("Remotes", "\(connected.count) Connected", symbol, true)
+        }
     }
 }
 
 // MARK: Views
 
 /// Drawn at Apple TV's own sizes at 1080p, measured from the pictures in Apple's guide (tvOS 27): tiles about 206
-/// points wide and 95 tall with 17 between them, Sleep Now as tall as two, round buttons as wide as a tile is tall,
-/// and Apple's tile text: 23 points, medium. A tile's second line is a size smaller than Apple TV's (20), because
-/// ours name a display, a speaker or a remote, which run longer than "Home" or "Off".
+/// points wide and 95 tall with 17 between them, Sleep Now as tall as two with the capsules' own corner, round buttons
+/// as wide as a tile is tall. A tile's symbol sits on the centre of its rounded end and its text starts 88 points in,
+/// 23 points, medium: a name over two lines ("Sleep / Timer"), or a short title with what it's set to under it, dimmer.
 struct ControlCenterView: View {
     @ObservedObject var tv: TVController
     @ObservedObject private var siriRemote = SiriRemoteStatus.shared
@@ -352,13 +357,16 @@ struct ControlCenterView: View {
     private static let row: CGFloat = 95
     private static let gap: CGFloat = 17
     private static let width = column * 2 + gap
-    /// The box every round button's symbol is fitted to: Apple TV's are 40 points tall, a wide one up to 50 across.
-    private static let glyph = CGSize(width: 50, height: 40)
-    /// The box every tile's symbol is fitted to.
-    private static let tileGlyph = CGSize(width: 38, height: 34)
-    private static let speakerGlyph = CGSize(width: 46, height: 34)
+    /// The box every round button's symbol is fitted to: Apple TV's Search is 40 points tall, its game controller 61 across.
+    private static let glyph = CGSize(width: 61, height: 42)
+    /// The box every tile's symbol is fitted to: Apple TV's Wi-Fi is 45 across, its round ones (Sleep Timer) 41. A remote
+    /// or a phone is narrow, so it's drawn taller than the box, to weigh what a display or a dial does.
+    private static let tileGlyph = CGSize(width: 45, height: 41)
+    private static let speakerGlyph = CGSize(width: 54, height: 41)
+    private static let narrowGlyphs: Set<String> = ["appletvremote.gen4.fill", "iphone"]
+    /// A tile's symbol is centred on its rounded end's own centre, half a row in, and its text starts here, as Apple TV's.
+    private static let tileTextLeading: CGFloat = 88
     private static let tileText = Font.tv(.caption2)
-    private static let tileDetail = Font.system(size: 20, weight: .medium)
     /// The blue of a connected remote or the sound output, as on Apple TV.
     private static let tint = Color(hex: "#5AC8FA")
 
@@ -401,17 +409,17 @@ struct ControlCenterView: View {
             HStack(alignment: .top, spacing: Self.gap) {
                 sleepTile(panel)
                 VStack(spacing: Self.gap) {
-                    tile(.remotes, panel, symbol: remotes.symbol, title: "Remotes", detail: remotes.text, tinted: remotes.connected)
-                    tile(.display, panel, symbol: "display", title: "Display",
-                         detail: tv.displaySummary ?? "")
+                    tile(.remotes, panel, symbol: remotes.symbol, title: remotes.title, value: remotes.value, tinted: remotes.connected)
+                    tile(.display, panel, symbol: "display", title: "Display", value: tv.displaySummary)
                 }
             }
             HStack(spacing: Self.gap) {
                 // Speakers: the speaker that shows the volume (as the volume indicator's); headphones, a TV, AirPlay: theirs
-                tile(.audio, panel, symbol: tv.currentAudioDevice?.tileSymbol ?? AudioOutputDevice.speakerSymbol, title: "Audio",
-                     detail: tv.currentAudioDevice?.name ?? "Speakers", tinted: true)
-                tile(.sleepTimer, panel, symbol: "timer", title: "Sleep Timer",
-                     detail: minutes > 0 ? "\(minutes) Minute\(minutes == 1 ? "" : "s") Left" : "Off")
+                tile(.audio, panel, symbol: tv.currentAudioDevice?.tileSymbol ?? AudioOutputDevice.speakerSymbol,
+                     title: tv.currentAudioDevice?.name ?? "Speakers", tinted: true)
+                // Apple TV's Sleep Timer symbol: a ring and a needle
+                tile(.sleepTimer, panel, symbol: "gauge.with.needle", title: minutes > 0 ? "\(minutes) min" : "Sleep Timer",
+                     value: minutes > 0 ? "Left" : nil)
             }
             .opacity(panel.editing ? 0.35 : 1)   // editing: the tiles rest, only the round buttons move
             .allowsHitTesting(!panel.editing)
@@ -519,10 +527,10 @@ struct ControlCenterView: View {
 
     private func sleepTile(_ panel: ControlCenterPanel) -> some View {
         let focused = panel.item == .sleepNow
-        let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: Self.row / 2, style: .continuous)   // the capsules' own radius
         return Button { tv.activateControl(.sleepNow) } label: {
             VStack(spacing: 12) {
-                Image(systemName: "power").font(.system(size: 98, weight: .light))
+                Image(systemName: "power").font(.system(size: 94, weight: .medium))   // Apple TV's: 94 by 98, its stroke about 9
                 Text("Sleep Now").font(Self.tileText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
@@ -536,18 +544,18 @@ struct ControlCenterView: View {
         .buttonStyle(PressDip(presses: panel.presses, focused: focused))
     }
 
+    /// A tile, as Apple TV's: its symbol on the centre of the rounded end, then 23-point text. A name alone runs over
+    /// two lines ("Sleep / Timer", "Danny's / AirPods"); a short title has what it's set to under it, dimmer ("Wi-Fi /
+    /// Home"). One long word (a display's model name) is drawn a little smaller rather than broken or cut.
     private func tile(_ item: ControlCenterPanel.Item, _ panel: ControlCenterPanel, symbol: String,
-                      title: String, detail: String, tinted: Bool = false) -> some View {
+                      title: String, value: String? = nil, tinted: Bool = false) -> some View {
         let focused = panel.item == item
         return Button { tv.activateControl(item) } label: {
-            // As Apple TV's: the symbol well in from the edge with room before the text, the title and its detail the
-            // same size and weight (the detail only dimmer), smaller than the tile so it breathes.
-            HStack(spacing: 12) {
-                // Every tile's symbol fitted to the same box, so a tall remote and a wide display look the same size
+            HStack(spacing: Self.tileTextLeading - Self.row / 2 - Self.tileGlyph.width / 2) {
                 Group {
                     if symbol == AudioOutputDevice.speakerSymbol {
-                        // The speaker with its three waves is wide: a wider box (reaching a little into the gaps either
-                        // side) makes it look as big as the other tiles' symbols, on the same centre as theirs
+                        // The speaker with its three waves is wide: a wider box makes it look as big as the other
+                        // tiles' symbols, on the same centre as theirs
                         VolumeSpeaker(audio: tv.audioCoordinator, box: Self.speakerGlyph, weight: .regular)
                             .frame(width: Self.tileGlyph.width)
                     } else {
@@ -555,25 +563,28 @@ struct ControlCenterView: View {
                             .resizable()
                             .fontWeight(.regular)
                             .scaledToFit()
-                            .frame(width: Self.tileGlyph.width, height: Self.tileGlyph.height)
+                            .frame(width: Self.tileGlyph.width,
+                                   height: Self.tileGlyph.height + (Self.narrowGlyphs.contains(symbol) ? 7 : 0))
                             .contentTransition(.symbolEffect(.replace))
                     }
                 }
                 .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(title).font(Self.tileText)
-                        .minimumScaleFactor(0.9)   // "Sleep Timer" on one line
-                    Text(detail).font(Self.tileDetail).opacity(0.6)
-                        .minimumScaleFactor(0.75)   // "Game Controller · 70%" still fits
-                        .contentTransition(detail.first?.isNumber == true ? .numericText() : .opacity)
+                    Text(title).lineLimit(value == nil && title.contains(" ") ? 2 : 1)
+                    if let value {
+                        Text(value).opacity(0.6).lineLimit(1)
+                            .contentTransition(value.first?.isNumber == true ? .numericText() : .opacity)
+                    }
                 }
-                .lineLimit(1)
-                Spacer(minLength: 0)
+                .font(Self.tileText)
+                .multilineTextAlignment(.leading)
+                .minimumScaleFactor(0.75)
+                // A width of its own, so a long name shrinks to fit before it's cut; clear of the rounded end
+                .frame(width: Self.column - Self.tileTextLeading - 16, alignment: .leading)
             }
-            .padding(.leading, 18)
-            .padding(.trailing, 8)
+            .padding(.leading, Self.row / 2 - Self.tileGlyph.width / 2)
             .foregroundStyle(focused ? .black : .white)
-            .frame(width: Self.column, height: Self.row)
+            .frame(width: Self.column, height: Self.row, alignment: .leading)
             .focusPlatter(Capsule(), focused: focused)
             .contentShape(Capsule())
             .lifted(focused, in: Capsule())

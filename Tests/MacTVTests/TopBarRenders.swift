@@ -44,20 +44,20 @@ import Testing
     }
 
     @Test func home() async throws {
-        try await withTV { tv in try await render("topbar-home", HomeView(tv: tv)) }
+        try await withTV { tv in try await render("topbar-home", ZStack { HomeView(tv: tv); HomeStatusRow(tv: tv) }) }
     }
 
     @Test func grid() async throws {
         try await withTV { tv in
             tv.setFocus(.app(tv.columns + 1))
-            try await render("topbar-grid", HomeView(tv: tv))
+            try await render("topbar-grid", ZStack { HomeView(tv: tv); HomeStatusRow(tv: tv) })
         }
     }
 
     @Test func controlCenter() async throws {
         try await withTV { tv in
             tv.controlCenter = ControlCenterPanel()
-            try await render("topbar-control-center", ZStack { HomeView(tv: tv); ControlCenterView(tv: tv) })
+            try await render("topbar-control-center", ZStack { HomeView(tv: tv); DimBackdrop(); HomeStatusRow(tv: tv); ControlCenterView(tv: tv) })
         }
     }
 
@@ -77,7 +77,7 @@ import Testing
     @Test func homeExpanded() async throws {
         try await withTV { tv in
             tv.setFocus(.status(.controlCenter))
-            try await render("topbar-home-expanded", HomeView(tv: tv))
+            try await render("topbar-home-expanded", ZStack { HomeView(tv: tv); HomeStatusRow(tv: tv) })
         }
     }
 
@@ -87,7 +87,7 @@ import Testing
             _ = tv.profiles.add(named: "Nisha")
             tv.setFocus(.status(.profile))
             tv.openProfiles(dropdown: true)
-            try await render("topbar-profiles", ZStack { HomeView(tv: tv); Color.black.opacity(0.32); ProfileDropdown(tv: tv) })
+            try await render("topbar-profiles", ZStack { HomeView(tv: tv); DimBackdrop(); HomeStatusRow(tv: tv); ProfileDropdown(tv: tv) })
         }
     }
 

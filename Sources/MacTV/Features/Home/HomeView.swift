@@ -11,7 +11,7 @@ import SwiftUI
 /// each side of the screen, its corners concentric with the icons'). Home and Arrange Apps both lay out from these.
 enum HomeGrid {
     static let tile = CGSize(width: 250, height: 150)
-    static let tileCorner: CGFloat = 22
+    static let tileCorner: CGFloat = 30
     static let spacing: CGFloat = 48
     static let dockPadding: CGFloat = 40
     static let rowGap: CGFloat = 110
@@ -73,7 +73,6 @@ private struct Layout {
 
 struct HomeView: View {
     @ObservedObject var tv: TVController
-    @ObservedObject private var siriRemote = SiriRemoteStatus.shared
     @Environment(\.canvasSize) private var canvas
 
     private var shelfFocused: Bool {
@@ -102,15 +101,6 @@ struct HomeView: View {
                 // An expanded banner takes the whole screen; the dock slides away, off the bottom.
                 .offset(y: gridOffset)
 
-            // The status row, as tvOS 26's: a glass capsule with the time and the avatar; up into it (or a click on
-            // it), and while Control Center or the profiles are open, it widens to the status glyphs and the Control
-            // Center button. Left and Right move between the button and the avatar.
-            StatusCapsule(tv: tv, glyphs: statusGlyphs)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, TopBar.trailing)
-                .padding(.top, TopBar.top)
-                .modifier(ClearsCornerForNotices(notices: tv.notices, inGrid: tv.inGrid))
-
             // Press and hold Select on an app: its menu, grown out of the app, over all of Home (see AppMenuLayer).
             let panel = tv.organizer
             let held = panel?.onHome == true ? panel?.selectedID.flatMap { id in tv.services.firstIndex { $0.id == id } } : nil
@@ -130,15 +120,38 @@ struct HomeView: View {
     }
 }
 
-extension HomeView {
-    /// The status row's glyphs: a Siri Remote or game controller that's connected, and the lid staying awake.
-    private var statusGlyphs: [String] {
+/// Home's status row, as tvOS 26's: a glass capsule with the time and the avatar; up into it (or a click on it), and
+/// while Control Center or the profiles are open, it widens to the status glyphs and the Control Center button. Left
+/// and Right move between the button and the avatar.
+///
+/// It's a layer of its own above Home (RootView), not part of HomeView: a panel opened from it (Control Center, the
+/// profiles) dims Home under the row and never the row itself, as Apple TV's Control Center keeps its time, glyphs and
+/// buttons at full brightness.
+struct HomeStatusRow: View {
+    @ObservedObject var tv: TVController
+    @ObservedObject private var siriRemote = SiriRemoteStatus.shared
+    @Environment(\.canvasSize) private var canvas
+
+    var body: some View {
+        StatusCapsule(tv: tv, glyphs: glyphs)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, TopBar.trailing)
+            .padding(.top, TopBar.top)
+            .modifier(ClearsCornerForNotices(notices: tv.notices, inGrid: tv.inGrid))
+            .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+            .clipped()
+            .foregroundStyle(.white)
+            .animation(Motion.navigate, value: tv.inGrid)
+    }
+
+    /// A Siri Remote or game controller that's connected, and the lid staying awake.
+    private var glyphs: [String] {
         [siriRemote.connected ? "appletvremote.gen4.fill" : nil, tv.controller == nil ? nil : "gamecontroller.fill",
          tv.lidSleepOff ? "laptopcomputer" : nil].compactMap { $0 }
     }
 }
 
-/// Home's status row, as tvOS 26's: the time and the avatar in a glass capsule. It widens (the glyphs and the
+/// The status row itself: the time and the avatar in a glass capsule. It widens (the glyphs and the
 /// Control Center button come in between) while focus is in it, or Control Center or the profiles are open from it;
 /// the focused button grows on a white platter. While one of the two is open the row is Apple TV's Control Center
 /// row: the capsule's glass is gone, the open one is big and the other small.
@@ -165,15 +178,15 @@ private struct StatusCapsule: View {
                     Image(systemName: symbol).font(.system(size: 22, weight: .medium)).opacity(0.9)
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
-                // Control Center: white while it's open or focused, like Apple TV's
-                let focused = tv.focus == .status(.controlCenter)
+                // Control Center, like Apple TV's: white with focus; while it's open (focus is in its tiles) a pale disc
+                let focused = tv.focus == .status(.controlCenter) && !controlCenterOpen
                 let lit = focused || controlCenterOpen
                 Button { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) } label: {
                     Image(systemName: "switch.2")
                         .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(lit ? .black : .white)
+                        .foregroundStyle(focused ? .black : .white)
                         .frame(width: TopBar.avatar, height: TopBar.avatar)
-                        .background(Circle().fill(.white).opacity(lit ? 1 : 0))
+                        .background(Circle().fill(.white).opacity(focused ? 1 : controlCenterOpen ? 0.3 : 0))
                         .contentShape(Circle())
                         .scaleEffect(lit ? Self.selected : 1)
                         .shadow(color: .black.opacity(focused ? 0.3 : 0), radius: 10, y: 6)
@@ -192,7 +205,7 @@ private struct StatusCapsule: View {
         .padding(.leading, 26)
         .padding(.trailing, TopBar.inset)
         .frame(height: TopBar.height)
-        .tvGlass(in: Capsule(), enabled: !open)
+        .tvGlass(.clear, in: Capsule(), enabled: !open)
         .animation(Motion.focus, value: tv.focus)
         .animation(Motion.focus, value: expanded)
         .animation(Motion.focus, value: open)
@@ -276,7 +289,7 @@ struct AppGrid: View {
 /// row in the grid too, as Apple TV's does, and scrolls away with that row.
 struct GlassDock: View {
     var body: some View {
-        Color.clear.tvGlass(in: RoundedRectangle(cornerRadius: HomeGrid.dockCorner, style: .continuous))
+        Color.clear.tvGlass(.clear, in: RoundedRectangle(cornerRadius: HomeGrid.dockCorner, style: .continuous))
     }
 }
 

@@ -164,15 +164,18 @@ import Testing
         defer { SiriRemoteStatus.shared.connected = wasConnected }
         try withTV { tv in
             SiriRemoteStatus.shared.connected = false
-            #expect(tv.remotesSummary.text == "Not Connected" && !tv.remotesSummary.connected)
+            #expect(tv.remotesSummary.title == "Remotes" && tv.remotesSummary.value == "Off" && !tv.remotesSummary.connected)
+            // One connected: its name, its battery under it
             tv.controller = ControllerInfo(name: "DualSense Wireless Controller", battery: 0.7)
-            #expect(tv.remotesSummary.text == "Game Controller · 70%" && tv.remotesSummary.symbol == "gamecontroller.fill")
+            #expect(tv.remotesSummary.title == "Game Controller" && tv.remotesSummary.value == "70%")
+            #expect(tv.remotesSummary.symbol == "gamecontroller.fill" && tv.remotesSummary.connected)
+            // Several: how many, under the remote's own symbol
             SiriRemoteStatus.shared.connected = true
-            #expect(tv.remotesSummary.text.hasPrefix("Siri Remote"))
+            #expect(tv.remotesSummary.title == "Remotes" && tv.remotesSummary.value == "2 Connected")
             #expect(tv.remotesSummary.symbol == "appletvremote.gen4.fill")
             let token = try tv.remoteCoordinator.pairingStore.issue(name: "iPhone", guest: false)
             _ = tv.remoteCoordinator.pairingStore.authenticate(token)
-            #expect(tv.remotesSummary.text.contains(", iPhone, Game Controller · 70%"))
+            #expect(tv.remotesSummary.value == "3 Connected")
         }
     }
 

@@ -50,7 +50,14 @@ struct RootView: View {
                             .allowsHitTesting((tv.activeSheet == nil || tv.organizer?.onHome == true) && !tv.screensaver)
                             .accessibilityHidden(tv.activeSheet != nil || tv.screensaver)
                     }
-                    .modifier(HomeEmptySwitcher(nudge: tv.homeNudge))
+                    // Home's status row, a layer above the dim of a panel opened from it (see HomeStatusRow). Home's
+                    // topmost layer, so the App Switcher's backdrop finding nothing comes over it too.
+                    TVCanvas { HomeStatusRow(tv: tv).modifier(HomeBounce(nudge: tv.homeNudge)) }
+                        .ignoresSafeArea()
+                        .allowsHitTesting(tv.activeSheet == nil && !tv.screensaver)
+                        .accessibilityHidden(tv.activeSheet != nil || tv.screensaver)
+                        .modifier(HomeEmptySwitcher(nudge: tv.homeNudge))
+                        .zIndex(ModalSheetRouter.statusRowLayer)
                 }
             }
             // Sheets over whatever is in front: Home, an app, a web page or a movie (Control Center opens over them)
@@ -82,6 +89,12 @@ struct ModalSheetRouter: View {
     @ObservedObject var tv: TVController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The layers, bottom to top: the screen in front (0), the dim of a panel (Control Center, the profiles dropped
+    /// from the avatar), Home's status row, then each sheet at 1 + its own number. A panel only ever opens over Home
+    /// or an app, never over another sheet, so its dim sits under the status row and that row stays bright.
+    static let panelDimLayer = 0.25
+    static let statusRowLayer = 0.5
+
     var body: some View {
         // Arrange Apps isn't drawn while a Home Screen app's menu is open on Home (see AppOrganizer.onHome).
         ForEach(tv.sheets.open.filter { $0 != .organizer || tv.organizer?.onHome != true }, id: \.self) { layer in
@@ -91,7 +104,7 @@ struct ModalSheetRouter: View {
                 DimBackdrop { layer == .controlCenter ? (tv.controlCenter = nil) : (tv.profilePicker = nil) }
                     .allowsHitTesting(tv.isTopSheet(layer))
                     .transition(.opacity)
-                    .zIndex(0.5 + Double(layer.rawValue))
+                    .zIndex(Self.panelDimLayer)
             }
             TVCanvas { sheet(layer) }
                 .ignoresSafeArea()

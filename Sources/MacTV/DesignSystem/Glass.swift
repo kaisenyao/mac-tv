@@ -24,17 +24,25 @@ enum Motion {
     }
 }
 
+/// Liquid Glass's two looks, as tvOS uses them. `clear` lets what's behind it show through nearly untouched (the
+/// Home Screen's dock and status capsule, over the Top Shelf's artwork); `regular` blurs it so text on the glass
+/// always reads (everything else).
+enum TVGlass {
+    case regular, clear
+}
+
 extension View {
     /// Apple TV's Liquid Glass, for Mac TV's controls layer only (see the rules in Layers.swift): the dock, pills,
-    /// buttons, Control Center, sidebars, menus and notices, never content. Following Apple's guidance it's the
-    /// regular variant (these carry text), applied after the view's other appearance modifiers; `interactive` makes a
-    /// control respond to the pointer, and `tint` colours it. Before macOS 26 there is no Liquid Glass: `FrostedGlass`
-    /// stands in, the backdrop blurred with the same lit rim.
+    /// buttons, Control Center, sidebars, menus and notices, never content. Applied after the view's other appearance
+    /// modifiers; `interactive` makes a control respond to the pointer, and `tint` colours it. Before macOS 26 there
+    /// is no Liquid Glass: `FrostedGlass` stands in for both looks, the backdrop blurred with the same lit rim.
     /// `enabled: false` keeps the modifier in place (`.identity`), so switching glass off never changes the view's identity.
     @ViewBuilder
-    func tvGlass<S: InsettableShape>(in shape: S, interactive: Bool = false, tint: Color? = nil, enabled: Bool = true) -> some View {
+    func tvGlass<S: InsettableShape>(_ kind: TVGlass = .regular, in shape: S, interactive: Bool = false, tint: Color? = nil,
+                                     enabled: Bool = true) -> some View {
         if #available(macOS 26, *) {
-            glassEffect(enabled ? .regular.tint(tint).interactive(interactive) : .identity, in: shape)
+            let glass: Glass = kind == .clear ? .clear : .regular
+            glassEffect(enabled ? glass.tint(tint).interactive(interactive) : .identity, in: shape)
         } else {
             background { if enabled { FrostedGlass(shape: shape, tint: tint) } }
         }
@@ -43,9 +51,10 @@ extension View {
     /// tvOS focus on a control: a solid white platter when focused, the control's glass otherwise. Tinting the
     /// glass white instead reads milky grey over dark artwork, and dark text on it loses contrast. The glass
     /// switches to `.identity` rather than going away, so focus moving never changes the view's identity.
-    func focusPlatter<S: InsettableShape>(_ shape: S, focused: Bool, color: Color = .white, glass: Bool = true) -> some View {
+    func focusPlatter<S: InsettableShape>(_ shape: S, focused: Bool, color: Color = .white, glass: Bool = true,
+                                          kind: TVGlass = .regular) -> some View {
         background { shape.fill(color).opacity(focused ? 1 : 0) }
-            .tvGlass(in: shape, enabled: glass && !focused)
+            .tvGlass(kind, in: shape, enabled: glass && !focused)
     }
 
     /// A plain panel for sheets that sit on the frosted backdrop. Glass there would have only blur to

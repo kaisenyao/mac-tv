@@ -19,6 +19,10 @@ import SwiftUI
 //   round buttons, a pill or a round button in an app's top bar, a button over artwork (Play, Open, "+"), a sidebar,
 //   a side panel, a menu, a player's buttons and its paused mark, and every notice. All of it is `tvGlass`
 //   (a panel or a menu: `tvPanelSurface`, the same glass a little darker for its text).
+// - Two kinds of glass, as Apple TV has. Home's dock and status capsule are `.clear`: the artwork behind them shows
+//   through nearly untouched, only bent at the edge (measured on Apple's pictures: three quarters of its detail
+//   kept). Everything that carries text or symbols on glass is `.regular`, which blurs what's behind so they read
+//   over anything; clear glass there loses white symbols on bright artwork and lets a menu's backdrop through its rows.
 // - Focus on glass is `focusPlatter`: the control turns solid white with dark text, as Apple TV's do.
 // - Content is never glass: app icons, posters, covers, cards, the rows of a list, text, and the small labels on
 //   artwork (a duration, a count), which stay dark scrims.
