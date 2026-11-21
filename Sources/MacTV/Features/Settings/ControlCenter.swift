@@ -359,6 +359,8 @@ struct ControlCenterView: View {
     private static let width = column * 2 + gap
     /// The box every round button's symbol is fitted to: Apple TV's Search is 40 points tall, its game controller 61 across.
     private static let glyph = CGSize(width: 61, height: 42)
+    /// Jasmine's ball on her round button: a solid disc, so a little larger than a symbol is tall to weigh the same.
+    private static let orb: CGFloat = 46
     /// The box every tile's symbol is fitted to: Apple TV's Wi-Fi is 45 across, its round ones (Sleep Timer) 41. A remote
     /// or a phone is narrow, so it's drawn taller than the box, to weigh what a display or a dial does.
     private static let tileGlyph = CGSize(width: 45, height: 41)
@@ -410,7 +412,7 @@ struct ControlCenterView: View {
                 sleepTile(panel)
                 VStack(spacing: Self.gap) {
                     tile(.remotes, panel, symbol: remotes.symbol, title: remotes.title, value: remotes.value, tinted: remotes.connected)
-                    tile(.display, panel, symbol: "display", title: "Display", value: tv.displaySummary)
+                    tile(.display, panel, symbol: tv.displaySymbol, title: "Display", value: tv.displaySummary)
                 }
             }
             HStack(spacing: Self.gap) {
@@ -613,6 +615,8 @@ struct ControlCenterView: View {
             Group {
                 if item == .mute {
                     VolumeSpeaker(audio: tv.audioCoordinator, box: CGSize(width: 54, height: 40))   // the waves follow the volume
+                } else if item == .jasmine, OrbPipeline.shared != nil {
+                    JasmineOrbStill(side: Self.orb)   // Jasmine's own ball, in its own colours with focus too
                 } else {
                     Image(systemName: look.symbol)
                         .resizable()
