@@ -350,7 +350,7 @@ private struct DedaoBrowse: View {
         let playing = store.player.current?.itemEnid
         return VStack(alignment: .leading, spacing: 24) {
             Text(row.title)
-                .font(.tv(.headline, emphasized: true))
+                .font(.tvRowTitle)
                 .foregroundStyle(.white.opacity(index == store.row ? 1 : 0.7))
                 .padding(.leading, DedaoStyle.margin)
             if row.items.isEmpty {
@@ -455,8 +455,8 @@ private struct DedaoCard: View {
             .shadow(color: .black.opacity(focused ? 0.6 : 0.25), radius: focused ? 26 : 10, y: focused ? 18 : 6)
             .scaleEffect(focused ? 1.08 : 1)
             VStack(alignment: .leading, spacing: 6) {
-                Text(item.title).font(.system(size: 25, weight: .semibold)).lineLimit(2)
-                Text(detail).font(.system(size: 21)).opacity(0.55).lineLimit(1)
+                Text(item.title).font(.tvCardTitle).lineLimit(2)
+                Text(detail).font(.tvCardDetail).opacity(0.55).lineLimit(1)
             }
             .frame(width: size.width, alignment: .leading)
             .offset(y: focused ? 12 : 0)
@@ -643,8 +643,9 @@ private struct DedaoTopBar: View {
                 account
             }
         }
-        .padding(.horizontal, DedaoStyle.margin)
-        .padding(.top, 56)
+        .padding(.leading, DedaoStyle.margin)
+        .padding(.trailing, TopBar.trailing)
+        .padding(.top, TopBar.top)
         .frame(width: canvas.width)
         .animation(Motion.focus, value: store.focus)
         .animation(Motion.appear, value: store.player.current?.id)
@@ -657,23 +658,10 @@ private struct DedaoTopBar: View {
         let focused = focused(.account)
         // 账号菜单开着时账号还亮着（菜单是它的）
         let lit = focused || store.menu?.anchor == .account
-        return HStack(spacing: 14) {
+        return AccountPill(name: store.user?.name ?? "得到", detail: store.user?.membership, detailColor: DedaoStyle.accent,
+                           focused: focused, lit: lit) {
             BiliImage(url: store.user?.avatar)
-                .frame(width: 48, height: 48).clipShape(Circle())
-            VStack(alignment: .leading, spacing: 0) {
-                Text(store.user?.name ?? "得到").font(.system(size: 25, weight: .semibold)).lineLimit(1)
-                if let membership = store.user?.membership {
-                    Text(membership).font(.system(size: 18, weight: .semibold)).foregroundStyle(DedaoStyle.accent)
-                }
-            }
         }
-        .padding(.leading, 8).padding(.trailing, 26)
-        .frame(height: 64)
-        .foregroundStyle(lit ? .black : .white)
-        .background(Capsule().fill(lit ? Color.white : .white.opacity(0.12)))
-        .scaleEffect(focused ? 1.06 : 1)
-        .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 18, y: 10)
-        .contentShape(Capsule())
         .hoverLift()
         .onTapGesture { store.tapTop(.account) }
     }
@@ -957,10 +945,10 @@ private struct DedaoNowPill: View {
             // 胶囊跟着书名的长短走；太长的截掉（约 16 个字）
             Text(short(player.current?.title ?? "")).lineLimit(1).fixedSize()
         }
-        .font(.tv(.caption1))
+        .font(TopBar.text)
         .foregroundStyle(focused ? .black : .white.opacity(0.85))
         .padding(.leading, 10).padding(.trailing, 26)
-        .frame(height: 64)
+        .frame(height: TopBar.height)
         .background(Capsule().fill(focused ? Color.white : .white.opacity(0.12)))
         .scaleEffect(focused ? 1.06 : 1)
         .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 18, y: 10)

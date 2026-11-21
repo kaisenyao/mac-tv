@@ -655,8 +655,7 @@ struct AppShelfBanner: View {
     // 每一页的东西都在同一个位置、同一个大小：标签、两行高的标题框（标题一行时下面留空，不往上挤）、
     // UP 主那一行、按钮、小点。换页时只有内容在滑，框不动
 
-    private static let videoTitleSize: CGFloat = 54
-    private static let videoTitleBox: CGFloat = 136
+    private static let videoTitleBox: CGFloat = 140
 
     @ViewBuilder private func videoLayout(_ item: AppShelfItem) -> some View {
         let colors = colors(item)
@@ -691,7 +690,7 @@ struct AppShelfBanner: View {
             page(70, item) {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(item.title)
-                        .font(.system(size: Self.videoTitleSize, weight: .bold))
+                        .font(.tvHeroTitle)
                         .lineLimit(2)
                         .lineSpacing(2)
                         .shadow(color: .black.opacity(0.35), radius: 14, y: 4)
@@ -704,8 +703,8 @@ struct AppShelfBanner: View {
                                 .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1.5))
                                 .opacity(item.avatar == nil ? 0 : 1)
                         }
-                        Text(item.subtitle).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white.opacity(0.92))
-                        Text(item.detail).font(.system(size: 24, weight: .regular)).foregroundStyle(.white.opacity(0.62))
+                        Text(item.subtitle).font(.tvHeroMeta).foregroundStyle(.white.opacity(0.92))
+                        Text(item.detail).font(.tvHeroMeta).foregroundStyle(.white.opacity(0.62))
                     }
                     .lineLimit(1)
                     .frame(height: 40)
@@ -728,7 +727,6 @@ struct AppShelfBanner: View {
     //
     // 同样每一页同一个位置、同一个大小：标题框两行高、一种字号（不按字数变大变小），歌固定四行的位置
 
-    private static let playlistTitleSize: CGFloat = 56
     private static let playlistTitleBox: CGFloat = 140
 
     /// 封套里的黑胶比封套小一点：12 寸唱片（约 302 毫米）装在 12⅜ 寸的封套里（约 314 毫米），是封套的 0.96
@@ -750,16 +748,16 @@ struct AppShelfBanner: View {
                 VStack(alignment: .leading, spacing: 0) {
                     tag(item)
                     Text(item.title)
-                        .font(.system(size: Self.playlistTitleSize, weight: .bold))
+                        .font(.tvHeroTitle)
                         .lineLimit(2)
                         .lineSpacing(2)
                         .frame(height: Self.playlistTitleBox, alignment: .topLeading)
                         .padding(.top, 18)
                     Text(item.subtitle)
-                        .font(.system(size: 24, weight: .medium))
+                        .font(.tvHeroMeta)
                         .foregroundStyle(.white.opacity(0.65))
                         .lineLimit(1)
-                        .frame(height: 30, alignment: .leading)
+                        .frame(height: 36, alignment: .leading)
                     songList(item).padding(.top, 22)
                 }
                 .foregroundStyle(.white)
@@ -796,16 +794,16 @@ struct AppShelfBanner: View {
                 VStack(alignment: .leading, spacing: 0) {
                     tag(item)
                     Text(item.title)
-                        .font(.system(size: Self.playlistTitleSize, weight: .bold))
+                        .font(.tvHeroTitle)
                         .lineLimit(2)
                         .lineSpacing(2)
                         .frame(height: Self.playlistTitleBox, alignment: .topLeading)
                         .padding(.top, 18)
                     Text(item.subtitle)
-                        .font(.system(size: 24, weight: .medium))
+                        .font(.tvHeroMeta)
                         .foregroundStyle(.white.opacity(0.65))
                         .lineLimit(1)
-                        .frame(height: 30, alignment: .leading)
+                        .frame(height: 36, alignment: .leading)
                     NeteaseNowPanel(store: store, clock: store.clock).padding(.top, 22)
                 }
                 .foregroundStyle(.white)
@@ -829,8 +827,8 @@ struct AppShelfBanner: View {
     // 书和网易云的唱片在同一条线上（上沿低于右上角那排按钮、下沿在应用图标那一排上面），往右靠，不挤在屏幕中间
 
     private static let dedaoBook = CGSize(width: 420, height: 560)
-    /// 左边标签到内容底下那一整块最多多高：和网易云歌单那一页一样（标签 34、书名框 18 + 140、一行小字 30、22、四行歌 272）
-    private static let dedaoInfoHeight: CGFloat = 34 + 18 + 140 + 30 + 22 + 272
+    /// 左边标签到内容底下那一整块最多多高：和网易云歌单那一页一样（标签 34、书名框 18 + 140、一行小字 36、22、四行歌 272）
+    private static let dedaoInfoHeight: CGFloat = 34 + 18 + 140 + 36 + 22 + 272
 
     @ViewBuilder private func dedaoLayout(_ item: AppShelfItem, paused: Bool, now: Bool) -> some View {
         let colors = colors(item)
@@ -863,15 +861,15 @@ struct AppShelfBanner: View {
                     }
                     // 书名不占两行的空位（一行的书名下面不留一大块空）；整块贴着下沿，按钮、小点照样在网易云的位置
                     Text(item.title)
-                        .font(.system(size: Self.playlistTitleSize, weight: .bold))
+                        .font(.tvHeroTitle)
                         .lineLimit(2)
                         .lineSpacing(4)
                         .padding(.top, 24)
                     Text(item.subtitle)
-                        .font(.system(size: 24, weight: .medium))
+                        .font(.tvHeroMeta)
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
-                        .frame(height: 30, alignment: .leading)
+                        .frame(height: 36, alignment: .leading)
                         .padding(.top, 16)
                     switch item.kind {
                     case .dedaoNow(let track, let paused):
@@ -952,8 +950,8 @@ private struct ShelfSongRow: View {
             BiliImage(url: song.cover)
                 .frame(width: 46, height: 46)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            Text(song.name).font(.system(size: 25, weight: .semibold)).lineLimit(1)
-            Text(song.artist).font(.system(size: 21)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+            Text(song.name).font(.tvCardTitle).lineLimit(1)
+            Text(song.artist).font(.tvCardDetail).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
             Spacer(minLength: 0)
         }
         .frame(height: Self.height)
@@ -1461,13 +1459,13 @@ private struct DedaoListeningPanel: View {
                                 .foregroundStyle(.white.opacity(0.4))
                                 .frame(width: 34, alignment: .leading)
                             Text(DedaoStore.cleanTitle(DedaoPlayerScreen.split(lecture.track.title).title).title)
-                                .font(.system(size: 23, weight: .semibold)).lineLimit(1)
+                                .font(.tvCardTitle).lineLimit(1)
                             Spacer(minLength: 0)
                             if lecture.track.duration > 0 {
-                                Text(clockText(lecture.track.duration)).font(.system(size: 20).monospacedDigit()).foregroundStyle(.white.opacity(0.55))
+                                Text(clockText(lecture.track.duration)).font(Font.tvCardDetail.monospacedDigit()).foregroundStyle(.white.opacity(0.55))
                             }
                         }
-                        .frame(width: width, height: 52)
+                        .frame(width: width, height: 58)
                         .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.09)).frame(height: 1) }
                     }
                 }

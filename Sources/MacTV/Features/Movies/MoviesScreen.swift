@@ -87,8 +87,8 @@ struct MoviesScreen: View {
             }
             ClockPill(twentyFour: tv.preferences.twentyFourHourTime)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 96)
-                .padding(.top, 56)
+                .padding(.trailing, TopBar.trailing)
+                .padding(.top, TopBar.top)
 
             if browser.menu != nil {
                 DimBackdrop(close: { _ = tv.closeMoviesMenu() })
@@ -727,11 +727,11 @@ struct MovieCard: View {
             // One weight, and brightness as the layer's opacity: a weight or colour animating would redraw the
             // text's glyphs every frame
             Text(title)
-                .font(.system(size: 26, weight: .semibold))
+                .font(.tvCardTitle)
                 .lineLimit(1)
                 .opacity(focused ? 1 : 0.78)
             if !subtitle.isEmpty {
-                Text(subtitle).font(.tv(.caption2)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                Text(subtitle).font(.tvCardDetail).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
             }
         }
     }

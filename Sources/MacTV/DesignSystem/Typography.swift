@@ -29,3 +29,21 @@ extension Font {
         .system(size: style.size, weight: emphasized ? style.emphasizedWeight : style.weight)
     }
 }
+
+// MARK: Roles every app shares
+
+/// The same thing is the same size in every app: a focused item's title on 得到 is the size of one on 哔哩哔哩 or on
+/// Home's Top Shelf, and a card's title under its artwork is the same in 得到, 哔哩哔哩, 网易云 and Movies.
+extension Font {
+    /// The focused item's title at the top of a screen: a book, a video, a playlist on the Top Shelf.
+    static let tvHeroTitle = Font.tv(.title2, emphasized: true)
+    /// The line of facts under it: who made it, how long, how many have seen it.
+    static let tvHeroMeta = Font.tv(.body)
+    /// A row's title above its cards.
+    static let tvRowTitle = Font.tv(.headline, emphasized: true)
+    /// A card's title under its artwork, or a song in a list: one weight whether focused or not (brightness goes on
+    /// the layer's opacity, so focus never redraws the glyphs or changes the text's width).
+    static let tvCardTitle = Font.system(size: 27, weight: .semibold)
+    /// The line under a card's title.
+    static let tvCardDetail = Font.tv(.caption2)
+}

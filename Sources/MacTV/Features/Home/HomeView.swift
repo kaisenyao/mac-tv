@@ -71,13 +71,13 @@ struct HomeView: View {
             // The status row, as Apple TV's: the time, small status glyphs (a connected remote, the lid staying
             // awake), the Control Center button and the profile. Up from the Top Shelf focuses it; Left and Right
             // move between the button and the profile.
-            // At Apple TV's own sizes: the time in 24-point type, a 52-point button and a small avatar.
-            GlassGroup { HStack(spacing: 16) {
+            // At the top bar's sizes (TopBar), as in every app: the button and the avatar the same height.
+            GlassGroup { HStack(spacing: 20) {
                 StatusClock(twentyFour: tv.preferences.twentyFourHourTime)
                     .padding(.trailing, 4)
                 ForEach(statusGlyphs, id: \.self) { symbol in
                     Image(systemName: symbol)
-                        .font(.system(size: 20, weight: .medium))
+                        .font(.system(size: 24, weight: .medium))
                         .opacity(0.9)
                         .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
                         .transition(.opacity)
@@ -86,9 +86,9 @@ struct HomeView: View {
                 let lit = tv.focus == .status(.controlCenter) || tv.controlCenter != nil
                 Button { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) } label: {
                     Image(systemName: "switch.2")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 27, weight: .semibold))
                         .foregroundStyle(lit ? .black : .white)
-                        .frame(width: 52, height: 52)
+                        .frame(width: TopBar.height, height: TopBar.height)
                         .focusPlatter(Circle(), focused: lit)
                         .contentShape(Circle())
                         .scaleEffect(lit ? 1.08 : 1)
@@ -97,7 +97,7 @@ struct HomeView: View {
                 .buttonStyle(PressDip())
                 let profileFocused = tv.focus == .status(.profile)
                 Button { tv.activateStatus(.profile) } label: {
-                    ProfileAvatar(profile: tv.profile, size: 38)
+                    ProfileAvatar(profile: tv.profile, size: TopBar.height)
                         .overlay(Circle().strokeBorder(.white, lineWidth: profileFocused ? 2.5 : 0).padding(-4))
                         .contentShape(Circle())
                 }
@@ -106,8 +106,8 @@ struct HomeView: View {
                 .animation(Motion.focus, value: tv.focus)
                 .animation(Motion.appear, value: statusGlyphs)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 80)
-                .padding(.top, 48)
+                .padding(.trailing, TopBar.trailing)
+                .padding(.top, TopBar.top)
                 .modifier(ClearsCornerForNotices(notices: tv.notices, inGrid: tv.inGrid))
 
             // Press and hold Select on an app: its menu, grown out of the app, over all of Home (see AppMenuLayer).
@@ -143,7 +143,7 @@ private struct StatusClock: View {
     var body: some View {
         TimelineView(.everyMinute) { context in
             Text(TimeOfDay.text(context.date, twentyFour: twentyFour))
-                .font(.system(size: 24, weight: .semibold))
+                .font(TopBar.clock)
                 .monospacedDigit()
                 .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
         }
@@ -168,10 +168,10 @@ struct ClockPill: View {
     var body: some View {
         TimelineView(.everyMinute) { context in
             Text(TimeOfDay.text(context.date, twentyFour: twentyFour))
-                .font(.tv(.caption1))
+                .font(TopBar.text)
                 .monospacedDigit()
-                .padding(.horizontal, 20)
-                .frame(height: 50)
+                .padding(.horizontal, 24)
+                .frame(height: TopBar.height)
                 .tvGlass(in: Capsule())
         }
     }

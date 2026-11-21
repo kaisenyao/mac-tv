@@ -181,9 +181,9 @@ struct NeteaseScreen: View {
                         NeteaseWave(playing: !store.paused, size: 22)
                         Text(song.name).lineLimit(1)
                     }
-                    .font(.tv(.caption1))
+                    .font(TopBar.text)
                     .foregroundStyle(focused ? .black : .white.opacity(0.85))
-                    .padding(.horizontal, 24).frame(height: 58)
+                    .padding(.horizontal, 24).frame(height: TopBar.height)
                     .frame(maxWidth: 460)
                     .fixedSize(horizontal: true, vertical: false)
                     .background(focused ? Color.white : Color.white.opacity(0.12), in: Capsule())
@@ -196,7 +196,7 @@ struct NeteaseScreen: View {
                     searchField
                     let focused = store.topFocus == .account
                     BiliImage(url: store.account?.avatar)
-                        .frame(width: 58, height: 58)
+                        .frame(width: TopBar.height, height: TopBar.height)
                         .clipShape(Circle())
                         .overlay(Circle().strokeBorder(.white.opacity(focused ? 1 : 0.2), lineWidth: focused ? 4 : 1.5))
                         .scaleEffect(focused ? 1.12 : 1)
@@ -207,8 +207,9 @@ struct NeteaseScreen: View {
                 }
             }
         }
-        .padding(.horizontal, margin)
-        .padding(.top, 58)
+        .padding(.leading, margin)
+        .padding(.trailing, TopBar.trailing)
+        .padding(.top, TopBar.top)
         .frame(width: canvas.width)
         .animation(Motion.focus, value: store.topFocus)
     }
@@ -229,10 +230,10 @@ struct NeteaseScreen: View {
                 Text(store.query.isEmpty ? "搜索" : store.query).lineLimit(1)
             }
         }
-        .font(.tv(.caption1))
+        .font(TopBar.text)
         .foregroundStyle(store.editing || focused ? .black : .white.opacity(0.85))
         .padding(.horizontal, 24)
-        .frame(width: store.editing ? 620 : nil, height: 58, alignment: .leading)
+        .frame(width: store.editing ? 620 : nil, height: TopBar.height, alignment: .leading)
         .background(store.editing || focused ? Color.white : Color.white.opacity(0.12), in: Capsule())
         .scaleEffect(focused ? 1.06 : 1)
         .environment(\.colorScheme, store.editing ? .light : .dark)
@@ -495,11 +496,11 @@ struct NeteaseScreen: View {
             VStack(alignment: .leading, spacing: 6) {
                 switch item {
                 case .song(let song):
-                    Text(song.name).font(.system(size: 27, weight: focused ? .semibold : .medium)).foregroundStyle(.white.opacity(focused ? 1 : 0.78)).lineLimit(1)
-                    Text(song.artist).font(.tv(.caption2)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                    Text(song.name).font(.tvCardTitle).foregroundStyle(.white.opacity(focused ? 1 : 0.78)).lineLimit(1)
+                    Text(song.artist).font(.tvCardDetail).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
                 case .playlist(let list):
-                    Text(list.name).font(.system(size: 27, weight: focused ? .semibold : .medium)).foregroundStyle(.white.opacity(focused ? 1 : 0.78)).lineLimit(1)
-                    if let second = secondLine(list) { Text(second).font(.tv(.caption2)).foregroundStyle(.white.opacity(0.5)).lineLimit(1) }
+                    Text(list.name).font(.tvCardTitle).foregroundStyle(.white.opacity(focused ? 1 : 0.78)).lineLimit(1)
+                    if let second = secondLine(list) { Text(second).font(.tvCardDetail).foregroundStyle(.white.opacity(0.5)).lineLimit(1) }
                 }
             }
             .frame(width: cardSize, alignment: .leading)

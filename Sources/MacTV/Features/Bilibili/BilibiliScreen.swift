@@ -211,29 +211,21 @@ struct BilibiliScreen: View {
                     .foregroundStyle(pink)
             }
             Spacer()
-            HStack(spacing: 14) {
+            AccountPill(name: store.account?.name ?? "未登录", focused: store.accountFocused, lit: store.accountMenuOpen) {
                 if let face = store.account?.face {
                     BiliImage(url: face)
-                        .frame(width: 40, height: 40)
-                        .clipShape(Circle())
                 } else {
-                    Image(systemName: store.account == nil ? "person.crop.circle" : "person.crop.circle.fill")
+                    Image(systemName: "person.crop.circle.fill").resizable().opacity(0.7)
                 }
-                Text(store.account?.name ?? "未登录")
             }
-            .font(.tv(.caption1, emphasized: store.accountFocused))
-            .foregroundStyle(store.accountFocused ? .black : .white.opacity(0.85))
-            .padding(.leading, store.account?.face == nil ? 26 : 12).padding(.trailing, 26).padding(.vertical, store.account?.face == nil ? 14 : 9)
-            .focusPlatter(Capsule(), focused: store.accountFocused)
-            .scaleEffect(store.accountFocused ? 1.07 : 1, anchor: .trailing)
             .animation(Motion.focus, value: store.accountFocused)
-            .contentShape(Capsule())
             .onTapGesture { store.tapAccount() }
             // 账号菜单：从头像下面滑出来，和左边栏是同一种玻璃和同一条曲线
             .overlay(alignment: .topTrailing) { accountMenu.offset(y: 84) }
         }
-        .padding(.horizontal, margin)
-        .padding(.top, 64)
+        .padding(.leading, margin)
+        .padding(.trailing, TopBar.trailing)
+        .padding(.top, TopBar.top)
         .frame(width: canvas.width, alignment: .leading)
     }
 
@@ -841,12 +833,12 @@ struct BilibiliScreen: View {
             if case .video(let video) = item {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(video.title)
-                        .font(.system(size: 27, weight: focused ? .semibold : .medium))
+                        .font(.tvCardTitle)
                         .foregroundStyle(.white.opacity(focused ? 1 : 0.78))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     Text(video.owner)
-                        .font(.tv(.caption2))
+                        .font(.tvCardDetail)
                         .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
                 }
@@ -855,11 +847,11 @@ struct BilibiliScreen: View {
             } else if case .user(let user) = item {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(user.name)
-                        .font(.system(size: 27, weight: focused ? .semibold : .medium))
+                        .font(.tvCardTitle)
                         .foregroundStyle(.white.opacity(focused ? 1 : 0.78))
                         .lineLimit(1)
                     Text(user.videos > 0 ? "\(user.fansText) · \(user.videos) 个视频" : user.fansText)
-                        .font(.tv(.caption2))
+                        .font(.tvCardDetail)
                         .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
                 }
