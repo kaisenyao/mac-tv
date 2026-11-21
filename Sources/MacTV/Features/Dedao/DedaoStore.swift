@@ -889,7 +889,7 @@ final class DedaoStore: ObservableObject {
     private func playerMenuItems() -> [MenuItem] {
         var items = [MenuItem(symbol: "gauge.with.dots.needle.67percent", title: "倍速", action: .speedMenu,
                               detail: Self.speedText(player.speed)),
-                     MenuItem(symbol: "timer", title: "定时关闭", action: .sleepMenu)]
+                     MenuItem(symbol: "gauge.with.needle", title: "定时关闭", action: .sleepMenu)]
         if player.queue.count > 1 { items.append(MenuItem(symbol: "list.bullet", title: "目录", action: .lectures)) }
         return items
     }

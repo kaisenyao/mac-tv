@@ -163,6 +163,20 @@ import UniformTypeIdentifiers
         return [UInt8](data)
     }
 
+    /// Her symbol for a button: a ball in outline, the tide filling it under its wave, nothing outside the box it's given.
+    @Test func herSymbolIsABallWithTheTideInIt() {
+        let box = CGRect(x: 10, y: 20, width: 40, height: 40)
+        let path = JasmineGlyph().path(in: box)
+        #expect(box.insetBy(dx: -0.5, dy: -0.5).contains(path.boundingRect), "inside its box: \(path.boundingRect)")
+        #expect(path.boundingRect.width > 39 && path.boundingRect.height > 39, "and filling it")
+        #expect(path.contains(CGPoint(x: 30, y: 22)), "the ball's own line, at the top")
+        #expect(path.contains(CGPoint(x: 30, y: 50)), "the tide, low in the ball")
+        #expect(!path.contains(CGPoint(x: 30, y: 30)), "open sky above it")
+        // The wave: the tide stands higher on the left than on the right
+        #expect(path.contains(CGPoint(x: 21, y: 40.4)) && !path.contains(CGPoint(x: 39, y: 40.4)), "a little higher on the left")
+        #expect(!path.contains(CGPoint(x: 21, y: 37)) && path.contains(CGPoint(x: 39, y: 45)), "and shallow: nowhere near a yin and yang")
+    }
+
     // MARK: The sounds
 
     @Test func herSoundsArePianaSouls() throws {
