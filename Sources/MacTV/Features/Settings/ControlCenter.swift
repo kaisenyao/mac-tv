@@ -542,10 +542,10 @@ struct ControlCenterView: View {
                 // Every tile's symbol fitted to the same box, so a tall remote and a wide display look the same size
                 Group {
                     if symbol == AudioOutputDevice.speakerSymbol {
-                        // The speaker with its three waves is wide: a wider box (running into the gap before the text)
-                        // makes it look as big as the other tiles' symbols
+                        // The speaker with its three waves is wide: a wider box (reaching a little into the gaps either
+                        // side) makes it look as big as the other tiles' symbols, on the same centre as theirs
                         VolumeSpeaker(audio: tv.audioCoordinator, box: Self.speakerGlyph, weight: .regular)
-                            .frame(width: Self.tileGlyph.width, alignment: .leading)
+                            .frame(width: Self.tileGlyph.width)
                     } else {
                         Image(systemName: symbol)
                             .resizable()

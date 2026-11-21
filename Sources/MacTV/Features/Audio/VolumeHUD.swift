@@ -31,10 +31,11 @@ struct VolumeHUD: View {
     }
 }
 
-/// The speaker that shows how loud, as Apple's: three waves, two, one, a slash when muted or at nothing. The speaker
-/// itself never moves or changes size: every form is drawn from the left of one box, at the size the three waves fill
-/// it, and a change of form plays Apple's replace effect (the waves come and go, the speaker stays). One look wherever
-/// the volume shows: the volume indicator, Control Center, the Volume and Navigation Clicks sliders.
+/// The speaker that shows how loud, as iOS's: three waves, two, one, a slash when muted or at nothing. It's always
+/// drawn at the one size the three waves fill the box at, and always centred in it: as the waves go (or come back) the
+/// whole glyph glides to stay in the middle, and muted, the crossed-out speaker sits in the middle too. The change of
+/// form is Apple's replace effect (the waves fade in and out; the speaker is the same). One look wherever the volume
+/// shows: the volume indicator, Control Center, the Volume and Navigation Clicks sliders.
 struct SpeakerGlyph: View {
     /// 0…100; nil when the output's level can't be read (then `unknown` shows).
     let level: Int?
@@ -51,10 +52,12 @@ struct SpeakerGlyph: View {
     }
 
     var body: some View {
-        Image(systemName: Self.symbol(level: level, muted: muted, unknown: unknown))
+        let symbol = Self.symbol(level: level, muted: muted, unknown: unknown)
+        Image(systemName: symbol)
             .font(.system(size: Self.pointSize(fitting: box), weight: weight))
             .contentTransition(.symbolEffect(.replace))
-            .frame(width: box.width, height: box.height, alignment: .leading)
+            .frame(width: box.width, height: box.height)
+            .animation(.smooth(duration: 0.25), value: symbol)
     }
 
     private static var sizes: [String: CGFloat] = [:]
