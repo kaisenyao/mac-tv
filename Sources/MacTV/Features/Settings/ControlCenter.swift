@@ -368,6 +368,9 @@ struct ControlCenterView: View {
     @ObservedObject var tv: TVController
     @ObservedObject private var siriRemote = SiriRemoteStatus.shared
     @Environment(\.canvasSize) private var canvas
+    /// What it showed last. While it fades away Control Center is already closed (`tv.controlCenter` is nil): it stays
+    /// as it was, instead of turning into a fresh one on its way out (Remotes lit up white, a list gone back to tiles).
+    @State private var last = ControlCenterPanel()
     private static let column: CGFloat = 206
     private static let row: CGFloat = 95
     /// How much the focused control grows, and a round button picked up to be moved.
@@ -427,7 +430,7 @@ struct ControlCenterView: View {
     private static let tint = Color(hex: "#5AC8FA")
 
     var body: some View {
-        let panel = tv.controlCenter ?? ControlCenterPanel()
+        let panel = tv.controlCenter ?? last
         VStack(alignment: .trailing, spacing: 0) {
             if let list = panel.list {
                 listPanel(list, panel)
@@ -456,6 +459,9 @@ struct ControlCenterView: View {
         .padding(.trailing, TopBar.trailing + 10)
         .frame(width: canvas.width, height: canvas.height, alignment: .topTrailing)
         .animation(Motion.focus, value: panel)
+        .onChange(of: tv.controlCenter, initial: true) { _, open in
+            if let open { last = open }
+        }
         .onReceive(siriRemote.$connected.dropFirst()) { _ in tv.remoteCoordinator.refreshRemoteStatus() }
     }
 

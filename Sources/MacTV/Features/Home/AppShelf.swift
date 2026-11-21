@@ -728,10 +728,12 @@ struct AppShelfBanner: View {
 
     /// 换页时滑的那一块：这一页先很快地往翻的方向滑走、淡掉，下一页稍后从另一边滑进来——两页不会叠在一起出现重影
     ///（distance 越大越像是整页在移）。滑动交给 Core Animation（见 ShelfPage）。
+    /// crossfade：铺满屏幕的封面，下一页盖在这一页上面淡进来（不然两页之间整屏暗一下）
     /// extra：除了这一页，里面画的东西还取决于什么（没变时这一块不重算）
-    private func page<Content: View>(_ distance: CGFloat, _ item: AppShelfItem, _ extra: AnyHashable...,
+    private func page<Content: View>(_ distance: CGFloat, _ item: AppShelfItem, crossfade: Bool = false, _ extra: AnyHashable...,
                                      @ViewBuilder content: @escaping () -> Content) -> ShelfPage<Content> {
-        ShelfPage(offset: CGFloat(shelf.direction) * distance, id: item.id, key: [AnyHashable(item)] + extra, content: content)
+        ShelfPage(offset: CGFloat(shelf.direction) * distance, id: item.id, key: [AnyHashable(item)] + extra, crossfade: crossfade,
+                  content: content)
     }
 
     /// 左上角标签上写的（这一页自己的，或者这个应用统一的那个）
@@ -812,7 +814,7 @@ struct AppShelfBanner: View {
             .frame(width: canvas.width, height: canvas.height)
         // 换页时整张图只滑一小段，而且两边各多出这一段：滑的过程中屏幕边上不会露出底色
         let slide: CGFloat = 60
-        page(slide, item) {
+        page(slide, item, crossfade: true) {
             DriftingCover(url: item.image).frame(width: canvas.width + slide * 2, height: canvas.height)
         }
         .frame(width: canvas.width + slide * 2, height: canvas.height)

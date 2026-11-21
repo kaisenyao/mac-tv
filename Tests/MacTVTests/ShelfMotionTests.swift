@@ -118,6 +118,29 @@ import Testing
         #expect(view.front.box.layer?.animationKeys() == nil && view.back?.box.layer?.opacity == 0)
     }
 
+    /// A picture that fills the screen cross-fades: the page on show stays whole where it is until the next has faded in
+    /// over it (0.14 s, then the spring), instead of sliding away first and leaving the screen dark between the two.
+    @Test func aFullScreenPageStaysUntilTheNextCoversIt() throws {
+        let saved = ShelfPageSchedule.later
+        defer { ShelfPageSchedule.later = saved }
+        var queued: [@MainActor () -> Void] = []
+        ShelfPageSchedule.later = { _, work in queued.append(work) }
+        let view = ShelfPageView(Text("1"))
+        view.frame = CGRect(x: 0, y: 0, width: 200, height: 100)
+        view.layoutSubtreeIfNeeded()
+        let first = view.front
+        queued.removeFirst()()
+        view.turn(to: Text("2"), offset: 60, crossfade: true)
+        let hold = try #require(first.box.layer?.animation(forKey: "out-opacity") as? CABasicAnimation)
+        #expect(hold.fromValue as? Float == 1 && hold.toValue as? Float == 1)
+        #expect(abs(hold.duration - (0.14 + ShelfSpring.insert.settlingDuration)) < 1e-9)
+        let stay = try #require(first.box.layer?.animation(forKey: "out-transform.translation.x") as? CABasicAnimation)
+        #expect(stay.fromValue as? CGFloat == 0 && stay.toValue as? CGFloat == 0)
+        // Afterwards it's hidden, and the new page is the one above it, fading in
+        #expect(first.box.layer?.opacity == 0 && view.front.box.layer?.opacity == 1 && view.subviews.last === view.front.box)
+        #expect(view.front.box.layer?.animation(forKey: "in-opacity") != nil)
+    }
+
     /// Several pages' content goes in one frame after another, not all in the turn's frame
     @Test func staggeredWorkGoesOneFrameApart() {
         let saved = ShelfPageSchedule.later

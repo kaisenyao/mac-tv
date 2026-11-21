@@ -141,10 +141,12 @@ struct ModalSheetRouter: View {
         layer == .controlCenter || (layer == .profilePicker && tv.profilePicker?.dropdown == true)
     }
 
-    /// Control Center drops from the top like tvOS's; full-screen flows fade; the rest settle in.
+    /// Control Center appears under Home's status row, where its tab is: it fades in as it settles down the last few
+    /// points into place. (Dropped in from above the screen it crossed the clock and the row's buttons on its way in
+    /// and out.) Full-screen flows fade; the rest settle in.
     private func transition(_ layer: SheetStack.Layer) -> AnyTransition {
         switch layer {
-        case .controlCenter: .move(edge: .top)
+        case .controlCenter: reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -36))
         case .profilePicker, .setup: .opacity
         default: Motion.sheet(reduceMotion: reduceMotion)
         }

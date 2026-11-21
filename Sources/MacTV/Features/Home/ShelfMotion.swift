@@ -75,6 +75,8 @@ struct ShelfPage<Content: View>: NSViewRepresentable {
     /// 里面画的东西取决于什么（这一页、标签、暂停没有……）：只是这个变了，就在原地重画，不滑。
     /// 都没变就不让里面重算一遍；里面自己盯着的东西（播放进度这些）照常自己更新
     let key: AnyHashable
+    /// 铺满屏幕的画面（封面）：新的一页盖在这一页上面淡进来，这一页等它盖住了才撤（见 ShelfPageView.turn）
+    var crossfade = false
     @ViewBuilder let content: () -> Content
 
     struct Hosted: View {
@@ -105,7 +107,11 @@ struct ShelfPage<Content: View>: NSViewRepresentable {
             coordinator.id = id
             coordinator.key = key
             let hosted = Hosted(content: content(), environment: context.environment)
-            if context.transaction.animatesShelf { view.turn(to: hosted, offset: offset) } else { view.replace(with: hosted) }
+            if context.transaction.animatesShelf {
+                view.turn(to: hosted, offset: offset, crossfade: crossfade)
+            } else {
+                view.replace(with: hosted)
+            }
         } else if coordinator.key != key {
             // 同一页，里面的东西变了（暂停了、标签换了）：原地重画。翻页时整个顶部会重算几次（先定方向、再换页），
             // 这一块的内容没变就不动它，省得里面整个再排一遍
@@ -213,10 +219,12 @@ final class ShelfPageView<Hosted: View>: NSView {
         invalidateIntrinsicContentSize()
     }
 
-    /// 翻页：前面那一层滑走、淡掉；后面那一层换上新的一页，晚 0.14 秒从 offset 那边弹簧滑进来、淡进来
-    func turn(to hosted: Hosted, offset: CGFloat) {
+    /// 翻页：前面那一层滑走、淡掉；后面那一层换上新的一页，晚 0.14 秒从 offset 那边弹簧滑进来、淡进来。
+    /// crossfade（铺满屏幕的封面）：前面那一层留在原地不动，等新的一页盖住它了才撤。先滑走再进来的话，两页之间
+    /// 整个屏幕只剩底色，暗一下，像闪了一下
+    func turn(to hosted: Hosted, offset: CGFloat, crossfade: Bool = false) {
         let leaving = front
-        slideOut(leaving, offset: offset)
+        if crossfade { stayUntilCovered(leaving) } else { slideOut(leaving, offset: offset) }
         let coming: Layer
         if let back {
             coming = back
@@ -262,6 +270,27 @@ final class ShelfPageView<Hosted: View>: NSView {
             animation.beginTime = start
             animation.fillMode = .backwards
             caLayer.add(animation, forKey: "in-" + (animation.keyPath ?? ""))
+        }
+    }
+
+    /// 留在现在画到的样子（换到一半又翻一页时，也是那里），直到新的一页淡进来盖住了它，之后看不见
+    private func stayUntilCovered(_ layer: Layer) {
+        guard let caLayer = layer.box.layer else { return }
+        let shown = caLayer.presentation()
+        let x = (shown?.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? 0
+        let opacity = shown?.opacity ?? caLayer.opacity
+        caLayer.removeAllAnimations()
+        caLayer.opacity = 0
+        let stay = CABasicAnimation(keyPath: "transform.translation.x")
+        stay.fromValue = x
+        stay.toValue = x
+        stay.isAdditive = true
+        let hold = CABasicAnimation(keyPath: "opacity")
+        hold.fromValue = opacity
+        hold.toValue = opacity
+        for animation in [stay, hold] {
+            animation.duration = 0.14 + ShelfSpring.insert.settlingDuration   // 新的一页晚 0.14 秒开始，弹簧走完
+            caLayer.add(animation, forKey: "out-" + (animation.keyPath ?? ""))
         }
     }
 
