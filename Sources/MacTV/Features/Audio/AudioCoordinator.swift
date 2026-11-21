@@ -11,6 +11,9 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
     /// CoreAudio 的 UID。显示器的声音在 Apple 芯片上就是显示器的 EDID UUID（见 DisplayAudioLink）
     var uid = ""
 
+    /// Speakers' symbol (anything that isn't headphones, a TV or AirPlay): Control Center draws the volume's speaker for it.
+    static let speakerSymbol = "speaker.wave.2.fill"
+
     /// Maps transport type and device name to the appropriate tvOS SF Symbol.
     var symbol: String {
         let lower = name.lowercased()
@@ -27,7 +30,7 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
         case kAudioDeviceTransportTypeAirPlay:
             return "airplayaudio"
         default:
-            return "speaker.wave.2.fill"
+            return Self.speakerSymbol
         }
     }
 }
@@ -535,17 +538,11 @@ struct AudioVolumeSlider: View {
         tv.audioCoordinator.volumePending
     }
 
+    /// The speaker beside a slider (both sliders, so they match).
+    static let speaker = CGSize(width: 36, height: 26)
+
     static func level(at x: CGFloat, width: CGFloat) -> Int {
         Int((max(0, min(1, x / width)) * 100).rounded())
-    }
-
-    private var symbol: String {
-        if pending { return "speaker.fill" }
-        guard let level = volume.level else { return "tv" }
-        if volume.muted || level == 0 { return "speaker.slash.fill" }
-        if level < 33 { return "speaker.wave.1.fill" }
-        if level < 66 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
     }
 
     var body: some View {
@@ -553,11 +550,9 @@ struct AudioVolumeSlider: View {
             Button {
                 tv.audioCoordinator.toggleMute()
             } label: {
-                Image(systemName: symbol)
-                    .font(.system(size: 24, weight: .medium))
-                    .frame(width: 36)
+                SpeakerGlyph(level: pending ? nil : volume.level, muted: volume.muted, unknown: pending ? "speaker.fill" : "tv",
+                             box: Self.speaker)
                     .opacity(pending ? 0.5 : 1)
-                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
 
@@ -633,22 +628,12 @@ struct NavigationSoundSlider: View {
         Int((feedback.volume * 100).rounded())
     }
 
-    private var symbol: String {
-        if feedback.isMuted || percent == 0 { return "speaker.slash.fill" }
-        if percent < 33 { return "speaker.wave.1.fill" }
-        if percent < 66 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
-    }
-
     var body: some View {
         HStack(spacing: 16) {
             Button {
                 feedback.toggleMute()
             } label: {
-                Image(systemName: symbol)
-                    .font(.system(size: 24, weight: .medium))
-                    .frame(width: 36)
-                    .contentTransition(.symbolEffect(.replace))
+                SpeakerGlyph(level: percent, muted: feedback.isMuted, box: AudioVolumeSlider.speaker)
             }
             .buttonStyle(.plain)
 

@@ -54,6 +54,19 @@ import Testing
         }
     }
 
+    @Test func speakers() async throws {
+        let row = HStack(spacing: 40) {
+            ForEach([90, 50, 20, 0], id: \.self) { level in
+                SpeakerGlyph(level: level, box: CGSize(width: 36, height: 32))
+                    .background(Color.red.opacity(0.3))
+            }
+            SpeakerGlyph(level: 60, muted: true, box: CGSize(width: 36, height: 32)).background(Color.red.opacity(0.3))
+        }
+        .foregroundStyle(.white).scaleEffect(4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        try await render("topbar-speakers", row)
+    }
+
     @Test func pills() async throws {
         try await withTV { tv in
             let rows = VStack(alignment: .trailing, spacing: 60) {

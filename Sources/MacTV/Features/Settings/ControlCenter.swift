@@ -354,6 +354,7 @@ struct ControlCenterView: View {
     private static let glyph = CGSize(width: 40, height: 36)
     /// The box every tile's symbol is fitted to: as tall as Apple TV's beside 20-point text.
     private static let tileGlyph = CGSize(width: 36, height: 32)
+    private static let speakerGlyph = CGSize(width: 44, height: 32)
     /// The blue of a connected remote or the sound output, as on Apple TV.
     private static let tint = Color(hex: "#5AC8FA")
 
@@ -402,7 +403,8 @@ struct ControlCenterView: View {
                 }
             }
             HStack(spacing: Self.gap) {
-                tile(.audio, panel, symbol: tv.currentAudioDevice?.symbol ?? "hifispeaker.fill", title: "Audio",
+                // Speakers: the speaker that shows the volume (as the volume indicator's); headphones, a TV, AirPlay: theirs
+                tile(.audio, panel, symbol: tv.currentAudioDevice?.symbol ?? AudioOutputDevice.speakerSymbol, title: "Audio",
                      detail: tv.currentAudioDevice?.name ?? "Speakers", tinted: true)
                 tile(.sleepTimer, panel, symbol: "timer", title: "Sleep Timer",
                      detail: minutes > 0 ? "\(minutes) Minute\(minutes == 1 ? "" : "s") Left" : "Off")
@@ -538,13 +540,22 @@ struct ControlCenterView: View {
             // same size and weight (the detail only dimmer), smaller than the tile so it breathes.
             HStack(spacing: 12) {
                 // Every tile's symbol fitted to the same box, so a tall remote and a wide display look the same size
-                Image(systemName: symbol)
-                    .resizable()
-                    .fontWeight(.regular)
-                    .scaledToFit()
-                    .frame(width: Self.tileGlyph.width, height: Self.tileGlyph.height)
-                    .contentTransition(.symbolEffect(.replace))
-                    .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
+                Group {
+                    if symbol == AudioOutputDevice.speakerSymbol {
+                        // The speaker with its three waves is wide: a wider box (running into the gap before the text)
+                        // makes it look as big as the other tiles' symbols
+                        VolumeSpeaker(audio: tv.audioCoordinator, box: Self.speakerGlyph, weight: .regular)
+                            .frame(width: Self.tileGlyph.width, alignment: .leading)
+                    } else {
+                        Image(systemName: symbol)
+                            .resizable()
+                            .fontWeight(.regular)
+                            .scaledToFit()
+                            .frame(width: Self.tileGlyph.width, height: Self.tileGlyph.height)
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                }
+                .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.system(size: 20, weight: .medium))
                         .minimumScaleFactor(0.85)
@@ -584,12 +595,18 @@ struct ControlCenterView: View {
         } label: {
             // Every symbol fitted to one box, so a wide one (Play/Pause, Mute, the screens) is no bigger than a square
             // or round one (Settings, Search): the same size to the eye.
-            Image(systemName: look.symbol)
-                .resizable()
-                .fontWeight(.medium)
-                .scaledToFit()
-                .frame(maxWidth: Self.glyph.width, maxHeight: Self.glyph.height)
-                .contentTransition(.symbolEffect(.replace))
+            Group {
+                if item == .mute {
+                    VolumeSpeaker(audio: tv.audioCoordinator, box: CGSize(width: 48, height: 36))   // the waves follow the volume
+                } else {
+                    Image(systemName: look.symbol)
+                        .resizable()
+                        .fontWeight(.medium)
+                        .scaledToFit()
+                        .frame(maxWidth: Self.glyph.width, maxHeight: Self.glyph.height)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+            }
                 .foregroundStyle(focused || on ? .black : .white)
                 .frame(width: Self.row, height: Self.row)
                 .background { if on, !focused { Circle().fill(.white.opacity(0.92)) } }
