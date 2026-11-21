@@ -50,6 +50,8 @@ struct NeteasePlaylist: Hashable, Sendable {
     var kind = Kind.playlist
     /// 卡片第二行：专辑是歌手名；歌手页是"多少首歌 · 多少张专辑"
     var subtitle = ""
+    /// 播放次数：只有搜出来的歌单带（小茗同学挑歌单用）；别处是 0
+    var plays = 0
 }
 
 struct NeteaseAccount: Hashable, Sendable {
@@ -381,20 +383,37 @@ enum NeteaseAPI {
     /// 账号或这首歌没有那一档时，服务器会给它能给的最高一档。没有版权、需要会员或地区不可用时返回 nil。
     /// 一首歌的播放地址、实际给的档位，和平衡音量用的增益（分贝；不知道时为 nil）
     static func address(song: Int, level: String) async -> (url: URL, level: String, gain: Double?)? {
+        guard case .playable(let url, let level, let gain, _) = await availability(song: song, level: level) else { return nil }
+        return (url, level, gain)
+    }
+
+    /// 一首歌现在能不能放。unavailable：服务器答了，但没给地址（没有版权、需要会员或地区不可用）；
+    /// unreachable：没问到（断网、被拒）。preview：给的只是试听的一小段（会员歌曲，账号不是会员）
+    enum Availability: Sendable {
+        case playable(url: URL, level: String, gain: Double?, preview: Bool)
+        case unavailable
+        case unreachable
+    }
+
+    static func availability(song: Int, level: String) async -> Availability {
         let payload: [String: Any] = ["ids": "[\(song)]", "level": level, "encodeType": "flac"]
         // 先走客户端那套接口（网页版最高只给到无损）；它不通再退回网页版
-        var list = (await clientCall("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
-        var fromClient = true
-        if list?.first?["url"] as? String == nil {
-            list = (await webCall("song/enhance/player/url/v1", payload))?["data"] as? [[String: Any]]
-            fromClient = false
-        }
-        let item = list?.first
-        guard let item, let text = item["url"] as? String, !text.isEmpty,
-              let url = URL(string: text.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
+        let client = availability(in: await clientCall("song/enhance/player/url/v1", payload), level: level, fromClient: true)
+        if case .playable = client { return client }
+        let web = availability(in: await webCall("song/enhance/player/url/v1", payload), level: level, fromClient: false)
+        // 网页版没问到、客户端答了"没有"：就是没有
+        if case .unreachable = web { return client }
+        return web
+    }
+
+    /// 取歌曲地址的接口的一个回答，说的是能放还是不能放
+    static func availability(in reply: [String: Any]?, level: String, fromClient: Bool) -> Availability {
+        guard let item = (reply?["data"] as? [[String: Any]])?.first else { return .unreachable }
+        guard let text = item["url"] as? String, !text.isEmpty,
+              let url = URL(string: text.replacingOccurrences(of: "http://", with: "https://")) else { return .unavailable }
         // 网页版这套接口的增益一律是 0（实测），等于没给
         let gain = fromClient ? loudness(gain: (item["gain"] as? NSNumber)?.doubleValue, peak: (item["peak"] as? NSNumber)?.doubleValue) : nil
-        return (url, item["level"] as? String ?? level, gain)
+        return .playable(url: url, level: item["level"] as? String ?? level, gain: gain, preview: item["freeTrialInfo"] is [String: Any])
     }
 
     /// 平衡音量要给这首歌加多少分贝。网易云给的 gain 是把这首拉到统一响度要加减的分贝数，peak 是这首最响处（1 = 满幅）。
@@ -488,17 +507,39 @@ enum NeteaseAPI {
         Array(((await call("toplist", [:]))?["list"] as? [[String: Any]] ?? []).compactMap(playlist).prefix(20))
     }
 
-    static func searchSongs(_ keyword: String) async -> [NeteaseSong] {
-        let result = (await call("cloudsearch/pc", ["s": keyword, "type": 1, "limit": 40, "offset": 0, "total": true]))?["result"] as? [String: Any]
-        return (result?["songs"] as? [[String: Any]] ?? []).compactMap(song)
+    /// 搜索：回答里的 result（什么都没搜到也是一个回答）；没问到（断网、被拒）是 nil。
+    /// type：1 歌、100 歌手、10 专辑、1000 歌单
+    static func searchResult(_ keyword: String, type: Int, limit: Int) async -> [String: Any]? {
+        guard let reply = await call("cloudsearch/pc", ["s": keyword, "type": type, "limit": limit, "offset": 0, "total": true]),
+              (reply["code"] as? Int) == 200 else { return nil }
+        return reply["result"] as? [String: Any] ?? [:]
     }
 
-    static func searchArtists(_ keyword: String) async -> [NeteasePlaylist] {
-        let result = (await call("cloudsearch/pc", ["s": keyword, "type": 100, "limit": 12, "offset": 0, "total": true]))?["result"] as? [String: Any]
-        return (result?["artists"] as? [[String: Any]] ?? []).compactMap { item in
+    static func songs(inSearch result: [String: Any]) -> [NeteaseSong] {
+        (result["songs"] as? [[String: Any]] ?? []).compactMap(song)
+    }
+
+    static func artists(inSearch result: [String: Any]) -> [NeteasePlaylist] {
+        (result["artists"] as? [[String: Any]] ?? []).compactMap { item in
             guard let id = item["id"] as? Int, let name = item["name"] as? String else { return nil }
             return NeteasePlaylist(id: id, name: name, cover: image(item["picUrl"] ?? item["img1v1Url"]), count: 0, kind: .artist)
         }
+    }
+
+    static func playlists(inSearch result: [String: Any]) -> [NeteasePlaylist] {
+        (result["playlists"] as? [[String: Any]] ?? []).compactMap { item in
+            var list = playlist(item)
+            list?.plays = (item["playCount"] as? NSNumber)?.intValue ?? 0
+            return list
+        }
+    }
+
+    static func searchSongs(_ keyword: String) async -> [NeteaseSong] {
+        songs(inSearch: await searchResult(keyword, type: 1, limit: 40) ?? [:])
+    }
+
+    static func searchArtists(_ keyword: String) async -> [NeteasePlaylist] {
+        artists(inSearch: await searchResult(keyword, type: 100, limit: 12) ?? [:])
     }
 
     static func searchAlbums(_ keyword: String) async -> [NeteasePlaylist] {
@@ -511,8 +552,7 @@ enum NeteaseAPI {
     }
 
     static func searchPlaylists(_ keyword: String) async -> [NeteasePlaylist] {
-        let result = (await call("cloudsearch/pc", ["s": keyword, "type": 1000, "limit": 20, "offset": 0, "total": true]))?["result"] as? [String: Any]
-        return (result?["playlists"] as? [[String: Any]] ?? []).compactMap(playlist)
+        playlists(inSearch: await searchResult(keyword, type: 1000, limit: 20) ?? [:])
     }
 
     /// 最近播放：按时间从新到旧，最多三百首。只有客户端接口给

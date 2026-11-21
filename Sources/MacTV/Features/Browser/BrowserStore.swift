@@ -503,7 +503,11 @@ final class BrowserStore: ObservableObject {
 
     /// 地址栏里打的字要去哪：像网址的就是它，别的用 Google 搜
     nonisolated static func destination(_ text: String) -> URL? {
-        if let url = address(text) { return url }
+        address(text) ?? search(text)
+    }
+
+    /// 用 Google 搜这些字的结果页
+    nonisolated static func search(_ text: String) -> URL? {
         var search = URLComponents(string: "https://www.google.com/search")!
         search.queryItems = [URLQueryItem(name: "q", value: text)]
         return search.url
@@ -1374,6 +1378,18 @@ extension TVController {
         browserOpen = true
         browserStore.opened()
         browserStore.resumeLastTab()
+    }
+
+    /// 小茗同学搜网页（见 JasmineSearch）：进浏览器，直接开这个网址（开在空白标签页或新标签页里；已经开着的就换到它）。
+    /// 浏览器不在前面时，前面的东西先退到后台，和从主屏打开它一样
+    func openBrowser(at url: URL) {
+        if !browserOpen, !browserPageInFront {
+            if appInFront != nil || mode != .launcher || movies != nil { goHome() }
+            playbackCoordinator.resetPlaybackRequest()
+        }
+        sheets.closeDismissible()
+        browserStore.tv = self
+        browserStore.open(url)
     }
 
     func closeBrowser() {

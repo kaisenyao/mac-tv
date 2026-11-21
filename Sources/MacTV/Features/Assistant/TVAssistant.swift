@@ -1,7 +1,8 @@
 import Foundation
 
 /// What Jasmine can do in Mac TV, and what she's told about it: open an app, control what's playing, the volume.
-/// The commonest of these are understood here, without the model (LocalCommand).
+/// The commonest of these are understood here, without the model (LocalCommand). Finding something to play is
+/// JasmineSearch.
 enum JasmineCommand: Equatable {
     case open(String)          // a service id
     case home, controlCenter, settings
@@ -262,6 +263,10 @@ extension TVController {
     say so in a few words. For something no tool can do yet, say briefly that you can't do that yet. Before a tool \
     that takes a moment, say nothing; after it, confirm in a few words or not at all. Questions: answer briefly from \
     what you know and from the state, which says what's on screen and what's playing.
+    Music is play_music: a song or an artist by name; for a mood, a scene or a genre, a playlist from a few search \
+    words of yours, and say which playlist it is. play_video is for 哔哩哔哩. web_search only when asked to search. \
+    A result with `ask` did nothing: ask that in one short sentence, and never play from somewhere else unasked. \
+    Their reply comes with `waiting` in the state: call answer when it agrees, declines or chooses.
     """
 
     /// The apps Jasmine can open: what's on Home.
@@ -295,7 +300,7 @@ extension TVController {
                             "change": ["type": ["integer", "null"], "minimum": -100, "maximum": 100],
                             "mute": ["type": ["boolean", "null"]],
                           ], "required": ["level", "change", "mute"], "additionalProperties": false]),
-        ]
+        ] + JasmineFinder.tools
     }
 
     /// What's on screen and playing, for the model: names and titles only (no accounts, addresses or keys).
@@ -305,6 +310,7 @@ extension TVController {
         let volume = audioCoordinator.currentVolume
         if let level = volume.level { state["volume"] = level }
         if volume.muted { state["muted"] = true }
+        if let waiting = jasmine.finder.state { state["waiting"] = waiting }
         state["time"] = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate, .withTime, .withColonSeparatorInTime])
         let data = (try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])) ?? Data()
         return String(data: data, encoding: .utf8) ?? "{}"

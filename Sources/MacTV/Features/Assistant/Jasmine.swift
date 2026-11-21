@@ -54,6 +54,10 @@ final class Jasmine: ObservableObject {
     /// What Mac TV plays is lowered to this share while she listens and speaks (PlaybackVolume.ducking).
     private let duck: (Float) -> Void
     private let voice: Speaking
+    /// Finds music, videos and web pages, and keeps what she asked and waits to hear about (JasmineSearch).
+    let finder: JasmineFinder
+    /// The last request was in Chinese: so are her own lines (an answer to her question keeps its language).
+    private var chinese = true
     private var brain: (key: String, thinking: Thinking)?
     private var thinkingTask: Task<Void, Never>?
     /// When the moments of one request happened, for the timing log.
@@ -97,7 +101,8 @@ final class Jasmine: ObservableObject {
 
     init(tv: TVController, settings: JasmineSettings = .shared, microphone: Hearing? = nil, chimes: Chiming? = nil,
          transcriber: ((String, Bool) -> Transcribing)? = nil, access: (() -> MicrophoneAccess.Status)? = nil,
-         brain: ((String) -> Thinking)? = nil, duck: ((Float) -> Void)? = nil, voice: Speaking? = nil) {
+         brain: ((String) -> Thinking)? = nil, duck: ((Float) -> Void)? = nil, voice: Speaking? = nil,
+         finder: JasmineFinder? = nil) {
         self.tv = tv
         self.settings = settings
         self.microphone = microphone ?? Microphone()
@@ -110,6 +115,7 @@ final class Jasmine: ObservableObject {
         self.duck = duck ?? { PlaybackVolume.shared.ducking = $0 }
         self.voice = voice ?? Voice(key: { settings.key(.elevenLabs) }, settings: { Voice.Settings(voice: settings.voice) },
                                     allowed: !SystemGuard.fake, cache: Self.voiceCache)
+        self.finder = finder ?? JasmineFinder(music: tv.neteaseStore, videos: tv.bilibiliStore, web: { [weak tv] in tv?.openBrowser(at: $0) })
         self.voice.onLevel = { [weak self] level in
             guard let self, self.phase == .speaking || self.phase == .thinking else { return }
             self.level = level
@@ -434,10 +440,18 @@ final class Jasmine: ObservableObject {
         }
     }
 
-    /// A request: a short command at once, here; anything else to her model, with Mac TV's tools.
+    /// A request. An answer to what she asked (JasmineOffer) does or drops that; a short command is done at once, and
+    /// something to find, said in a fixed way, is found (LocalSearch): all here. Anything else goes to her model, with
+    /// Mac TV's tools.
     private func respond(to text: String) {
         guard let tv else { return dismiss() }
+        if let reply = finder.reply(to: text) {
+            return tell { [finder] in await finder.settle(reply) }
+        }
+        chinese = Sentences.isChinese(text)
+        let asked = finder.waiting
         if let command = LocalCommand.match(text, apps: tv.jasmineApps) {
+            finder.forget()
             let failure = tv.perform(command)
             timing.acted = Self.now()
             logTiming(local: true)
@@ -447,11 +461,16 @@ final class Jasmine: ObservableObject {
             hide(after: .seconds(failure == nil ? 1.2 : 2.5))
             return
         }
+        if let search = LocalSearch.match(text) {
+            return tell { [finder] in await finder.find(search) }
+        }
         guard let key = settings.key(.openAI) else { return say("Add an OpenAI API key in Settings › General › Jasmine.", chime: .unavailable) }
         if brain?.key != key { brain = (key, makeBrain(key)) }
         guard let thinking = brain?.thinking else { return }
         withAnimation(Motion.appear) { phase = .thinking }
-        thinkingTask = Task { [weak self, weak tv] in
+        thinkingTask = Task { [weak self, weak tv, finder] in
+            // What she had asked is the model's to answer while this request runs; left unanswered, it's dropped
+            defer { if let asked { finder.forget(only: asked) } }
             do {
                 let reply = try await thinking.respond(
                     to: text, state: tv?.jasmineState() ?? "{}", tools: tv?.jasmineTools ?? [],
@@ -462,6 +481,7 @@ final class Jasmine: ObservableObject {
                     },
                     perform: { [weak self, weak tv] call in
                         if self?.timing.acted == nil { self?.timing.acted = Self.now() }
+                        if let found = await finder.tool(call) { return found }
                         return tv?.performJasmine(call) ?? #"{"ok":false}"#
                     })
                 guard let self, !Task.isCancelled, self.phase == .thinking else { return }
@@ -483,6 +503,23 @@ final class Jasmine: ObservableObject {
                 self.duck(1)
                 self.say("Can’t Reach OpenAI", chime: .unavailable)
             }
+        }
+    }
+
+    /// Something found without the model (a search, then starting to play, takes a moment): she says what came of
+    /// it, a question when it's one, in the language she was asked in.
+    private func tell(_ work: @escaping @MainActor () async -> JasmineFound) {
+        withAnimation(Motion.appear) { phase = .thinking }
+        thinkingTask = Task { [weak self] in
+            let found = await work()
+            guard let self, !Task.isCancelled, self.phase == .thinking else { return }
+            self.timing.acted = Self.now()
+            self.logTiming(local: true)
+            let line = found.line.said(chinese: self.chinese)
+            self.line = line
+            self.voice.say(line)
+            withAnimation(Motion.appear) { self.phase = .speaking }
+            if !self.voice.speaking { self.saidEverything() }
         }
     }
 

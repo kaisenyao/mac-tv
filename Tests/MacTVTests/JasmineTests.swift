@@ -84,7 +84,8 @@ import Testing
     }
 
     /// A TV with Jasmine on fakes; `key` adds an OpenAI key (in memory, as every Keychain item under the tests).
-    static func withJasmine(key: Bool = true, access: MicrophoneAccess.Status = .allowed,
+    /// What she finds comes from `finder`: one that finds nothing anywhere, unless a test brings its own.
+    static func withJasmine(key: Bool = true, access: MicrophoneAccess.Status = .allowed, finder: JasmineFinder? = nil,
                             _ body: (Rig) async throws -> Void) async throws {
         try await InteractionTests.withTV { tv in
             let suite = "MacTVTests.Jasmine.\(UUID().uuidString)"
@@ -101,7 +102,9 @@ import Testing
                                      let t = FakeTranscriber(); t.handsFree = handsFree; rig.box.made.append(t); return t
                                  },
                                  access: { access }, brain: { _ in rig.brain }, duck: { rig.box.ducks.append($0) },
-                                 voice: rig.voice)
+                                 voice: rig.voice,
+                                 finder: finder ?? JasmineFinder(music: JasmineSearchTests.Music(), videos: JasmineSearchTests.Videos(),
+                                                                 web: { _ in }))
             try await body(rig)
             tv.jasmine.dismiss()
         }
@@ -564,7 +567,7 @@ import Testing
         #expect(LocalCommand.match("帮我打开网易云", apps: apps) == .open("netease"))
         #expect(LocalCommand.match("Open Settings", apps: apps) == .settings)
         #expect(LocalCommand.match("回到主屏幕", apps: apps) == .home)
-        #expect(LocalCommand.match("播放 Taylor Swift", apps: apps) == nil, "a search is the model's")
+        #expect(LocalCommand.match("播放 Taylor Swift", apps: apps) == nil, "a search isn't a command: LocalSearch")
         #expect(LocalCommand.match("打开冰箱", apps: apps) == nil)
     }
 
@@ -663,7 +666,7 @@ import Testing
             #expect(tv.performJasmine(ToolCall(id: "1", name: "open", arguments: ["target": "nowhere"])).contains("not understood"))
             #expect(tv.performJasmine(ToolCall(id: "2", name: "control", arguments: ["action": "pause"])).contains("nothing is playing"))
             #expect(tv.performJasmine(ToolCall(id: "3", name: "fly", arguments: [:])).contains("not understood"))
-            #expect(tv.jasmineTools.map(\.name) == ["open", "control", "volume"])
+            #expect(tv.jasmineTools.map(\.name) == ["open", "control", "volume", "play_music", "play_video", "web_search", "answer"])
             let state = tv.jasmineState()
             #expect(!state.contains("sk-"), "no keys in what the model is told")
         }
