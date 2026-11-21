@@ -77,6 +77,9 @@ final class RemoteCoordinator: ObservableObject {
     /// removed in Settings is refused at once. Tests put in their own before first use.
     lazy var pairingStore = PairingStore()
 
+    /// The brightness the phone's Settings sets: the Display sheet's. Tests use their own.
+    var brightness = DisplayBrightness.shared
+
     /// The Siri Remote's charge, when this macOS exposes it, and whether Mac TV may read the remote's buttons.
     @Published private(set) var siriRemoteBattery: Int?
     @Published private(set) var inputMonitoringAllowed = false
@@ -293,6 +296,7 @@ final class RemoteCoordinator: ObservableObject {
             }
             return .json(["ok": true])
         }
+        if request.path == "/display/brightness" { return handleBrightnessRequest(request) }
         if request.method == "POST", request.path == "/browser/open" {
             // 手机上粘贴的链接（或 App 分享出来的一整段文字）：哔哩哔哩、网易云、YouTube 的交给对应的应用打开；
             // 普通网页照旧在网页播放器里打开（下面），分享文字里夹着的网址也找出来
@@ -386,5 +390,39 @@ final class RemoteCoordinator: ObservableObject {
         default:
             return nil
         }
+    }
+
+    /// The phone's Settings › Brightness: the display Mac TV is on, the brightness Control Center's Display sheet
+    /// sets (DisplayBrightness). GET reads it afresh; POST {"level": 0–100} sets it, and the display gets only the
+    /// latest value at its own pace. Both answer {"level": n}, or {"level": null} when the display has no brightness
+    /// Mac TV can set (Not Available), and the phone hides the slider.
+    func handleBrightnessRequest(_ request: HTTPRequest) -> HTTPResponse {
+        let brightness = self.brightness
+        let display = tv?.playbackScreen?.displayID
+        switch request.method {
+        case "GET":
+            brightness.refresh(display: display)
+            return .deferred { await brightness.finishReading(); return Self.brightness(brightness.level) }
+        case "POST":
+            guard let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  let level = body["level"] as? NSNumber, CFGetTypeID(level) != CFBooleanGetTypeID(),
+                  level.doubleValue.isFinite else {
+                return .json(["error": "Choose a brightness from 0 to 100."], status: "400 Bad Request")
+            }
+            // Not read since Mac TV started (the phone kept its page open): read it first
+            if brightness.level == nil, !brightness.pending { brightness.refresh(display: display) }
+            let percent = Int(max(0, min(100, level.doubleValue)).rounded())
+            return .deferred {
+                await brightness.finishReading()
+                brightness.set(percent)
+                return Self.brightness(brightness.level)
+            }
+        default:
+            return .json(["error": "Not found"], status: "404 Not Found")
+        }
+    }
+
+    private static func brightness(_ level: Int?) -> HTTPResponse {
+        .json(["level": level.map { $0 as Any } ?? NSNull()])
     }
 }

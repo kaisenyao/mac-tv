@@ -145,7 +145,7 @@ final class JellyfinServers: ObservableObject {
         var unreachable: [String] = []
         for server in servers {
             do {
-                guard let token = JellyfinKeychain.token(server: server.id) else { throw Failure.http(401) }
+                guard let token = await JellyfinKeychain.token(server: server.id) else { throw Failure.http(401) }
                 let query = ["userId": server.userID, "includeItemTypes": "Movie,Episode,Video", "recursive": "true",
                              "fields": "DateCreated,Overview,Genres,People,Width,Height", "enableUserData": "true",
                              "enableImageTypes": "Primary,Backdrop", "imageTypeLimit": "1"]
@@ -234,7 +234,7 @@ final class JellyfinServers: ObservableObject {
     }
 
     private nonisolated static func image(_ server: Server, _ path: String, query: [String: String]) async -> Data? {
-        let request = request(server.address, path, query: query, token: JellyfinKeychain.token(server: server.id))
+        let request = request(server.address, path, query: query, token: await JellyfinKeychain.token(server: server.id))
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return data
@@ -270,7 +270,7 @@ final class JellyfinServers: ObservableObject {
     /// otherwise Jellyfin repackages or converts it as it streams.
     func stream(for movie: Movie) async -> Result<Stream, Problem> {
         guard let ids = Self.ids(in: movie.path), let server = server(for: movie.path),
-              let token = JellyfinKeychain.token(server: server.id) else {
+              let token = await JellyfinKeychain.token(server: server.id) else {
             return .failure(Problem(message: "Sign in to \(movie.server ?? "the server") again in Settings › Apps › Movies."))
         }
         let body: [String: Any] = ["UserId": server.userID, "DeviceProfile": Self.profile, "AutoOpenLiveStream": true,
@@ -513,12 +513,25 @@ enum JellyfinKeychain {
 
     static func token(server: String) -> String? {
         if let memory { return memory.withLock { $0[server] }.flatMap { String(data: $0, encoding: .utf8) } }
+        var result: CFTypeRef?
+        guard SystemKeychain.copyMatching(readQuery(server: server), &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// The same read, without holding the caller's thread while the Keychain answers (every artwork load asks).
+    static func token(server: String) async -> String? {
+        if let memory { return memory.withLock { $0[server] }.flatMap { String(data: $0, encoding: .utf8) } }
+        let (status, data) = await SystemKeychain.copyMatching(readQuery(server: server))
+        guard status == errSecSuccess, let data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func readQuery(server: String) -> [String: Any] {
         var item = query(server: server)
         item[kSecReturnData as String] = true
         item[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        guard SystemKeychain.copyMatching(item, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        return item
     }
 
     static func delete(server: String) {

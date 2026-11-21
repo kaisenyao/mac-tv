@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftUI
 
 /// An API key Jasmine uses. The owner types it in Settings › General › Jasmine; it's kept in this Mac's Keychain,
@@ -39,17 +40,34 @@ enum JasmineKeychain {
     }
 
     static func read(_ key: JasmineKey) -> Read {
-        if let memory {
-            return memory.withLock { $0[key.rawValue] }.flatMap { String(data: $0, encoding: .utf8) }.map(Read.found) ?? .missing
-        }
+        if let memory { return remembered(key, memory) }
+        var result: CFTypeRef?
+        let status = SystemKeychain.copyMatching(readQuery(key), &result)
+        return read(status, result as? Data)
+    }
+
+    /// The same read, without holding the caller's thread while the Keychain answers.
+    static func read(_ key: JasmineKey) async -> Read {
+        if let memory { return remembered(key, memory) }
+        let (status, data) = await SystemKeychain.copyMatching(readQuery(key))
+        return read(status, data)
+    }
+
+    private static func remembered(_ key: JasmineKey, _ memory: OSAllocatedUnfairLock<[String: Data]>) -> Read {
+        memory.withLock { $0[key.rawValue] }.flatMap { String(data: $0, encoding: .utf8) }.map(Read.found) ?? .missing
+    }
+
+    private static func readQuery(_ key: JasmineKey) -> [String: Any] {
         var item = query(key)
         item[kSecReturnData as String] = true
         item[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SystemKeychain.copyMatching(item, &result)
+        return item
+    }
+
+    private static func read(_ status: OSStatus, _ data: Data?) -> Read {
         switch status {
         case errSecSuccess:
-            guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else { return .unreadable(status) }
+            guard let data, let value = String(data: data, encoding: .utf8) else { return .unreadable(status) }
             return .found(value)
         case errSecItemNotFound: return .missing
         default: return .unreadable(status)
@@ -109,20 +127,34 @@ final class JasmineSettings: ObservableObject {
         voice = defaults.string(forKey: Key.voice) ?? JasmineVoice.all[0].id
         microphone = defaults.string(forKey: Key.microphone)
         added = []
-        for key in JasmineKey.allCases {
-            switch JasmineKeychain.read(key) {
-            case .found: added.insert(key)
-            case .missing: break
-            case .unreadable(let status):
-                unreadable[key] = status
-                Log.app.error("Jasmine: couldn't read the \(key.title, privacy: .public) from the Keychain (\(status, privacy: .public))")
+        // Which keys are added, read in the background: the Keychain may ask first ("Always Allow"), and Mac TV
+        // goes on starting meanwhile
+        checking = Set(JasmineKey.allCases)
+        Task { [weak self] in
+            for key in JasmineKey.allCases {
+                let read = await JasmineKeychain.read(key)
+                self?.checked(key, read)
             }
+        }
+    }
+
+    /// Keys not read yet since Mac TV started.
+    private var checking: Set<JasmineKey>
+
+    private func checked(_ key: JasmineKey, _ read: JasmineKeychain.Read) {
+        guard checking.remove(key) != nil else { return }   // read, saved or removed since
+        switch read {
+        case .found: added.insert(key)
+        case .missing: break
+        case .unreadable(let status):
+            unreadable[key] = status
+            Log.app.error("Jasmine: couldn't read the \(key.title, privacy: .public) from the Keychain (\(status, privacy: .public))")
         }
     }
 
     /// The key, read now; nil when there's none or it can't be read (`problem` says which).
     func key(_ key: JasmineKey) -> String? {
-        guard added.contains(key) || unreadable[key] != nil else { return nil }
+        guard added.contains(key) || unreadable[key] != nil || checking.remove(key) != nil else { return nil }
         switch JasmineKeychain.read(key) {
         case .found(let value):
             unreadable[key] = nil
@@ -149,12 +181,14 @@ final class JasmineSettings: ObservableObject {
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         JasmineKeychain.save(value, for: key)
+        checking.remove(key)
         added.insert(key)
         unreadable[key] = nil
     }
 
     func remove(_ key: JasmineKey) {
         JasmineKeychain.delete(key)
+        checking.remove(key)
         added.remove(key)
     }
 

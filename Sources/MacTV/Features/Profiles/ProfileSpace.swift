@@ -39,10 +39,14 @@ struct ProfileSpace: @unchecked Sendable {
 
     private static let state = OSAllocatedUnfairLock<ProfileSpace?>(initialState: nil)
 
+    /// A test's own space, for the work it runs inside `$pinned.withValue`: `current` there, whoever else is watching.
+    @TaskLocal static var pinned: ProfileSpace?
+
     /// The profile watching now. Mac TV sets it before it builds its stores and changes it when someone
     /// else starts watching; until then it's the first profile in the usual places.
     static var current: ProfileSpace {
-        state.withLock { state in
+        if let pinned { return pinned }
+        return state.withLock { state in
             if let state { return state }
             let first = ProfileSpaces.live.space(for: Profile.mainID, epoch: 0)
             state = first

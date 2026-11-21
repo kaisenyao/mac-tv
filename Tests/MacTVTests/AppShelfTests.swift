@@ -35,77 +35,75 @@ struct AppShelfTests {
         #expect(!video.isLive)
     }
 
+    /// 每个测试自己的一份设置（TestDefaults），只在这个测试里当作现在这个人的（ProfileSpace.pinned），测完删掉：
+    /// 不碰 UserDefaults.standard，别的测试同时改它、换人，都影响不到这里
+    private func withOwnDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
+        let suite = "MacTVTests.AppShelf.\(UUID().uuidString)"
+        let defaults = TestDefaults.named(suite)
+        defer { TestDefaults.remove(suite) }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        let space = ProfileSpace(profileID: Profile.mainID, defaults: defaults, suiteName: TestDefaults.path(suite),
+                                 folder: folder, caches: folder, keychain: .inMemory(), epoch: 0)
+        try ProfileSpace.$pinned.withValue(space) { try body(defaults) }
+    }
+
     @Test
     func shelfSourcesDefaultToFollowingAndFourNeteaseKinds() {
-        let defaults = UserDefaults.standard
-        let savedBili = defaults.string(forKey: "bilibiliShelf"), savedNetease = defaults.stringArray(forKey: "neteaseShelfSources")
-        let savedNow = defaults.object(forKey: "neteaseShelfNowPlaying")
-        let savedSplit = defaults.object(forKey: "neteaseShelfSplitLists")
-        defer {
-            defaults.set(savedBili, forKey: "bilibiliShelf")
-            defaults.set(savedNetease, forKey: "neteaseShelfSources")
-            defaults.set(savedNow, forKey: "neteaseShelfNowPlaying")
-            defaults.set(savedSplit, forKey: "neteaseShelfSplitLists")
-        }
-        defaults.removeObject(forKey: "bilibiliShelf")
-        defaults.removeObject(forKey: "neteaseShelfSources")
-        defaults.removeObject(forKey: "neteaseShelfNowPlaying")
-        #expect(BiliShelfSource.current == .following)
-        #expect(NeteaseShelfSource.selected == [.daily, .liked, .dailyLists, .playlists])
-        // "正在播放"默认开着，排在最前面，也算一项
-        #expect(NeteaseShelfSource.showsNowPlaying)
-        #expect(NeteaseShelfSource.summary == "正在播放等 5 项")
-        // 多选：存的顺序不重要，轮播按固定的顺序来
-        NeteaseShelfSource.selected = [.hot, .daily]
-        #expect(NeteaseShelfSource.selected == [.daily, .hot])
-        NeteaseShelfSource.selected = [.recent]
-        #expect(NeteaseShelfSource.summary == "正在播放、最近播放")
-        NeteaseShelfSource.showsNowPlaying = false
-        #expect(NeteaseShelfSource.summary == "最近播放")
+        withOwnDefaults { defaults in
+            #expect(BiliShelfSource.current == .following)
+            #expect(NeteaseShelfSource.selected == [.daily, .liked, .dailyLists, .playlists])
+            // "正在播放"默认开着，排在最前面，也算一项
+            #expect(NeteaseShelfSource.showsNowPlaying)
+            #expect(NeteaseShelfSource.summary == "正在播放等 5 项")
+            // 多选：存的顺序不重要，轮播按固定的顺序来
+            NeteaseShelfSource.selected = [.hot, .daily]
+            #expect(NeteaseShelfSource.selected == [.daily, .hot])
+            NeteaseShelfSource.selected = [.recent]
+            #expect(NeteaseShelfSource.summary == "正在播放、最近播放")
+            NeteaseShelfSource.showsNowPlaying = false
+            #expect(NeteaseShelfSource.summary == "最近播放")
 
-        // 推荐歌单拆成两种以前勾过推荐歌单的：每日歌单也勾上，只做一次（之后自己取消了不再加回来）
-        defaults.removeObject(forKey: "neteaseShelfSplitLists")
-        NeteaseShelfSource.selected = [.playlists, .daily]
-        NeteaseShelfSource.migrateSplitLists()
-        #expect(NeteaseShelfSource.selected == [.daily, .dailyLists, .playlists])
-        NeteaseShelfSource.selected = [.daily, .playlists]
-        NeteaseShelfSource.migrateSplitLists()
-        #expect(NeteaseShelfSource.selected == [.daily, .playlists])
+            // 推荐歌单拆成两种以前勾过推荐歌单的：每日歌单也勾上，只做一次（之后自己取消了不再加回来）
+            defaults.removeObject(forKey: "neteaseShelfSplitLists")
+            NeteaseShelfSource.selected = [.playlists, .daily]
+            NeteaseShelfSource.migrateSplitLists()
+            #expect(NeteaseShelfSource.selected == [.daily, .dailyLists, .playlists])
+            NeteaseShelfSource.selected = [.daily, .playlists]
+            NeteaseShelfSource.migrateSplitLists()
+            #expect(NeteaseShelfSource.selected == [.daily, .playlists])
+        }
     }
 
     @MainActor @Test
     func dedaoShelfIsTheBookYouAreOnPlusNewBooksFromCheckedCategories() {
-        let defaults = UserDefaults.standard
-        let keys = ["dedaoShelfSources", "dedaoShelfNowPlaying", "dedaoShelfListening", "dedaoShelfNewBooks", "dedaoShelfHiddenCategories"]
-        let saved = keys.map { defaults.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, saved) { defaults.set(value, forKey: key) } }
-        for key in keys { defaults.removeObject(forKey: key) }
-        #expect(AppShelf.services.contains(DedaoStore.appID))
-        #expect(DedaoShelfSource.showsListening && DedaoShelfSource.showsNewBooks)
-        #expect(DedaoShelfSource.summary == "正在播放、新书推荐")
-        #expect(DedaoShelfSource.newBookCount == 6)
-        #expect(DedaoShelfSource.newBookCount + 2 <= AppShelf.limit)     // 加上正在听的书、网易云式的"正在播放"也放得下
+        withOwnDefaults { defaults in
+            #expect(AppShelf.services.contains(DedaoStore.appID))
+            #expect(DedaoShelfSource.showsListening && DedaoShelfSource.showsNewBooks)
+            #expect(DedaoShelfSource.summary == "正在播放、新书推荐")
+            #expect(DedaoShelfSource.newBookCount == 6)
+            #expect(DedaoShelfSource.newBookCount + 2 <= AppShelf.limit)     // 加上正在听的书、网易云式的"正在播放"也放得下
 
-        // 以前的两个开关：正在播放、继续学习有一个开着，"正在听的书"就开着
-        defaults.set(false, forKey: "dedaoShelfNowPlaying")
-        defaults.set(["newBooks"], forKey: "dedaoShelfSources")
-        #expect(!DedaoShelfSource.showsListening && DedaoShelfSource.showsNewBooks)
-        defaults.set(["continue"], forKey: "dedaoShelfSources")
-        #expect(DedaoShelfSource.showsListening && !DedaoShelfSource.showsNewBooks)
-        #expect(DedaoShelfSource.summary == "正在播放")
-        defaults.set(true, forKey: "dedaoShelfNowPlaying")
-        defaults.set(["recent", "hot"], forKey: "dedaoShelfSources")   // 更早的几种认不出：都开着
-        #expect(DedaoShelfSource.showsListening && DedaoShelfSource.showsNewBooks)
-        // 改过以后就按新存的
-        DedaoShelfSource.showsListening = false
-        #expect(!DedaoShelfSource.showsListening)
+            // 以前的两个开关：正在播放、继续学习有一个开着，"正在听的书"就开着
+            defaults.set(false, forKey: "dedaoShelfNowPlaying")
+            defaults.set(["newBooks"], forKey: "dedaoShelfSources")
+            #expect(!DedaoShelfSource.showsListening && DedaoShelfSource.showsNewBooks)
+            defaults.set(["continue"], forKey: "dedaoShelfSources")
+            #expect(DedaoShelfSource.showsListening && !DedaoShelfSource.showsNewBooks)
+            #expect(DedaoShelfSource.summary == "正在播放")
+            defaults.set(true, forKey: "dedaoShelfNowPlaying")
+            defaults.set(["recent", "hot"], forKey: "dedaoShelfSources")   // 更早的几种认不出：都开着
+            #expect(DedaoShelfSource.showsListening && DedaoShelfSource.showsNewBooks)
+            // 改过以后就按新存的
+            DedaoShelfSource.showsListening = false
+            #expect(!DedaoShelfSource.showsListening)
 
-        // 分类：默认全勾；勾掉的按名字记（得到新加的分类默认勾着）
-        let all = ["职场发展", "历史", "自然科学", "AI"]
-        #expect(DedaoShelfSource.categorySummary(all) == "全部分类")
-        DedaoShelfSource.hiddenCategories = ["历史"]
-        #expect(DedaoShelfSource.categorySummary(all) == "3 个分类")
-        #expect(DedaoShelfSource.categorySummary(all + ["新的分类"]) == "4 个分类")
+            // 分类：默认全勾；勾掉的按名字记（得到新加的分类默认勾着）
+            let all = ["职场发展", "历史", "自然科学", "AI"]
+            #expect(DedaoShelfSource.categorySummary(all) == "全部分类")
+            DedaoShelfSource.hiddenCategories = ["历史"]
+            #expect(DedaoShelfSource.categorySummary(all) == "3 个分类")
+            #expect(DedaoShelfSource.categorySummary(all + ["新的分类"]) == "4 个分类")
+        }
     }
 
     /// 正在放的歌的黑胶（和视频封面的慢慢放大）：AppKit 重建图层树时会按视图的 frame 重算转动那一层的锚点和位置

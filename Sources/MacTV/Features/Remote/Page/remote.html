@@ -238,6 +238,16 @@
         <button class="row nav" data-page="page-player"><span>Website Player</span><span class="value" id="website-player-value">Built-in</span></button>
       </div>
 
+      <!-- 亮度：电视那块屏的，和控制中心里显示器那一页的是同一个；这块屏调不了（Not Available）就不显示 -->
+      <h3 class="section-label" id="brightness-label" hidden>Brightness</h3>
+      <div class="group" id="brightness-group" hidden>
+        <div class="row brightness">
+          <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><use href="#sun-small"/></svg>
+          <input type="range" id="brightness" min="0" max="100" step="1" value="50" aria-label="Brightness">
+          <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><use href="#sun-large"/></svg>
+        </div>
+      </div>
+
       <h3 class="section-label">TV &amp; Mac</h3>
       <div class="group">
         <button class="row nav" data-page="page-display"><span>Display</span><span class="value" id="display-value">Automatic</span></button>
@@ -457,6 +467,9 @@
   <symbol id="icon-transcript" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h14l10 10v21a4 4 0 0 1-4 4H11a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4z"/><path d="M25 5v10h10"/><path d="M14 24h14M14 32h9"/></g></symbol>
   <symbol id="icon-next" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9.5 27 22 9 34.5z"/><path d="M35 9.5v25"/></g></symbol>
   <symbol id="icon-previous" viewBox="0 0 44 44"><g fill="none" stroke="#2b2d2f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M35 9.5 17 22l18 12.5z"/><path d="M9 9.5v25"/></g></symbol>
+  <!-- 亮度两头的太阳：小的（暗）、大的（亮），和 iOS 的一样 -->
+  <symbol id="sun-small" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4" fill="currentColor"/><path d="M18.20 12.00L19.40 12.00 M16.38 16.38L17.23 17.23 M12.00 18.20L12.00 19.40 M7.62 16.38L6.77 17.23 M5.80 12.00L4.60 12.00 M7.62 7.62L6.77 6.77 M12.00 5.80L12.00 4.60 M16.38 7.62L17.23 6.77" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="sun-large" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M19.40 12.00L22.20 12.00 M17.23 17.23L19.21 19.21 M12.00 19.40L12.00 22.20 M6.77 17.23L4.79 19.21 M4.60 12.00L1.80 12.00 M6.77 6.77L4.79 4.79 M12.00 4.60L12.00 1.80 M17.23 6.77L19.21 4.79" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
 </defs></svg>
 
 <script src="remote.js"></script>

@@ -18,6 +18,11 @@ import Security
 /// Under the tests (TestSandbox sets MACTV_KEYCHAIN to "memory" before any test runs) each of them keeps its items
 /// in memory instead, and these refuse every call, so a test never reads, writes or deletes a real item, whatever
 /// order the tests run in. The app always uses the real Keychain.
+///
+/// A call can wait as long as the keychain's question is on screen ("Always Allow"), so every call runs on one queue of
+/// its own (KeysHelper.queue), one at a time: never on the main thread, nor on a Swift concurrency thread, which
+/// many waiting image loads would use up. The async forms wait there without holding their caller's thread; a read
+/// kept from before (KeysHelper.reads) comes back at once in either form. The synchronous forms wait for the queue.
 enum SystemKeychain {
     /// Under the tests: every Keychain user keeps its items in memory.
     static let inMemory = ProcessInfo.processInfo.environment["MACTV_KEYCHAIN"] == "memory"
@@ -28,28 +33,91 @@ enum SystemKeychain {
 
     static func copyMatching(_ query: [String: Any], _ result: inout CFTypeRef?) -> OSStatus {
         guard allowed() else { return errSecNotAvailable }
-        if let answer = viaHelper(KeysRequest.read(query)) {
-            if answer.status == errSecSuccess { result = answer.output as NSData }
-            return answer.status
-        }
-        return SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, data) = kept(query) ?? KeysHelper.queue.sync { readNow(query) }
+        if let data { result = data as NSData }
+        return status
     }
 
     static func add(_ item: [String: Any]) -> OSStatus {
         guard allowed() else { return errSecNotAvailable }
-        if let answer = viaHelper(KeysRequest.add(item)) { return answer.status }
-        return SecItemAdd(item as CFDictionary, nil)
+        return KeysHelper.queue.sync { addNow(item) }
     }
 
     static func update(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus {
         guard allowed() else { return errSecNotAvailable }
-        if let answer = viaHelper(KeysRequest.update(query, attributes)) { return answer.status }
-        return SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        return KeysHelper.queue.sync { updateNow(query, attributes) }
     }
 
     @discardableResult
     static func delete(_ query: [String: Any]) -> OSStatus {
         guard allowed() else { return errSecNotAvailable }
+        return KeysHelper.queue.sync { deleteNow(query) }
+    }
+
+    // MARK: Async: the caller's thread is free while the keychain answers
+
+    /// SecItemCopyMatching of one item's data: the status, and the data when it was read.
+    static func copyMatching(_ query: [String: Any]) async -> (status: OSStatus, data: Data?) {
+        guard allowed() else { return (errSecNotAvailable, nil) }
+        if let kept = kept(query) { return kept }
+        let query = Carried(query)
+        return await KeysHelper.onQueue { readNow(query.value) }
+    }
+
+    static func add(_ item: [String: Any]) async -> OSStatus {
+        guard allowed() else { return errSecNotAvailable }
+        let item = Carried(item)
+        return await KeysHelper.onQueue { addNow(item.value) }
+    }
+
+    static func update(_ query: [String: Any], _ attributes: [String: Any]) async -> OSStatus {
+        guard allowed() else { return errSecNotAvailable }
+        let query = Carried(query), attributes = Carried(attributes)
+        return await KeysHelper.onQueue { updateNow(query.value, attributes.value) }
+    }
+
+    @discardableResult
+    static func delete(_ query: [String: Any]) async -> OSStatus {
+        guard allowed() else { return errSecNotAvailable }
+        let query = Carried(query)
+        return await KeysHelper.onQueue { deleteNow(query.value) }
+    }
+
+    /// A query on its way to the queue. Only property-list values (strings, data, booleans, CF constants) are in it.
+    private struct Carried: @unchecked Sendable {
+        let value: [String: Any]
+        init(_ value: [String: Any]) { self.value = value }
+    }
+
+    /// The helper's read of `query` kept from before, if there is one.
+    private static func kept(_ query: [String: Any]) -> (OSStatus, Data?)? {
+        guard KeysHelper.answering != nil, let request = KeysRequest.read(query),
+              let answer = KeysHelper.reads.answer(request) else { return nil }
+        return (answer.status, answer.status == errSecSuccess ? answer.output : nil)
+    }
+
+    // On KeysHelper.queue only.
+
+    private static func readNow(_ query: [String: Any]) -> (OSStatus, Data?) {
+        if let answer = viaHelper(KeysRequest.read(query)) {
+            return (answer.status, answer.status == errSecSuccess ? answer.output : nil)
+        }
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return (status, result as? Data)
+    }
+
+    private static func addNow(_ item: [String: Any]) -> OSStatus {
+        if let answer = viaHelper(KeysRequest.add(item)) { return answer.status }
+        return SecItemAdd(item as CFDictionary, nil)
+    }
+
+    private static func updateNow(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus {
+        if let answer = viaHelper(KeysRequest.update(query, attributes)) { return answer.status }
+        return SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    }
+
+    private static func deleteNow(_ query: [String: Any]) -> OSStatus {
         if let answer = viaHelper(KeysRequest.delete(query)) { return answer.status }
         return SecItemDelete(query as CFDictionary)
     }
@@ -215,8 +283,24 @@ struct KeysHelper: Sendable {
         return Answer(status: status, output: status == errSecSuccess ? output : Data())
     }
 
+    /// Where every Keychain call runs, one at a time (SystemKeychain): a read that waited behind the same read finds
+    /// its answer kept, so the keychain asks once, not once per caller.
+    static let queue = DispatchQueue(label: "local.couch.tv.keys", qos: .userInitiated)
+
+    /// Runs `work` on the queue; the caller's thread is free until it's done.
+    static func onQueue<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { done in queue.async { done.resume(returning: work()) } }
+    }
+
+    /// The helper's answer to `request`, as `answer(_:)`, without holding the caller's thread while it runs.
+    func answer(_ request: KeysRequest) async -> Answer? {
+        if request.fields["op"] == "read", let kept = Self.reads.answer(request) { return kept }
+        return await Self.onQueue { self.answer(request) }
+    }
+
     /// The helper's answer to `request`, a read kept from before when there is one. Nil when it doesn't answer this
     /// build (from then on, Mac TV calls the Keychain itself); a helper that doesn't start is errSecNotAvailable.
+    /// It runs the helper on the calling thread: SystemKeychain calls it on the queue.
     func answer(_ request: KeysRequest) -> Answer? {
         let reading = request.fields["op"] == "read"
         if reading, let kept = Self.reads.answer(request) { return kept }

@@ -1562,7 +1562,7 @@ document.addEventListener('visibilitychange', () => {
 let pageStack = [];
 const onPage = { 'page-start': renderStart, 'page-shortcuts': renderShortcutsPage, 'page-picker': renderPicker, 'page-apple': loadApple };
 function openSettings(first = 'settings-main') {
-  refresh(); loadDevices(); loadShares(); loadJellyfin(); loadShortcuts();
+  refresh(); loadBrightness(); loadDevices(); loadShares(); loadJellyfin(); loadShortcuts();
   pageStack = [];
   showPage(first);
   presentSheet($('#settings-sheet'));
@@ -1666,6 +1666,55 @@ async function chooseDisplay(display) {
     await refresh();
   }
 }
+// Brightness (Settings): the TV display's, the one Control Center's Display sheet sets. Read when Settings opens.
+// While the finger moves only the latest value goes, one request at a time and at most every 100 ms, and where it
+// stops always goes. On a display without it (Not Available) the slider isn't shown.
+const BRIGHTNESS_GAP = 100;
+let brightnessWanted = null, brightnessSending = false, brightnessSentAt = -Infinity, brightnessTimer = 0, brightnessRead = 0;
+function showBrightness(level) {
+  const known = typeof level === 'number';
+  $('#brightness-label').hidden = $('#brightness-group').hidden = !known;
+  if (known) { $('#brightness').value = level; paintBrightness(); }
+}
+function paintBrightness() {
+  const slider = $('#brightness');
+  slider.style.setProperty('--level', `${slider.value}%`);
+}
+async function loadBrightness() {
+  const read = ++brightnessRead;
+  try {
+    const answer = await api('/display/brightness');
+    if (read === brightnessRead) showBrightness(answer.level);
+  } catch (e) { if (e.message !== 'unpaired' && read === brightnessRead) showBrightness(null); }
+}
+function setBrightness(level) {
+  brightnessRead++;   // a read still on the way is older than this: the slider stays where the finger is
+  brightnessWanted = level;
+  paintBrightness();
+  pumpBrightness();
+}
+async function pumpBrightness() {
+  if (brightnessSending || brightnessWanted === null) return;
+  const wait = brightnessSentAt + BRIGHTNESS_GAP - Date.now();
+  if (wait > 0) {
+    if (!brightnessTimer) brightnessTimer = setTimeout(() => { brightnessTimer = 0; pumpBrightness(); }, wait);
+    return;
+  }
+  const level = brightnessWanted;
+  brightnessWanted = null;
+  brightnessSending = true;
+  brightnessSentAt = Date.now();
+  try {
+    const answer = await api('/display/brightness', { level });
+    if (typeof answer.level !== 'number') showBrightness(null);   // Mac TV is on a display without it now
+  } catch (e) {
+    if (e.message !== 'unpaired') haptic('error');
+  } finally {
+    brightnessSending = false;
+    pumpBrightness();
+  }
+}
+$('#brightness').addEventListener('input', e => setBrightness(Number(e.target.value)));
 async function choosePlayer(player) {
   const note = $('#browser-msg');
   note.hidden = true;

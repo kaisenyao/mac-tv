@@ -232,6 +232,14 @@
                    box-shadow:0 0 0 .5px rgba(0, 0, 0, .04), 0 2px 6px rgba(0, 0, 0, .15), 0 1px 1px rgba(0, 0, 0, .08); transition:transform .3s cubic-bezier(.32,.72,0,1); }
   [aria-checked="true"] > .switch { background:var(--green); }
   [aria-checked="true"] > .switch::after { transform:translateX(20px); }
+  /* 亮度：iOS 设置里那样的滑块，两头一小一大的太阳；圆钮和开关的一样 */
+  .row.brightness { gap:14px; min-height:54px; }
+  .row.brightness .sun { flex:none; width:22px; height:22px; color:var(--secondary); }
+  .row.brightness input { flex:1; min-width:0; height:32px; margin:0; padding:0; background:transparent; -webkit-appearance:none; appearance:none; --level:50%; }
+  .row.brightness input:focus { outline:0; }
+  .row.brightness input::-webkit-slider-runnable-track { height:4px; border-radius:2px; background:linear-gradient(to right, var(--blue) var(--level), var(--fill) var(--level)); }
+  .row.brightness input::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:28px; height:28px; margin-top:-12px; border-radius:50%; background:#fff;
+                   box-shadow:0 0 0 .5px rgba(0, 0, 0, .04), 0 2px 6px rgba(0, 0, 0, .15), 0 1px 1px rgba(0, 0, 0, .08); }
   .choices .row[aria-pressed="true"]::after { content:""; flex:none; width:12px; height:6px; margin:-4px 2px 0 0; border-left:2.5px solid var(--blue); border-bottom:2.5px solid var(--blue); transform:rotate(-45deg); }
   .choices .row .value { max-width:45%; }
   .segmented { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:4px; padding:4px; border-radius:14px; background:#fff; }

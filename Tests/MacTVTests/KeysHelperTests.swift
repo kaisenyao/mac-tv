@@ -145,4 +145,78 @@ struct KeysHelperTests {
         #expect(KeysHelper.installed == nil)
         #expect(SystemKeychain.inMemory)
     }
+
+    // MARK: Off the main thread
+
+    /// A stand-in for the helper: a script in a folder of its own that notes every run, then waits, as while the
+    /// keychain's question is on screen, until `allow()` answers it (or five seconds pass: then it fails), and
+    /// answers `secret`. No Keychain is reached.
+    @MainActor private func withAskingHelper(
+        _ body: (KeysHelper, _ allow: @escaping @Sendable (Bool) -> Void, _ runs: @escaping @Sendable () -> Int) async throws -> Void
+    ) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacTVTests-keys-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let script = folder.appendingPathComponent("Mac TV Keys")
+        let runs = folder.appendingPathComponent("runs"), allowed = folder.appendingPathComponent("allowed")
+        try """
+            #!/bin/sh
+            cat > /dev/null
+            echo run >> '\(runs.path)'
+            i=0
+            while [ ! -f '\(allowed.path)' ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+            [ -f '\(allowed.path)' ] || exit 1
+            printf secret
+
+            """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        KeysHelper.reads.forget()
+        defer { KeysHelper.reads.forget() }
+        try await body(KeysHelper(executable: script), { yes in
+            if yes { FileManager.default.createFile(atPath: allowed.path, contents: nil) }
+            else { try? FileManager.default.removeItem(at: allowed) }
+        }, {
+            ((try? String(contentsOf: runs, encoding: .utf8)) ?? "").split(separator: "\n").count
+        })
+    }
+
+    /// While the helper waits for the keychain's question, the main actor goes on (Mac TV keeps drawing and loading):
+    /// here it is the main actor that answers the question, so a call that held it would wait in vain and fail. One
+    /// test, as the reads kept are the whole app's.
+    @MainActor @Test func theHelperRunsWithoutHoldingTheMainActor() async throws {
+        try await withAskingHelper { helper, allow, runs in
+            let item = { KeysRequest.read(self.reading(self.generic.merging([kSecAttrAccount as String: UUID().uuidString]) { $1 })) }
+            let request = try #require(item())
+            let asking = Task { @MainActor in await helper.answer(request) }
+            try await Task.sleep(for: .milliseconds(100))
+            allow(true)
+            let answer = await asking.value
+            #expect(answer == KeysHelper.Answer(status: errSecSuccess, output: data))
+            #expect(runs() == 1)
+            // Kept for this run: asked again, the answer comes back without running the helper
+            #expect(await helper.answer(request) == answer)
+            #expect(runs() == 1)
+
+            // Several callers asking for another item while the question is up (every artwork load wants the
+            // Jellyfin token): the helper runs once, so the keychain asks once, and every caller gets the answer
+            allow(false)
+            let other = try #require(item())
+            let callers = (0..<6).map { _ in Task { await helper.answer(other) } }
+            try await Task.sleep(for: .milliseconds(100))
+            allow(true)
+            for caller in callers { #expect(await caller.value?.output == data) }
+            #expect(runs() == 2)
+        }
+    }
+
+    /// The async forms under the tests: the items stay in memory, and nothing reaches SystemKeychain.
+    @Test func asyncReadsUseTheMemoryStore() async {
+        let server = "MacTVTests \(UUID().uuidString)"
+        #expect(await JellyfinKeychain.token(server: server) == nil)
+        JellyfinKeychain.save("token", server: server)
+        #expect(await JellyfinKeychain.token(server: server) == "token")
+        JellyfinKeychain.delete(server: server)
+        #expect(await JellyfinKeychain.token(server: server) == nil)
+        #expect(SystemKeychain.refused == 0)
+    }
 }

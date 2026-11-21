@@ -105,14 +105,21 @@ final class DisplayBrightness: ObservableObject {
     private var writer: LatestValueWriter<Int>?
     private var reading: Task<Void, Never>?
     private var generation = 0
+    private let control: @MainActor (CGDirectDisplayID?) async -> (any BrightnessControl)?
+
+    /// `control`: what sets the display's brightness; a test's own, or `DisplayBrightness.control`.
+    init(control: (@MainActor (CGDirectDisplayID?) async -> (any BrightnessControl)?)? = nil) {
+        self.control = control ?? { await DisplayBrightness.control($0) }
+    }
 
     /// Reads the brightness of `display` (the one Mac TV is on) afresh.
     func refresh(display: CGDirectDisplayID?) {
         generation += 1
         let generation = generation
         pending = true
+        let find = control
         reading = Task { [weak self] in
-            let control = await Self.control(display)
+            let control = await find(display)
             let level = await control?.read()
             guard let self, self.generation == generation else { return }
             if let control, let level {
