@@ -1027,7 +1027,7 @@ extension TVController {
 /// first row 190 from the top; rows 66 tall and 14 apart, capsules; a row's title and its value both 38 points,
 /// medium, 33 in from the row's ends, the value grey; the focused row a white capsule 4 larger all round. A group's
 /// title is 27 points, in line with the rows' text, and 94 lie between the last row of one group and the first of the
-/// next. On the left, one big picture, 540 square, centred 525 across and 507 down.
+/// next. On the left, one big picture, 540 square, centred 525 across and 507 down; the page's name at the top, centred.
 enum SettingsMetrics {
     static let title = Font.tv(.headline)
     static let value = Font.tv(.headline)
@@ -1039,12 +1039,14 @@ enum SettingsMetrics {
     /// A row is a capsule.
     static let corner: CGFloat = rowHeight / 2
     static let inset: CGFloat = 33
-    static let groupTitle = Font.system(size: 27, weight: .medium)
+    static let groupTitle = Font.system(size: 27, weight: .semibold)
     /// Above a group's title (after the rows' own spacing) and under it: 94 from row to row across it.
     static let groupTop: CGFloat = 36
     static let groupToRow: CGFloat = 12
     static let hero: CGFloat = 540
     static let heroCentre = CGPoint(x: 525, y: 507)
+    /// The page's name: 57 points, bold, dim, centred across the screen, its middle this far down.
+    static let titleCentre: CGFloat = 91
     /// The bottom of Home's status bar (the time, Control Center and the avatar), which a scrolling page stays below.
     static let belowStatusBar: CGFloat = 104
 }
@@ -1128,11 +1130,10 @@ struct SettingsPages: View {
 
     private func hero(_ panel: SettingsPanel) -> some View {
         let hero = tv.settingsHero(panel)
-        // The picture where Apple TV's is, and as big; "SETTINGS" over it and the page's name under it, on its left edge
-        let side = SettingsMetrics.hero, corner = side * 0.235, label: CGFloat = 28, gap: CGFloat = 28
-        return VStack(alignment: .leading, spacing: gap) {
-            Text("SETTINGS").font(.tv(.caption2, emphasized: true)).tracking(1.6).opacity(panel.connectRemote ? 0 : 0.5)
-                .frame(height: label)
+        // As Apple TV's Settings: the page's name at the top, centred and dim, and one big picture on the left, a
+        // pale tile with the page's symbol dark in it, about a quarter of the tile tall (Apple TV's own is its logo).
+        let side = SettingsMetrics.hero, corner = side * 0.235
+        return ZStack(alignment: .topLeading) {
             ZStack {
                 if let avatar = hero.avatar {
                     ProfileAvatar(profile: avatar, size: side)
@@ -1140,7 +1141,8 @@ struct SettingsPages: View {
                 } else {
                     // A quick crossfade as focus moves between sections, or between the remotes.
                     Image(systemName: hero.symbol)
-                        .font(.system(size: side * 0.43, weight: .regular))
+                        .font(.system(size: side * 0.27, weight: .medium))
+                        .foregroundStyle(.black.opacity(0.7))
                         .frame(width: side, height: side)
                         .id(hero.symbol)
                         .transition(.opacity)
@@ -1148,15 +1150,16 @@ struct SettingsPages: View {
             }
             .frame(width: side, height: side)
             // A plain tile, not glass: Settings sits on a frosted backdrop, and glass there would read flat.
-            .background(.white.opacity(hero.avatar == nil ? 0.08 : 0), in: RoundedRectangle(cornerRadius: corner, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(.white.opacity(hero.avatar == nil ? 0.14 : 0)))
+            .background(.white.opacity(hero.avatar == nil ? 0.24 : 0), in: RoundedRectangle(cornerRadius: corner, style: .continuous))
             .animation(.easeInOut(duration: 0.18), value: hero.symbol)
-            Text(hero.title).font(.tv(.title2, emphasized: true)).lineLimit(1)
+            .padding(.leading, SettingsMetrics.heroCentre.x - side / 2)
+            .padding(.top, SettingsMetrics.heroCentre.y - side / 2)
+            Text(hero.title).font(.tv(.title2, emphasized: true)).lineLimit(1).opacity(0.35)
                 .id(hero.title)
                 .transition(.opacity)
+                .frame(maxWidth: .infinity)
+                .frame(height: SettingsMetrics.titleCentre * 2)   // its middle 91 down
         }
-        .padding(.leading, SettingsMetrics.heroCentre.x - side / 2)
-        .padding(.top, SettingsMetrics.heroCentre.y - side / 2 - gap - label)
         .animation(Motion.appear, value: hero.title)
         .animation(Motion.appear, value: hero.avatar == nil)
     }
@@ -1313,7 +1316,7 @@ struct SettingsRow: View, Equatable {
                             .shadow(color: .black.opacity(0.4), radius: 16, y: 10)
                             .matchedGeometryEffect(id: "focus", in: focusSpace)
                     } else {
-                        shape.fill(.white.opacity(0.07))
+                        shape.fill(.white.opacity(0.13))
                     }
                 }
                 .animation(Motion.focus, value: focused)
@@ -1336,9 +1339,11 @@ struct SettingsRow: View, Equatable {
             }
         } else {
             HStack(spacing: 18) {
+                // As Apple TV's rows: text only. A person's row keeps their picture; a row's symbol is the big picture
+                // on the left while the row has focus. Control Center's small lists keep theirs.
                 if let avatar = content.avatar {
                     ProfileAvatar(profile: avatar, size: 44)
-                } else if let symbol = content.symbol {
+                } else if compact, let symbol = content.symbol {
                     Image(systemName: symbol).font(.system(size: 30, weight: .medium)).frame(width: 44)
                 }
                 Text(content.title).font(titleFont).lineLimit(1)
@@ -1359,8 +1364,10 @@ struct SettingsRow: View, Equatable {
                 if let battery = content.battery { Image(systemName: battery).font(.system(size: 30)) }
                 if content.checked { Image(systemName: "checkmark").font(.system(size: 25, weight: .bold)) }
                 switch content.accessory {
-                case .toggle(let on): SettingSwitch(on: on)
-                case .chevron: Image(systemName: "chevron.right").font(.system(size: 24, weight: .semibold)).opacity(0.4)
+                // On or Off in words, as Apple TV's Settings say it (Control Center's small lists keep the switch)
+                case .toggle(let on):
+                    if compact { SettingSwitch(on: on) } else { Text(on ? "On" : "Off").font(valueFont).opacity(0.55) }
+                case .chevron: Image(systemName: "chevron.right").font(.system(size: 30, weight: .semibold)).opacity(0.45)
                 case .none, .stepper: EmptyView()
                 }
             }
