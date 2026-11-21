@@ -27,33 +27,6 @@ struct JasmineOrb: View {
     }
 }
 
-/// The orb as a still picture, for where she is a button rather than herself (Control Center's round button): the
-/// same ball, one frame of it. Nothing while Metal isn't there: the caller shows a symbol instead.
-struct JasmineOrbStill: View {
-    let side: CGFloat
-
-    var body: some View {
-        if let image = OrbStill.image(pixels: Int((side * OrbMotion.room * 4).rounded())) {
-            Image(decorative: image, scale: 1).resizable().interpolation(.high)
-                .frame(width: side * OrbMotion.room, height: side * OrbMotion.room)
-                .frame(width: side, height: side)
-        }
-    }
-}
-
-/// One frame of the orb, drawn once for each size asked for and kept.
-@MainActor
-enum OrbStill {
-    private static var kept: [Int: CGImage] = [:]
-
-    static func image(pixels: Int) -> CGImage? {
-        if let image = kept[pixels] { return image }
-        let image = OrbPipeline.shared?.image(side: pixels, frame: OrbMotion.Frame(time: 12, level: 0, scale: 1))?.image
-        kept[pixels] = image
-        return image
-    }
-}
-
 /// How the orb moves, as orb.js's draw(): plain logic, with time passed in.
 struct OrbMotion {
     /// ORB_COLORS.blue: the sky above and below, the tide's face near and far, the light under it.

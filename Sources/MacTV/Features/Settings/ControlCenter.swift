@@ -357,11 +357,13 @@ struct ControlCenterView: View {
     private static let row: CGFloat = 95
     private static let gap: CGFloat = 17
     private static let width = column * 2 + gap
-    /// The box every round button's symbol is fitted to, so they weigh the same in a row: a square or round one is 40
-    /// points tall, as Apple TV's Search; a wide, solid one (Play/Pause) no more than 50 across.
-    private static let glyph = CGSize(width: 50, height: 42)
-    /// Jasmine's ball on her round button: a solid disc, so no larger than a symbol is tall.
-    private static let orb: CGFloat = 40
+    /// The box every round button's symbol is fitted to: 40 points tall for a square or round one, as Apple TV's Search
+    /// is in Control Center.
+    private static let glyph = CGSize(width: 42, height: 42)
+    /// Symbols Apple draws in a round button of its own (the iPhone's Apple TV Remote, in Apple's guide), at the same
+    /// share of the button: Play/Pause and a screen 37% of it across, so 35 points in ours; the speaker 34% of it tall.
+    private static let glyphWidths: [String: CGFloat] = ["playpause.fill": 35, "tv.slash": 35, "sparkles.tv": 35]
+    private static let speakerRoundGlyph = CGSize(width: 44, height: 32)
     /// The box every tile's symbol is fitted to: Apple TV's Wi-Fi is 45 across, its round ones (Sleep Timer) 41. A remote
     /// or a phone is narrow, so it's drawn taller than the box, to weigh what a display or a dial does.
     private static let tileGlyph = CGSize(width: 45, height: 41)
@@ -533,7 +535,7 @@ struct ControlCenterView: View {
         case .profiles: return ("person.2.fill", false)
         case .arrangeApps: return ("square.grid.3x3.fill", false)
         case .store: return ("bag.fill", false)
-        case .jasmine: return ("waveform", false)
+        case .jasmine: return ("circle", false)   // drawn as JasmineGlyph (see round)
         case .mute: return (tv.audioCoordinator.currentVolume.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                             tv.audioCoordinator.currentVolume.muted)
         case .playPause: return ("playpause.fill", false)
@@ -632,16 +634,16 @@ struct ControlCenterView: View {
             // or round one (Settings, Search): the same size to the eye.
             Group {
                 if item == .mute {
-                    VolumeSpeaker(audio: tv.audioCoordinator, box: CGSize(width: 54, height: 40))   // the waves follow the volume
-                } else if item == .jasmine, OrbPipeline.shared != nil {
-                    JasmineOrbStill(side: Self.orb)   // Jasmine's own ball, in its own colours with focus too
+                    VolumeSpeaker(audio: tv.audioCoordinator, box: Self.speakerRoundGlyph)   // the waves follow the volume
+                } else if item == .jasmine {
+                    JasmineGlyph().frame(width: 40, height: 40)   // her own symbol, the size of Search
                 } else {
                     Image(systemName: look.symbol)
                         .resizable()
                         .symbolRenderingMode(.monochrome)
                         .fontWeight(.medium)
                         .scaledToFit()
-                        .frame(maxWidth: Self.glyph.width, maxHeight: Self.glyph.height)
+                        .frame(maxWidth: Self.glyphWidths[look.symbol] ?? Self.glyph.width, maxHeight: Self.glyph.height)
                         .contentTransition(.symbolEffect(.replace))
                 }
             }

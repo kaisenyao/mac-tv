@@ -35,14 +35,18 @@ extension View {
     /// Apple TV's Liquid Glass, for Mac TV's controls layer only (see the rules in Layers.swift): the dock, pills,
     /// buttons, Control Center, sidebars, menus and notices, never content. Applied after the view's other appearance
     /// modifiers; `interactive` makes a control respond to the pointer, and `tint` colours it. Before macOS 26 there
-    /// is no Liquid Glass: `FrostedGlass` stands in for both looks, the backdrop blurred with the same lit rim.
+    /// is no Liquid Glass: `FrostedGlass` stands in for both looks, the backdrop blurred. Either way the glass has
+    /// Apple TV's lit rim (GlassRim), which goes with it when it's switched off.
     /// `enabled: false` keeps the modifier in place (`.identity`), so switching glass off never changes the view's identity.
     @ViewBuilder
     func tvGlass<S: InsettableShape>(_ kind: TVGlass = .regular, in shape: S, interactive: Bool = false, tint: Color? = nil,
                                      enabled: Bool = true) -> some View {
         if #available(macOS 26, *) {
             let glass: Glass = kind == .clear ? .clear : .regular
-            glassEffect(enabled ? glass.tint(tint).interactive(interactive) : .identity, in: shape)
+            // The rim is part of what's on the glass, drawn before glassEffect: laid over the view afterwards, a
+            // GlassEffectContainer (GlassGroup) would draw its glass on top of it.
+            overlay { if enabled { GlassRim(shape: shape, missing: kind == .clear ? .sides : .topAndSides) } }
+                .glassEffect(enabled ? glass.tint(tint).interactive(interactive) : .identity, in: shape)
         } else {
             background { if enabled { FrostedGlass(shape: shape, tint: tint) } }
         }
@@ -84,25 +88,43 @@ extension View {
     }
 }
 
-/// Liquid Glass's stand-in before macOS 26: the backdrop blurred, lit a little from above, and the rim that catches
-/// the light at the top-left and again, fainter, at the bottom-right, as the real glass's edge does. One material,
-/// one fill and one stroke: nothing here is blurred or redrawn while it rests.
+/// The lit rim of Apple TV's glass, as measured on the pictures in Apple's guide (tvOS 27): brightest along the top,
+/// nearly as bright down the sides, faint along the bottom (about 45, 30 and 12 of 255 brighter than the glass inside
+/// it). macOS's own glass lights its top and bottom and leaves its sides dark, so this draws only what each is missing:
+/// the top and sides of regular glass, the sides of clear glass, and all of it on the stand-in before macOS 26.
+private struct GlassRim<S: InsettableShape>: View {
+    enum Missing { case all, topAndSides, sides }
+
+    let shape: S
+    let missing: Missing
+
+    var body: some View {
+        PillOutline(shape).strokeBorder(LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom), lineWidth: 2)
+            .allowsHitTesting(false)
+    }
+
+    private var stops: [Gradient.Stop] {
+        func white(_ opacity: Double, at location: Double) -> Gradient.Stop { .init(color: .white.opacity(opacity), location: location) }
+        switch missing {
+        case .all: return [white(0.42, at: 0), white(0.28, at: 0.55), white(0.12, at: 1)]
+        case .topAndSides: return [white(0.3, at: 0), white(0.25, at: 0.55), white(0.04, at: 1)]
+        case .sides: return [white(0, at: 0), white(0.34, at: 0.25), white(0.34, at: 0.75), white(0, at: 1)]
+        }
+    }
+}
+
+/// Liquid Glass's stand-in before macOS 26: the backdrop blurred, lit a little from above, and the same lit rim
+/// (GlassRim). One material, one fill and one stroke: nothing here is blurred or redrawn while it rests.
 private struct FrostedGlass<S: InsettableShape>: View {
     let shape: S
     let tint: Color?
-
-    private static var rim: LinearGradient {
-        LinearGradient(stops: [.init(color: .white.opacity(0.5), location: 0), .init(color: .white.opacity(0.14), location: 0.3),
-                               .init(color: .white.opacity(0.07), location: 0.7), .init(color: .white.opacity(0.28), location: 1)],
-                       startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
 
     var body: some View {
         ZStack {
             shape.fill(.ultraThinMaterial)
             if let tint { shape.fill(tint) }
             shape.fill(LinearGradient(colors: [.white.opacity(0.09), .white.opacity(0.02)], startPoint: .top, endPoint: .bottom))
-            PillOutline(shape).strokeBorder(Self.rim, lineWidth: 1.5)
+            GlassRim(shape: shape, missing: .all)
         }
     }
 }

@@ -87,7 +87,6 @@ import UniformTypeIdentifiers
         // Clear glass, no line round it: at the very edge the picture is whole, and no brighter than just inside it
         let edge = at(side / 2, side / 2 - 97), inside = at(side / 2, side / 2 - 88)
         #expect(edge.a == 255 && edge.b <= inside.b + 6, "no rim: \(edge) beside \(inside)")
-        #expect(OrbStill.image(pixels: 96) != nil, "a still of her, for a button")
 
         // The cost of a frame, and the previews
         var gpu: TimeInterval = 0
