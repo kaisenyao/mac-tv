@@ -689,9 +689,16 @@ private struct DedaoMenuLayer: View {
             }
             if let menu = store.menu {
                 let place = placement(menu)
+                // 从哪个角长出来：菜单自己的那个角，换算成整块画面里的位置
+                let from = CGPoint(x: place.origin.x + place.from.x * Self.width(menu),
+                                   y: place.origin.y + place.from.y * height(menu))
                 panel(menu)
-                    .offset(x: place.origin.x, y: place.origin.y)
-                    .transition(.growing(from: place.from))
+                    .padding(.leading, place.origin.x)
+                    .padding(.top, place.origin.y)
+                    // 摆好位置以后整块铺满屏幕，再以那个角为中心长出来、缩回去（只是挪过去的话，中心还按没挪之前算，
+                    // 菜单就从屏幕左上滑过来）
+                    .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+                    .transition(.growing(from: UnitPoint(x: from.x / max(1, canvas.width), y: from.y / max(1, canvas.height))))
                     .id(menu.anchor == .account ? "account" : menu.anchor == .setting ? "setting" : "nowPlaying")
             }
         }
