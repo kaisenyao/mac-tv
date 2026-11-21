@@ -46,7 +46,8 @@ final class Jasmine: ObservableObject {
     private let settings: JasmineSettings
     private let microphone: Hearing
     private let chimes: Chiming
-    private let transcriber: (String) -> Transcribing
+    /// A transcription session for a key; true: hands-free (her end of speech ends it, not a button).
+    private let transcriber: (String, Bool) -> Transcribing
     /// Whether the microphone may be used (a test puts in its own answer).
     private let access: () -> MicrophoneAccess.Status
     private let makeBrain: (String) -> Thinking
@@ -83,18 +84,23 @@ final class Jasmine: ObservableObject {
     /// A release that never came (lost on the phone's network): she stops listening after this long.
     private var listenLimit: Task<Void, Never>?
     static let longestListen: Duration = .seconds(30)
+    /// Listening hands-free (Control Center's Jasmine button): it ends when you stop speaking, or after this long
+    /// with nothing said.
+    private var handsFree = false
+    private var quietLimit: Task<Void, Never>?
+    static let quietListen: Duration = .seconds(8)
     /// Two seconds of 24 kHz 16-bit mono: more than the hold time, in case the main actor was busy.
     private static let bufferLimit = 2 * 24_000 * 2
 
     init(tv: TVController, settings: JasmineSettings = .shared, microphone: Hearing? = nil, chimes: Chiming? = nil,
-         transcriber: ((String) -> Transcribing)? = nil, access: (() -> MicrophoneAccess.Status)? = nil,
+         transcriber: ((String, Bool) -> Transcribing)? = nil, access: (() -> MicrophoneAccess.Status)? = nil,
          brain: ((String) -> Thinking)? = nil, duck: ((Float) -> Void)? = nil, voice: Speaking? = nil) {
         self.tv = tv
         self.settings = settings
         self.microphone = microphone ?? Microphone()
         self.chimes = chimes ?? Chimes(allowed: !SystemGuard.fake)
-        self.transcriber = transcriber ?? { key in
-            RealtimeTranscriber(key: key, settings: .init(keywords: Self.keywords))
+        self.transcriber = transcriber ?? { key, handsFree in
+            RealtimeTranscriber(key: key, settings: .init(keywords: Self.keywords), handsFree: handsFree)
         }
         self.access = access ?? { MicrophoneAccess.status }
         makeBrain = brain ?? { key in OpenAIBrain(key: key, settings: .init(instructions: TVController.jasmineInstructions)) }
@@ -170,30 +176,52 @@ final class Jasmine: ObservableObject {
             chimes.play(.unavailable)
             return
         }
-        guard settings.enabled else { return }
+        guard listen(field: press.field, hearing: press.hearing, handsFree: false) else { return }
+        self.press?.hearing = true
+        for piece in self.press?.buffer ?? [] { session?.send(piece) }
+        self.press?.buffer = []
+    }
+
+    /// Talk to Jasmine without holding a button (Control Center's Jasmine button): she listens until you stop
+    /// speaking (the server's end of speech, as PianaSoul hears), or 8 s with nothing said. Called again while she
+    /// listens, she stops and answers what she heard; Back cancels. The same Jasmine as the held Siri button.
+    func summon() {
+        if phase == .listening, handsFree { return endListening() }
+        guard press == nil else { return }
+        if shown { stopEverything() }
+        _ = listen(field: nil, hearing: false, handsFree: true)
+    }
+
+    /// Starts listening, when it may: Jasmine on, a key, the microphone allowed. False (having said why) when not.
+    private func listen(field: DictationField?, hearing: Bool, handsFree: Bool) -> Bool {
+        guard settings.enabled else { return false }
         guard settings.added.contains(.openAI) else {
-            return say("Add an OpenAI API key in Settings › General › Jasmine.", chime: .unavailable)
+            say("Add an OpenAI API key in Settings › General › Jasmine.", chime: .unavailable)
+            return false
         }
         switch access() {
         case .denied:
-            return say("Allow Mac TV to use the microphone in System Settings › Privacy & Security.", chime: .unavailable)
+            say("Allow Mac TV to use the microphone in System Settings › Privacy & Security.", chime: .unavailable)
+            return false
         case .notAsked:
-            // macOS's question now; the next hold listens. Never in a test run.
+            // macOS's question now; the next try listens. Never in a test run.
             if SystemGuard.allows("ask for the microphone") { MicrophoneAccess.ask { _ in } }
-            return
+            return false
         case .allowed:
             break
         }
-        if !press.hearing {
-            // The microphone didn't start when the button went down (it was showing, or it failed): now, then.
+        if !hearing {
+            // The microphone didn't start when the button went down (she was showing, or it failed), or there's no
+            // button: now, then.
             guard startHearing(), let key = settings.key(.openAI) else {
-                return say("Can’t use the microphone.", chime: .unavailable)
+                say("Can’t use the microphone.", chime: .unavailable)
+                return false
             }
-            connect(key)
-            self.press?.hearing = true
+            connect(key, handsFree: handsFree)
         }
-        mode = press.field == nil ? .assistant : .dictation
-        dictating = press.field
+        self.handsFree = handsFree
+        mode = field == nil ? .assistant : .dictation
+        dictating = field
         heard = ""
         line = nil
         expanded = false
@@ -203,12 +231,19 @@ final class Jasmine: ObservableObject {
         listenLimit = Task { [weak self] in
             try? await Task.sleep(for: Self.longestListen)
             guard !Task.isCancelled, let self, self.phase == .listening else { return }
-            self.release()
+            // Hands-free: what was said is answered. A hold never let go (its release lost): dropped, never sent on.
+            if self.handsFree { self.endListening() } else { self.cancel(because: nil) }
+        }
+        if handsFree {
+            quietLimit = Task { [weak self] in
+                try? await Task.sleep(for: Self.quietListen)
+                guard !Task.isCancelled, let self, self.phase == .listening, self.heard.isEmpty else { return }
+                self.cancel(because: nil)
+            }
         }
         duck(Self.duckedTo)
         chimes.play(.listen)
-        for piece in self.press?.buffer ?? [] { session?.send(piece) }
-        self.press?.buffer = []
+        return true
     }
 
     private func tap() {
@@ -232,6 +267,11 @@ final class Jasmine: ObservableObject {
             if press.hearing { stopHearing(); session?.cancel(); session = nil }
             return
         }
+        endListening()
+    }
+
+    /// Listening ends (the button let go, or Control Center's button again): the last words are written out.
+    private func endListening() {
         stopHearing()
         level = 0
         chimes.play(.done)
@@ -277,6 +317,8 @@ final class Jasmine: ObservableObject {
     private func stopHearing() {
         listenLimit?.cancel()
         listenLimit = nil
+        quietLimit?.cancel()
+        quietLimit = nil
         microphone.stop()
         level = 0
     }
@@ -290,6 +332,7 @@ final class Jasmine: ObservableObject {
         thinkingTask = nil
         brain?.thinking.cancel()
         voice.stop()
+        handsFree = false
         duck(1)
     }
 
@@ -312,14 +355,25 @@ final class Jasmine: ObservableObject {
         self.press = press
     }
 
-    private func connect(_ key: String) {
+    private func connect(_ key: String, handsFree: Bool = false) {
         session?.cancel()
-        let session = transcriber(key)
+        let session = transcriber(key, handsFree)
         session.onText = { [weak self] text in
             guard let self, self.phase == .listening || self.phase == .finishing else { return }
             self.heard = Heard.clean(text)
         }
-        session.onFinal = { [weak self] text in self?.finished(Heard.clean(text)) }
+        session.onFinal = { [weak self] text in
+            guard let self else { return }
+            // Hands-free, her end of speech ended it: as if the button were let go.
+            if self.phase == .listening, self.handsFree {
+                self.stopHearing()
+                self.level = 0
+                self.chimes.play(.done)
+                withAnimation(Motion.appear) { self.phase = .finishing }
+                self.timing = Timing(released: Self.now())
+            }
+            self.finished(Heard.clean(text))
+        }
         session.onFailure = { [weak self] reason in
             guard let self, self.shown else { return }
             self.session = nil

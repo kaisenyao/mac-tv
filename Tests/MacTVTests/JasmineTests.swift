@@ -30,6 +30,7 @@ import Testing
         var onText: ((String) -> Void)?
         var onFinal: ((String) -> Void)?
         var onFailure: ((String) -> Void)?
+        var handsFree = false
         private(set) var sent: [Data] = []
         private(set) var finished = false
         private(set) var cancelled = false
@@ -96,7 +97,9 @@ import Testing
             let rig = Rig(tv: tv, microphone: FakeMicrophone(), chimes: FakeChimes(), settings: settings, box: Rig.Box(),
                           brain: FakeBrain(), voice: FakeVoice())
             tv.jasmine = Jasmine(tv: tv, settings: settings, microphone: rig.microphone, chimes: rig.chimes,
-                                 transcriber: { _ in let t = FakeTranscriber(); rig.box.made.append(t); return t },
+                                 transcriber: { _, handsFree in
+                                     let t = FakeTranscriber(); t.handsFree = handsFree; rig.box.made.append(t); return t
+                                 },
                                  access: { access }, brain: { _ in rig.brain }, duck: { rig.box.ducks.append($0) },
                                  voice: rig.voice)
             try await body(rig)
@@ -196,6 +199,108 @@ import Testing
             #expect(rig.transcribers[0].finished && !presses.siriIsDown(from: .keyboard))
             presses.siriDown(from: .keyboard, at: 3)
             #expect(presses.siriIsDown(from: .keyboard) && rig.microphone.running && rig.transcribers.count == 2)
+        }
+    }
+
+    @Test func aPressWhoseKeyUpWasLostIsCancelledNotSent() async throws {
+        try await Self.withJasmine { rig in
+            let presses = rig.tv.inputPresses
+            // Dictating, then F5 pressed again with no keyUp between (main.swift cancels the open press)
+            rig.tv.openSystemSearch()
+            presses.siriDown(from: .keyboard, at: 0)
+            presses.advance(to: InputTiming.hold)
+            rig.microphone.hear(1)
+            presses.siriCancel(from: .keyboard)
+            #expect(rig.transcribers[0].cancelled && !rig.transcribers[0].finished, "nothing committed")
+            rig.transcribers[0].onFinal?("打开设置")             // a late answer is ignored
+            #expect(rig.tv.systemSearch?.query == "" && !rig.tv.jasmine.shown)
+            // Talking to her: nothing is done or asked
+            rig.tv.closeSystemSearch()
+            presses.siriDown(from: .keyboard, at: 1)
+            presses.advance(to: 1 + InputTiming.hold)
+            presses.siriCancel(from: .keyboard)
+            rig.transcribers[1].onFinal?("打开设置")
+            #expect(rig.tv.activeSheet == nil && rig.brain.asked.isEmpty)
+            #expect(!presses.siriIsDown(from: .keyboard))
+            #expect(rig.ducks.last == 1)
+            // A release that comes after all is ignored
+            #expect(!presses.siriUp(from: .keyboard, at: 2))
+        }
+    }
+
+    // MARK: Hands-free (Control Center's Jasmine button)
+
+    @Test func summonedSheListensUntilYouStop() async throws {
+        try await Self.withJasmine { rig in
+            rig.tv.jasmine.summon()
+            #expect(rig.microphone.running && rig.transcribers.count == 1 && rig.transcribers[0].handsFree)
+            #expect(rig.tv.jasmine.phase == .listening && rig.tv.jasmine.mode == .assistant)
+            #expect(rig.chimes.played == [.listen] && rig.ducks == [Jasmine.duckedTo])
+            rig.microphone.hear(1)
+            #expect(rig.transcribers[0].sent == [Data([1, 1])], "sent as it's heard: no button to wait for")
+            rig.transcribers[0].onText?("打开设置")
+            rig.transcribers[0].onFinal?("打开设置")             // the server heard you stop
+            #expect(!rig.microphone.running && rig.chimes.played == [.listen, .done])
+            #expect(rig.tv.activeSheet == .settings)
+        }
+    }
+
+    @Test func summonedAgainSheAnswersWhatSheHeard() async throws {
+        try await Self.withJasmine { rig in
+            rig.brain.script = { _, _, _ in "你好！" }
+            rig.tv.jasmine.summon()
+            rig.tv.jasmine.summon()
+            #expect(rig.transcribers[0].finished && !rig.microphone.running)
+            rig.transcribers[0].onFinal?("你好")
+            await Self.waitUntil { rig.tv.jasmine.phase == .speaking }
+            #expect(rig.brain.asked.first?.text == "你好")
+        }
+    }
+
+    @Test func backCancelsASummon() async throws {
+        try await Self.withJasmine { rig in
+            rig.tv.jasmine.summon()
+            rig.tv.handle(.back, from: .siriRemote)
+            #expect(!rig.tv.jasmine.shown && rig.transcribers[0].cancelled && !rig.microphone.running)
+            rig.transcribers[0].onFinal?("打开设置")
+            #expect(rig.tv.activeSheet == nil)
+            #expect(rig.ducks.last == 1)
+        }
+    }
+
+    @Test func handsFreeEndsWhenTheSpeakerStops() {
+        var transcript = Transcript()
+        _ = transcript.apply(["type": "input_audio_buffer.speech_started", "item_id": "a"])
+        #expect(!transcript.spokenAndDone)
+        _ = transcript.apply(["type": "input_audio_buffer.committed", "item_id": "a"])
+        #expect(!transcript.spokenAndDone, "not written out yet")
+        _ = transcript.apply(["type": "conversation.item.input_audio_transcription.completed", "item_id": "a", "transcript": "暂停"])
+        #expect(transcript.spokenAndDone)
+        _ = transcript.apply(["type": "input_audio_buffer.speech_started", "item_id": "b"])
+        #expect(!transcript.spokenAndDone, "still speaking")
+    }
+
+    @Test func aKeyUpWithoutItsKeyDownIsAPress() async throws {
+        try await Self.withJasmine { rig in
+            let presses = rig.tv.inputPresses
+            // macOS kept the 🎤 key's keyDown: its keyUp alone is a press (Search), so the key is never dead
+            #expect(presses.siriKeyUp(from: .keyboard, at: 0))
+            #expect(rig.tv.activeSheet == .search && !rig.microphone.running && !presses.siriIsDown(from: .keyboard))
+            rig.tv.closeSystemSearch()
+            // A press the watch let go (fn up first): its keyUp, coming after all, does nothing more
+            presses.siriDown(from: .keyboard, at: 1)
+            presses.watchSiri(from: .keyboard) { false }
+            presses.checkWatched()
+            #expect(rig.tv.activeSheet == .search)
+            rig.tv.closeSystemSearch()
+            #expect(presses.siriKeyUp(from: .keyboard, at: 1.2))
+            #expect(rig.tv.activeSheet == nil, "not a second press")
+            // With a press open, the keyUp is its release
+            presses.siriDown(from: .keyboard, at: 2)
+            presses.advance(to: 2 + InputTiming.hold)
+            #expect(rig.tv.jasmine.phase == .listening)
+            #expect(presses.siriKeyUp(from: .keyboard, at: 3))
+            #expect(rig.tv.jasmine.phase == .finishing)
         }
     }
 
@@ -577,6 +682,92 @@ import Testing
             tv.handle(.back)                                     // stops typing
             tv.handle(.back)                                     // closes Search
             #expect(tv.activeSheet != .search)
+        }
+    }
+
+    // MARK: Typing (TVTextField)
+
+    /// Where a real text field has the keyboard (main.swift then gives it the keys, so an input method composes).
+    @Test func realTextFieldsTakeTheKeyboard() async throws {
+        try await Self.withJasmine { rig in
+            let tv = rig.tv
+            #expect(!tv.tvTextFieldEditing, "Home: the keys are the TV's")
+            tv.openSystemSearch()
+            #expect(!tv.tvTextFieldEditing, "the field highlighted, not yet typed in")
+            tv.handle(.select)
+            #expect(tv.tvTextFieldEditing)
+            tv.handle(.text("小茗"))                              // the phone's Type on TV
+            #expect(tv.systemSearch?.query == "小茗")
+            tv.handle(.back)
+            #expect(!tv.tvTextFieldEditing && tv.activeSheet == .search)
+            tv.closeSystemSearch()
+            // An API key's page: a secure field
+            tv.openSettings()
+            tv.settings = SettingsPanel(section: .general, open: true,
+                                        path: [.init(page: .jasmine(.main), from: 0), .init(page: .jasmine(.key(.openAI)), from: 3)])
+            #expect(tv.tvTextFieldEditing)
+            let key = tv.settingsContent(.jasmine(.keyField), panel: try #require(tv.settings), focused: true).field
+            #expect(key?.secure == true && key?.editing == true)
+            key?.set?("sk-typed")
+            #expect(tv.settings?.secret.text == "sk-typed")
+            tv.settings?.row = 1
+            #expect(!tv.tvTextFieldEditing, "on Done")
+            tv.settings = nil
+            // Add App: the address and name fields, not the tabs
+            tv.adder = AppAdder()
+            #expect(tv.tvTextFieldEditing)
+            tv.adder?.row = 0
+            #expect(!tv.tvTextFieldEditing)
+            tv.adder = nil
+            // "Who's Watching?" naming a new profile
+            tv.profilePicker = ProfilePicker(index: 0)
+            #expect(!tv.tvTextFieldEditing)
+            tv.profilePicker?.naming = ""
+            #expect(tv.tvTextFieldEditing)
+            tv.profilePicker = nil
+        }
+    }
+
+    /// While a field has the keyboard, the standard editing keys are its own (main.swift's routing decision).
+    @Test func editingShortcutsBelongToTheField() {
+        let keep = { (key: UInt16, mods: NSEvent.ModifierFlags) in TextFieldKeys.belongToField(keyCode: key, modifiers: mods, composing: false) }
+        // ⌘A ⌘C ⌘V ⌘X ⌘Z ⇧⌘Z
+        for key: UInt16 in [0, 8, 9, 7, 6] { #expect(keep(key, [.command]), "⌘ key \(key)") }
+        #expect(keep(6, [.command, .shift]))
+        // ⌥ and ⌘ with the arrows (words, line ends, start and end), ⌥⌫, plain Left / Right, letters, Space, Return
+        for key: UInt16 in [123, 124, 125, 126] {
+            #expect(keep(key, [.option]) && keep(key, [.command]) && keep(key, [.shift, .option]))
+        }
+        #expect(keep(51, [.option]) && keep(51, []))
+        #expect(keep(123, []) && keep(124, []) && keep(0, []) && keep(49, []) && keep(36, []))
+        // Up and Down are the TV's, unless an input method is choosing
+        #expect(!keep(125, []) && !keep(126, []))
+        #expect(TextFieldKeys.belongToField(keyCode: 125, modifiers: [], composing: true))
+    }
+
+    /// A click outside the field being typed in ends the typing (main.swift asks, then each screen's own state).
+    @Test func aClickOutsideTheFieldEndsTyping() async throws {
+        #expect(TextEditingClicks.endsTyping(typing: true, insideEditor: false))
+        #expect(!TextEditingClicks.endsTyping(typing: true, insideEditor: true), "a click in the field moves its caret")
+        #expect(!TextEditingClicks.endsTyping(typing: false, insideEditor: false))
+        #expect(TextFieldKeys.navigateWithoutKeyboard(keyCode: 125, modifiers: []))
+        #expect(TextFieldKeys.navigateWithoutKeyboard(keyCode: 36, modifiers: []))
+        #expect(!TextFieldKeys.navigateWithoutKeyboard(keyCode: 0, modifiers: []), "a letter gives the field the keyboard back")
+        #expect(!TextFieldKeys.navigateWithoutKeyboard(keyCode: 123, modifiers: []), "Left is the field's (it would close a page)")
+        try await Self.withJasmine { rig in
+            let tv = rig.tv
+            tv.openSystemSearch()
+            tv.handle(.select)
+            #expect(tv.typingInAField)
+            tv.endTextEditing()
+            #expect(tv.systemSearch?.typing == false && tv.activeSheet == .search, "back on the field, not typing")
+            #expect(!tv.typingInAField)
+            tv.closeSystemSearch()
+            tv.openMovies()
+            tv.movies?.typing = true
+            #expect(tv.typingInAField)
+            tv.endTextEditing()
+            #expect(tv.movies?.typing == false && tv.movies != nil)
         }
     }
 

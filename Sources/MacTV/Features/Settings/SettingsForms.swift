@@ -1,39 +1,5 @@
 import SwiftUI
 
-/// Text typed on the TV in Settings' text fields: letters go in at the caret, Delete takes out the one before it,
-/// and Left and Right move it. The keyboard and the phone's Type on TV work the same.
-enum TextEntry {
-    /// Applies a command to `text`; true when it changed the text or moved the caret. A Return at the end of
-    /// typed text isn't typed.
-    @discardableResult
-    static func apply(_ command: RemoteCommand, to text: inout String, caret: inout Int, limit: Int = .max) -> Bool {
-        caret = min(max(caret, 0), text.count)
-        switch command {
-        case .text(let typed):
-            let added = String(typed.filter { $0 != "\n" && $0 != "\r" }.prefix(max(0, limit - text.count)))
-            guard !added.isEmpty else { return false }
-            text.insert(contentsOf: added, at: text.index(text.startIndex, offsetBy: caret))
-            caret = min(caret + added.count, text.count)
-            return true
-        case .deleteBackward:
-            guard caret > 0 else { return false }
-            text.remove(at: text.index(text.startIndex, offsetBy: caret - 1))
-            caret -= 1
-            return true
-        case .move(.left):
-            guard caret > 0 else { return false }
-            caret -= 1
-            return true
-        case .move(.right):
-            guard caret < text.count else { return false }
-            caret += 1
-            return true
-        default:
-            return false
-        }
-    }
-}
-
 /// Add Network Share… or Sign In to Jellyfin… in Settings › Apps › Movies: the server, a user name and a password,
 /// added to the same stores as the Movies app's own form. The password goes only where that form sends it: the
 /// share's Keychain item, or the Jellyfin server.
@@ -76,14 +42,21 @@ extension TVController {
     /// A form's rows: each field with its label and what's typed, then Connect or Sign In.
     func formContent(_ row: SettingsPanel.Row, panel: SettingsPanel, focused: Bool) -> SettingsRowContent {
         let jellyfin = panel.page == .addJellyfinServer, form = panel.form
-        let caret = focused && !form.connecting ? panel.caret : nil
+        let editing = focused && !form.connecting
+        /// The field's own text field: typing goes into the form, Return goes on (as Select).
+        func field(_ text: String, _ placeholder: String, secure: Bool = false) -> SettingsRowContent.Field {
+            let index = SourceForm.fields.firstIndex(of: row) ?? 0
+            return .init(text: text, placeholder: placeholder, editing: editing, secure: secure,
+                         set: { [weak self] in self?.pages?.form[row] = $0 },
+                         submit: { [weak self] in self?.pressFormRow(index) })
+        }
         switch row {
         case .formAddress:
-            return SettingsRowContent(title: "Server", field: .init(text: form.address, placeholder: "Required", caret: caret))
+            return SettingsRowContent(title: "Server", field: field(form.address, "Required"))
         case .formUser:
-            return SettingsRowContent(title: "User Name", field: .init(text: form.user, placeholder: jellyfin ? "Required" : "Optional", caret: caret))
+            return SettingsRowContent(title: "User Name", field: field(form.user, jellyfin ? "Required" : "Optional"))
         case .formPassword:
-            return SettingsRowContent(title: "Password", field: .init(text: form.password, placeholder: "Optional", caret: caret, secure: true))
+            return SettingsRowContent(title: "Password", field: field(form.password, "Optional", secure: true))
         default:
             let title = switch (jellyfin, form.connecting) {
             case (true, true): "Signing In…"
@@ -95,8 +68,8 @@ extension TVController {
         }
     }
 
-    /// Presses on a form: Up and Down move between the fields and the button, Left and Right move the caret, and
-    /// Select goes on to the next field (from the password, or on the button, it adds the source). Back closes the
+    /// Presses on a form: Up and Down move between the fields and the button (the keyboard types into the field with
+    /// focus itself, a TVTextField; the phone's Type on TV comes here), and Select goes on to the next field (from the password, or on the button, it adds the source). Back closes the
     /// form; while it's connecting that's the only press that does anything, and the share keeps trying.
     func typeInForm(_ command: RemoteCommand, _ panel: SettingsPanel) {
         var panel = panel
@@ -111,14 +84,13 @@ extension TVController {
         switch command {
         case .move(let direction) where direction == .up || direction == .down:
             let next = min(max(panel.row + (direction == .up ? -1 : 1), 0), fields.count)
-            if next != panel.row {
-                panel.row = next
-                panel.caret = next < fields.count ? panel.form[fields[next]].count : 0
-            }
-        case .move, .deleteBackward, .text:
+            if next != panel.row { panel.row = next }
+        case .move:
+            break   // Left and Right are the text field's own
+        case .deleteBackward, .text:
             if panel.row < fields.count {
                 var text = panel.form[fields[panel.row]]
-                if TextEntry.apply(command, to: &text, caret: &panel.caret) { panel.form[fields[panel.row]] = text }
+                if TextEntry.apply(command, to: &text) { panel.form[fields[panel.row]] = text }
             }
             if case .text(let typed) = command, typed.hasSuffix("\n") {
                 pages = panel
@@ -136,11 +108,10 @@ extension TVController {
         pages = panel
     }
 
-    /// A click on a field: focus goes to it, with the caret after what's typed.
+    /// A click on a field: focus goes to it.
     func focusFormField(_ row: SettingsPanel.Row) {
         guard let panel = pages, !panel.form.connecting, let index = SourceForm.fields.firstIndex(of: row) else { return }
         pages?.row = index
-        pages?.caret = panel.form[row].count
     }
 
     /// Select on a field goes on to the next one; on the password, or on Connect or Sign In, it adds the source.
@@ -149,7 +120,6 @@ extension TVController {
         let fields = SourceForm.fields
         if index < fields.count - 1 {
             panel.row = index + 1
-            panel.caret = panel.form[fields[index + 1]].count
             pages = panel
             return
         }
@@ -214,55 +184,5 @@ extension TVController {
         closeSettingsPage(&panel)
         if let row, let index = settingsRows(panel).firstIndex(of: row) { panel.row = index }
         settings = panel
-    }
-}
-
-/// Typed text with a caret where the next letter goes, or the placeholder, dimmed, while it's empty. A text too
-/// long for its field keeps the caret in view: what's before it gives way at its start. Typing and moving the
-/// caret never animate, as in any text field: the text on either side of the caret changes with each move, and
-/// a cross-fade there shows as ghosting.
-struct CaretText: View {
-    let text: String
-    var placeholder = ""
-    /// Nil while the field doesn't have focus.
-    let caret: Int?
-
-    var body: some View {
-        HStack(spacing: 0) {
-            if text.isEmpty {
-                if caret != nil { Caret(moved: caret) }
-                Text(placeholder).opacity(0.4).lineLimit(1)
-            } else {
-                let split = text.index(text.startIndex, offsetBy: min(max(caret ?? text.count, 0), text.count))
-                Text(text[..<split]).lineLimit(1).truncationMode(.head).layoutPriority(1)
-                if caret != nil { Caret(moved: "\(caret ?? 0)|\(text)") }
-                Text(text[split...]).lineLimit(1)
-            }
-        }
-        .transaction { $0.animation = nil }
-    }
-}
-
-/// The insertion point, as in any Mac or Apple TV text field: a thin line between two letters that takes no room, so
-/// the letters never move apart for it. It blinks, and stays lit while you type or move it, blinking again once you
-/// stop: each change to `moved` starts it lit.
-private struct Caret<Moved: Equatable>: View {
-    let moved: Moved
-    @State private var since = Date()
-
-    private static var half: TimeInterval { 0.5 }
-
-    var body: some View {
-        // As tall as a line of the text around it, and no wider than nothing.
-        Text("|").hidden().frame(width: 0)
-            .overlay {
-                TimelineView(.periodic(from: since, by: Self.half)) { context in
-                    let lit = Int(max(0, context.date.timeIntervalSince(since)) / Self.half) % 2 == 0
-                    Capsule().frame(width: 3)
-                        .opacity(lit ? 0.9 : 0)
-                        .animation(.easeInOut(duration: 0.12), value: lit)
-                }
-            }
-            .onChange(of: moved) { since = Date() }
     }
 }

@@ -20,14 +20,15 @@ struct AddAppSheet: View {
             .scaleEffect(a.row == 0 ? 1.03 : 1)
 
             if a.tab == .website {
-                AdderField(label: "Website", text: a.address, placeholder: "e.g. crunchyroll.com", focused: a.row == 1) { set(row: 1) }
-                AdderField(label: "Name", text: a.name, placeholder: "Optional", focused: a.row == 2) { set(row: 2) }
+                AdderField(label: "Website", text: binding(\.address), placeholder: "e.g. crunchyroll.com", focused: a.row == 1,
+                           submit: submit) { set(row: 1) }
+                AdderField(label: "Name", text: binding(\.name), placeholder: "Optional", focused: a.row == 2, submit: submit) { set(row: 2) }
                 ShelfButton(title: "Add to Home Screen", systemImage: "plus", focused: a.row == 3, glass: false) {
                     set(row: 3)
                     tv.submitAdder()
                 }
             } else if a.tab == .macApp {
-                AdderField(label: "Search", text: a.query, placeholder: "App Name", focused: a.row == 1) { set(row: 1) }
+                AdderField(label: "Search", text: binding(\.query), placeholder: "App Name", focused: a.row == 1, submit: submit) { set(row: 1) }
                 macList(a)
             } else {
                 steamList(a)
@@ -50,6 +51,14 @@ struct AddAppSheet: View {
     private func set(row: Int) {
         tv.adder?.row = row
     }
+
+    /// A field's text, typed into by its text field.
+    private func binding(_ field: WritableKeyPath<AppAdder, String>) -> Binding<String> {
+        Binding(get: { tv.adder?[keyPath: field] ?? "" }, set: { tv.adder?[keyPath: field] = $0; if field == \.query { tv.adder?.selected = 0 } })
+    }
+
+    /// Return in a field: as Select there (the next field, or Add).
+    private func submit() { tv.handle(.select) }
 
     private func tab(_ title: String, _ tab: AppAdder.Tab, _ a: AppAdder) -> some View {
         let on = a.tab == tab
@@ -162,35 +171,27 @@ struct AddAppSheet: View {
     }
 }
 
-/// A text field drawn for the TV: typed into by the D-pad flow, with a blinking caret when focused.
+/// A labelled text field on a sheet (Add App, Movies' Add Network Share…): a real one (TVTextField) while it has
+/// focus, white like a field being typed in.
 struct AdderField: View {
     let label: String
-    let text: String
+    @Binding var text: String
     let placeholder: String
     let focused: Bool
+    var secure = false
+    var submit: () -> Void = {}
     let tap: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(label).font(.tv(.caption2, emphasized: true)).tracking(1).textCase(.uppercase).opacity(0.6)
-            TimelineView(.periodic(from: .now, by: 0.5)) { context in
-                let caretOn = focused && Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
-                HStack(spacing: 2) {
-                    Text(text.isEmpty ? placeholder : text)
-                        .opacity(text.isEmpty ? 0.4 : 1)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                    if focused {
-                        Rectangle().frame(width: 3, height: 34).opacity(caretOn ? 1 : 0)
-                    }
-                    Spacer(minLength: 0)
-                }
+            TVTextField(text: $text, placeholder: placeholder, editing: focused, secure: secure, onSubmit: submit)
                 .font(.system(size: 30, weight: .medium))
                 .padding(.horizontal, 24)
                 .frame(height: 72)
                 .foregroundStyle(focused ? .black : .white)
                 .background(focused ? .white : .white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
+                .environment(\.colorScheme, focused ? .light : .dark)   // a dark caret on the white field
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: tap)

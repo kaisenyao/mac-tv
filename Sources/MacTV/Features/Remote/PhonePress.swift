@@ -144,6 +144,8 @@ final class InputPresses {
     private var watched: [(key: PhonePresses.Key, source: Feedback.Source, isDown: () -> Bool)] = []
     /// The same for the Siri button (fn-F5: AppKit may not deliver F5's keyUp while fn is held).
     private var watchedSiri: [(source: Feedback.Source, isDown: () -> Bool)] = []
+    /// A press the watch let go: its keyUp, when it comes after all, is the same press and does nothing more.
+    private var siriKeyUpOwed: Set<Feedback.Source> = []
     private var watchTimer: Timer?
     /// The clock; tests pass their own times instead.
     var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -170,9 +172,32 @@ final class InputPresses {
 
     /// The Siri button went down: Jasmine hears from now, whether it turns out a press or a hold.
     func siriDown(from source: Feedback.Source, at time: TimeInterval? = nil) {
+        siriKeyUpOwed.remove(source)
         let phases = siri[source, default: SiriPress(holdAfter: InputTiming.hold)].press(at: time ?? now())
         for phase in phases { tv?.handle(.siri(phase), from: source) }
         schedule()
+    }
+
+    /// The Siri button's press is dropped: whatever it heard is never sent on, typed or done (a keyUp that never came,
+    /// and the key pressed again).
+    func siriCancel(from source: Feedback.Source) {
+        unwatchSiri(source)
+        let phases = siri[source]?.reset() ?? []
+        siri[source] = nil
+        for phase in phases { tv?.handle(.siri(phase), from: source) }
+        schedule()
+    }
+
+    /// The Siri key's keyUp (the keyboard's F5). With its press open, the release. With none: either the watch let it
+    /// go already (this keyUp is that press's, nothing more), or its keyDown never reached Mac TV (macOS kept it):
+    /// then it was a press, so the key is never dead.
+    @discardableResult
+    func siriKeyUp(from source: Feedback.Source, at time: TimeInterval? = nil) -> Bool {
+        if siriIsDown(from: source) { return siriUp(from: source, at: time) }
+        if siriKeyUpOwed.remove(source) != nil { return true }
+        let time = time ?? now()
+        siriDown(from: source, at: time)
+        return siriUp(from: source, at: time)
     }
 
     /// The Siri button is down on this input (its release hasn't come).
@@ -249,7 +274,10 @@ final class InputPresses {
     /// The watched keys, checked now: one that's up is let go (a tap, or the end of a hold).
     func checkWatched() {
         for entry in watched where !entry.isDown() { up(entry.key, from: entry.source) }
-        for entry in watchedSiri where !entry.isDown() { siriUp(from: entry.source) }
+        for entry in watchedSiri where !entry.isDown() {
+            siriUp(from: entry.source)
+            siriKeyUpOwed.insert(entry.source)
+        }
     }
 
     private func unwatch(_ matching: (_ entry: (key: PhonePresses.Key, source: Feedback.Source, isDown: () -> Bool)) -> Bool) {

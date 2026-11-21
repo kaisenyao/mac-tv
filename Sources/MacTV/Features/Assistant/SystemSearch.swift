@@ -6,7 +6,6 @@ import SwiftUI
 /// 网易云 have their own search.
 struct SystemSearch: Equatable {
     var query = ""
-    var caret = 0
     /// The keyboard (or the phone's Type on TV) types into the field.
     var typing = false
     /// 0 is the field; results follow from 1.
@@ -79,12 +78,13 @@ extension TVController {
         case .back:
             if search.typing { search.typing = false } else { return closeSystemSearch() }
         case .text, .deleteBackward:
+            // The phone's Type on TV and dictation (the keyboard types into the field itself)
             search.row = 0
             search.typing = true
-            if TextEntry.apply(command, to: &search.query, caret: &search.caret, limit: 120) {}
+            TextEntry.apply(command, to: &search.query, limit: Self.searchLimit)
             if case .text(let text) = command, text.hasSuffix("\n") { search.typing = false }
         case .move(.left), .move(.right):
-            if search.row == 0, search.typing { _ = TextEntry.apply(command, to: &search.query, caret: &search.caret) }
+            break   // the field's own caret
         case .move(.down):
             if search.row < results.count { search.row += 1; search.typing = false }
         case .move(.up):
@@ -103,6 +103,8 @@ extension TVController {
         search.row = min(search.row, results.count)
         systemSearch = search
     }
+
+    static let searchLimit = 120
 
     func closeSystemSearch() {
         withAnimation(Motion.appear) { sheets.search = nil }
@@ -132,8 +134,11 @@ struct SystemSearchSheet: View {
         let search = tv.systemSearch ?? SystemSearch()
         let groups = tv.systemSearchResults(search.query)
         VStack(spacing: 40) {
-            CaretText(text: search.query, placeholder: "Search", caret: search.row == 0 && search.typing ? search.caret : nil)
+            TVTextField(text: Binding(get: { tv.systemSearch?.query ?? "" }, set: { tv.systemSearch?.query = $0 }),
+                        placeholder: "Search", editing: search.row == 0 && search.typing,
+                        limit: TVController.searchLimit) { tv.systemSearch?.typing = false }
                 .font(.tv(.headline, emphasized: true))
+                .padding(.trailing, 50)
                 .padding(.horizontal, 40)
                 .frame(width: 900, height: 84, alignment: .leading)
                 .background(.white.opacity(search.row == 0 ? 0.14 : 0.07), in: Capsule())

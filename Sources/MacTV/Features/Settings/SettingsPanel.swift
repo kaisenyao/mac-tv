@@ -98,8 +98,6 @@ struct SettingsPanel: Equatable {
     var card: Int?
     /// The name being typed on a name page.
     var typed = ""
-    /// Where the next letter goes in the text field with focus, in characters from its start.
-    var caret = 0
     /// What's typed into Add Network Share… or Sign In to Jellyfin….
     var form = SourceForm()
     /// What's typed into an API key's field (Jasmine's): never described.
@@ -123,7 +121,7 @@ struct SettingsPanel: Equatable {
         return panel
     }
 
-    /// A text field has focus: the keyboard's letters and Space go to it, and Left and Right move the caret.
+    /// A text field has focus: it's a real one (TVTextField), and the keyboard's keys are its own (main.swift).
     var typing: Bool {
         switch page {
         case .profileName: row == 0
@@ -277,9 +275,16 @@ struct SettingsRowContent: Equatable {
     struct Field: Equatable {
         var text: String
         var placeholder: String
-        /// Where the caret is while the field has focus.
-        var caret: Int?
+        /// Has the keyboard: a real text field (TVTextField).
+        var editing = false
         var secure = false
+        /// What typing into it changes, and what its Return does.
+        var set: (@MainActor (String) -> Void)? = nil
+        var submit: (@MainActor () -> Void)? = nil
+
+        static func == (lhs: Field, rhs: Field) -> Bool {
+            lhs.text == rhs.text && lhs.placeholder == rhs.placeholder && lhs.editing == rhs.editing && lhs.secure == rhs.secure
+        }
     }
 
     var title: String
@@ -697,10 +702,8 @@ extension TVController {
         case .iPhone: pairingGuest = false   // a full-access code each time
         case .profileName(let id):
             panel.typed = id.flatMap { id in profiles.all.first { $0.id == id }?.name } ?? ""
-            panel.caret = panel.typed.count
         case .addNetworkShare, .addJellyfinServer:
             panel.form = SourceForm()
-            panel.caret = 0
         default: break
         }
         pages = panel
@@ -717,7 +720,6 @@ extension TVController {
         }
         panel.card = nil
         panel.typed = ""
-        panel.caret = 0
         panel.form = SourceForm()
         panel.secret = SecretText()
     }
@@ -930,7 +932,8 @@ extension TVController {
 
     // MARK: Profiles, movie sources
 
-    /// Typing on a name page: letters go in at the caret, Left and Right move it, Down goes to Done and Up back.
+    /// Typing on a name page: the keyboard types into the name's text field (TVTextField), the phone's Type on TV
+    /// comes here; Down goes to Done and Up back.
     /// Return or Select saves; Back leaves the name as it was.
     private func typeName(_ command: RemoteCommand, _ panel: SettingsPanel) {
         var panel = panel
@@ -944,14 +947,14 @@ extension TVController {
         case .move(.up): panel.row = 0
         case .move(.down): panel.row = 1
         case .move(.left), .move(.right):
-            if panel.row == 0 { _ = TextEntry.apply(command, to: &panel.typed, caret: &panel.caret, limit: ProfileName.maxLength) }
+            break   // the name's text field moves its own caret
         case .text(let text):
             panel.row = 0
-            _ = TextEntry.apply(command, to: &panel.typed, caret: &panel.caret, limit: ProfileName.maxLength)
+            _ = TextEntry.apply(command, to: &panel.typed, limit: ProfileName.maxLength)
             done = text.hasSuffix("\n")
         case .deleteBackward:
             panel.row = 0
-            _ = TextEntry.apply(command, to: &panel.typed, caret: &panel.caret, limit: ProfileName.maxLength)
+            _ = TextEntry.apply(command, to: &panel.typed, limit: ProfileName.maxLength)
         case .select:
             panel.presses += 1
             done = true
@@ -1230,8 +1233,10 @@ struct SettingsPages: View {
         let renaming = panel.page != .profileName(nil)
         let onField = panel.row == 0
         return VStack(spacing: 28) {
-            CaretText(text: panel.typed, placeholder: "Name", caret: onField ? panel.caret : nil)
+            TVTextField(text: Binding(get: { tv.pages?.typed ?? "" }, set: { tv.pages?.typed = $0 }), placeholder: "Name",
+                        editing: onField, limit: ProfileName.maxLength) { tv.handleSettings(.select) }
                 .font(.tv(.headline, emphasized: true))
+                .frame(width: 412)
                 .padding(.horizontal, 34)
                 .frame(minWidth: 480, minHeight: 76)
                 .background(.white.opacity(onField ? 0.14 : 0.07), in: Capsule())
@@ -1298,12 +1303,12 @@ struct SettingsRow: View, Equatable {
     @ViewBuilder
     private var label: some View {
         if let field = content.field {
-            // A text field: its label, then what's typed (or the placeholder) with the caret while it has focus.
+            // A text field: its label, then what's typed (or the placeholder); a real text field while it has focus.
             HStack(spacing: 0) {
                 Text(content.title).font(SettingsMetrics.title).lineLimit(1)
                     .frame(width: 230, alignment: .leading)
-                CaretText(text: field.secure ? String(repeating: "•", count: field.text.count) : field.text,
-                          placeholder: field.placeholder, caret: field.caret)
+                TVTextField(text: Binding(get: { field.text }, set: { field.set?($0) }), placeholder: field.placeholder,
+                            editing: field.editing, secure: field.secure) { field.submit?() }
                     .font(SettingsMetrics.title)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

@@ -417,21 +417,23 @@ struct ProfilesScreen: View {
     private func naming(_ name: String) -> some View {
         VStack(spacing: 30) {
             ProfileAvatar(profile: Profile(id: "new", name: name.isEmpty ? "?" : name, color: tv.profiles.nextColor))
-            ProfileNameField(name: name)
+            ProfileNameField(name: Binding(get: { tv.profilePicker?.naming ?? "" }, set: { tv.profilePicker?.naming = $0 })) {
+                tv.handle(.select)
+            }
             ShelfButton(title: "Create Profile", focused: !name.isEmpty, glass: false) { tv.handle(.select) }
         }
     }
 }
 
-/// The name being typed, with a caret: "Who's Watching?" and Settings › Profiles and Accounts.
+/// The new profile's name on "Who's Watching?": a real text field (TVTextField) while it's typed.
 struct ProfileNameField: View {
-    let name: String
+    @Binding var name: String
+    let onSubmit: () -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text(name.isEmpty ? "Name" : name).opacity(name.isEmpty ? 0.4 : 1)
-            Rectangle().frame(width: 3, height: 40).opacity(0.8).padding(.leading, 4)
-        }
+        TVTextField(text: $name, placeholder: "Name", editing: true, limit: ProfileName.maxLength, onSubmit: onSubmit)
+            .multilineTextAlignment(.center)
+            .frame(width: 448)
         .font(.system(size: 40, weight: .semibold))
         .padding(.horizontal, 36)
         .frame(minWidth: 520, minHeight: 84)

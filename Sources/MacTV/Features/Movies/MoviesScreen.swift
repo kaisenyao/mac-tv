@@ -1061,15 +1061,24 @@ struct ShareFormSheet: View {
     let form: ShareForm
     @Environment(\.canvasSize) private var canvas
 
+    /// A field's text, typed into by its text field.
+    private func binding(_ field: WritableKeyPath<ShareForm, String>) -> Binding<String> {
+        Binding(get: { tv.movies?.shareForm?[keyPath: field] ?? "" }, set: { tv.movies?.shareForm?[keyPath: field] = $0 })
+    }
+
+    /// Return in a field: as Select there (the next field, or Connect).
+    private func submit() { tv.handle(.select) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Text(form.jellyfin ? "Add Jellyfin Server" : "Add Network Share").font(.tv(.title3, emphasized: true))
-            AdderField(label: form.jellyfin ? "Server" : "Shared folder", text: form.address,
-                       placeholder: form.jellyfin ? "e.g. 192.168.1.5:8096" : "e.g. nas.local/Movies", focused: form.row == 0) { tv.tapShareForm(0) }
-            AdderField(label: "User name", text: form.user, placeholder: form.jellyfin ? "Your Jellyfin user" : "Leave empty for guest",
-                       focused: form.row == 1) { tv.tapShareForm(1) }
-            AdderField(label: "Password", text: String(repeating: "•", count: form.password.count), placeholder: "Password",
-                       focused: form.row == 2) { tv.tapShareForm(2) }
+            AdderField(label: form.jellyfin ? "Server" : "Shared folder", text: binding(\.address),
+                       placeholder: form.jellyfin ? "e.g. 192.168.1.5:8096" : "e.g. nas.local/Movies", focused: form.row == 0,
+                       submit: submit) { tv.tapShareForm(0) }
+            AdderField(label: "User name", text: binding(\.user), placeholder: form.jellyfin ? "Your Jellyfin user" : "Leave empty for guest",
+                       focused: form.row == 1, submit: submit) { tv.tapShareForm(1) }
+            AdderField(label: "Password", text: binding(\.password), placeholder: "Password", focused: form.row == 2, secure: true,
+                       submit: submit) { tv.tapShareForm(2) }
             ShelfButton(title: buttonTitle, systemImage: form.jellyfin ? "server.rack" : "externaldrive.connected.to.line.below",
                         focused: form.row == 3, glass: false) {
                 tv.tapShareForm(3)

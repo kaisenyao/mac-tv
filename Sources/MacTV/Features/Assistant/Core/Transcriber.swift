@@ -29,6 +29,8 @@ struct Transcript {
     private(set) var answered = false
     private var finishing = false
     private(set) var failure: String?
+    /// Someone is speaking (between the server's speech_started and its commit).
+    private(set) var talking = false
 
     enum Change: Equatable { case none, text, failed }
 
@@ -39,7 +41,11 @@ struct Transcript {
         let type = event["type"] as? String ?? ""
         let item = event["item_id"] as? String ?? ""
         switch type {
+        case "input_audio_buffer.speech_started":
+            talking = true
+            return .none
         case "input_audio_buffer.committed":
+            talking = false
             if !order.contains(item) { order.append(item) }
             if finishing { answered = true }
             return .none
@@ -70,6 +76,9 @@ struct Transcript {
 
     /// Everything heard so far, the parts still being written out included.
     var text: String { Self.join(order.map { done[$0] ?? partial[$0] ?? "" }) }
+
+    /// Hands-free: something was said, the speaker has stopped, and every part is written out.
+    var spokenAndDone: Bool { !talking && !order.isEmpty && order.allSatisfy { done[$0] != nil } && !text.isEmpty }
 
     /// After `finish`: true once every part is written out.
     var complete: Bool { finishing && answered && order.allSatisfy { done[$0] != nil } }
@@ -107,11 +116,14 @@ final class RealtimeTranscriber: Transcribing {
 
     private let socket: URLSessionWebSocketTask
     private let settings: Settings
+    /// Ended by the server's end of speech, not by `finish` (Control Center's Jasmine button).
+    private let handsFree: Bool
     private var transcript = Transcript()
     private var over = false
     private var waiting: Task<Void, Never>?
 
-    init(key: String, settings: Settings, session: URLSession = .shared) {
+    init(key: String, settings: Settings, handsFree: Bool = false, session: URLSession = .shared) {
+        self.handsFree = handsFree
         var request = URLRequest(url: URL(string: "wss://api.openai.com/v1/realtime?intent=transcription")!)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 10
@@ -198,7 +210,7 @@ final class RealtimeTranscriber: Transcribing {
         case .text: onText?(transcript.text)
         case .none: break
         }
-        if !over, transcript.complete { end(transcript.text) }
+        if !over, transcript.complete || handsFree && transcript.spokenAndDone { end(transcript.text) }
     }
 
     private func end(_ text: String) {

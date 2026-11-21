@@ -358,9 +358,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown]) { [weak self] event in
             guard let self, event.window === window else { return event }
             let woke = tv.noteActivity()
-            // 浏览器里正在改地址：点在输入框外面（网页、标签、按钮）就不改了，像按返回；这一下照常给点到的东西
-            if event.type == .leftMouseDown, tv.browserStore.editing, !BrowserStore.isInTextEditor(event, in: window) {
-                tv.browserStore.endEditingByClick()
+            // A click outside the text field being typed in ends the typing, as on any Mac (each screen back on that
+            // field, not typing; see endTextEditing). The click still goes to what it's on: another field takes over.
+            if event.type == .leftMouseDown,
+               TextEditingClicks.endsTyping(typing: tv.typingInAField || window.firstResponder is NSTextView,
+                                            insideEditor: BrowserStore.isInTextEditor(event, in: window)) {
+                tv.endTextEditing()
             }
             if event.type == .mouseMoved && (abs(event.deltaX) > 0.5 || abs(event.deltaY) > 0.5) {
                 tv.suppressHover = false
@@ -385,9 +388,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             guard let self else { return event }
             if event.charactersIgnoringModifiers?.lowercased() == "q" { tv.quitKeyUp() }
-            if event.keyCode == 96 {   // F5 (🎤): the Siri button
+            if event.keyCode == 96 {   // F5 (🎤): the Siri button; a keyUp alone is a press (InputPresses.siriKeyUp)
                 Log.app.notice("F5 up")
-                if tv.inputPresses.siriUp(from: .keyboard) { return nil }
+                return tv.inputPresses.siriKeyUp(from: .keyboard) ? nil : event
             }
             guard let key = Self.button(event) else { return event }
             if key == .home, commandHDown, event.keyCode != 115 { commandHDown = false }
@@ -429,33 +432,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 }
                 return nil
             }
-            guard event.window === self?.window else { return event }
-            tv.noteInput()   // typing into a field counts too, so the screen saver doesn't start meanwhile
-            // The screen saver: Left, Right, Esc, Return, Space and the Home key are its buttons (see
-            // handleScreensaver); any other key just ends it
-            if tv.screensaver, Self.button(event) == nil, event.keyCode != 49 {
-                tv.screensaverOff()
-                return nil
-            }
-            // Esc is Back, the same everywhere: pressed, Back; held, the Home Screen (see AppQuit). While an input
-            // method has characters waiting in a search field, Esc is the input method's.
-            if event.keyCode == 53, mods.isEmpty {
-                let composing = (tv.mode == .launcher
-                    && ((tv.bilibiliOpen && tv.bilibiliStore.editing) || (tv.neteaseOpen && tv.neteaseStore.typing)
-                        || (tv.browserOpen && tv.browserStore.editing) || tv.movies?.typing == true)
-                        || (tv.browserPageInFront && tv.browserStore.editing))
-                    && ((self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false)
-                if composing { return event }
-                tv.inputPresses.down(.back, from: .keyboard)
-                return nil
-            }
             // F5 (🎤 on a Mac keyboard, when macOS's own Dictation doesn't take it) is the Siri button: pressed, Search;
-            // held, Jasmine, or dictation into the field with focus (see Jasmine)
+            // held, Jasmine, or dictation into the field with focus (see Jasmine). Before the window check, as ⌘H:
+            // the 🎤 key's keyDown can come without a window.
+            if event.keyCode == 96 {
+                Log.app.notice("F5 keyDown: window \(event.window == nil ? "none" : event.window === self?.window ? "Mac TV's" : "another", privacy: .public), flags \(event.modifierFlags.rawValue, privacy: .public), repeat \(event.isARepeat, privacy: .public)")
+            }
             if event.keyCode == 96, mods.isEmpty {
                 if !event.isARepeat {
                     let presses = tv.inputPresses
-                    // A press still open (its keyUp never came) ends first, so the key can never wedge.
-                    if presses.siriIsDown(from: .keyboard) { presses.siriUp(from: .keyboard) }
+                    // A press still open (its keyUp never came) is cancelled first: what it heard is dropped, never
+                    // sent on, typed or done. The key can never wedge.
+                    if presses.siriIsDown(from: .keyboard) { presses.siriCancel(from: .keyboard) }
                     presses.siriDown(from: .keyboard)
                     // The keyDown and keyUp are what count. On top of them, one "it's up now" signal, only from what
                     // reads down at this moment: F5's own state when macOS tracks it; otherwise, for fn-F5 (whose
@@ -469,6 +457,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     if f5 { presses.watchSiri(from: .keyboard, isDown: f5Down) }
                     else if fn { presses.watchSiri(from: .keyboard, isDown: fnDown) }
                 }
+                return nil
+            }
+            guard event.window === self?.window else { return event }
+            tv.noteInput()   // typing into a field counts too, so the screen saver doesn't start meanwhile
+            // The screen saver: Left, Right, Esc, Return, Space and the Home key are its buttons (see
+            // handleScreensaver); any other key just ends it
+            if tv.screensaver, Self.button(event) == nil, event.keyCode != 49 {
+                tv.screensaverOff()
+                return nil
+            }
+            // Esc is Back, the same everywhere: pressed, Back; held, the Home Screen (see AppQuit). While an input
+            // method has characters waiting in a search field, Esc is the input method's.
+            if event.keyCode == 53, mods.isEmpty {
+                // Any text field's (哔哩哔哩's, 网易云's, the address bar, Movies', a TVTextField)
+                let composing = (self?.window.firstResponder as? NSTextView)?.hasMarkedText() ?? false
+                if composing { return event }
+                tv.inputPresses.down(.back, from: .keyboard)
                 return nil
             }
             // The Home key (Fn-Left Arrow on a Mac keyboard) is the TV button too, as ⌘H
@@ -556,24 +561,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             // Over a web page or a movie, a sheet (Control Center, the App Switcher…) takes the keys
             guard tv.mode == .launcher || tv.mode == .movie || tv.activeSheet != nil else { return event }
-            // The add-app sheet takes typing: letters, Space, Delete and ⌘V go to its fields.
-            // So does naming a new profile.
-            if tv.adder != nil || tv.profilePicker?.naming != nil || tv.settings?.typing == true || tv.movies?.shareForm != nil
-                || (tv.activeSheet == .search && tv.systemSearch?.row == 0) {
-                if mods == [.command], event.charactersIgnoringModifiers == "v",
-                   let pasted = NSPasteboard.general.string(forType: .string) {
-                    tv.handle(.text(pasted))
-                    return nil
-                }
-                if mods.isEmpty, event.keyCode == 51 {
-                    tv.handle(.deleteBackward)
-                    return nil
-                }
-                let navigation: Set<UInt16> = [123, 124, 125, 126, 36, 76, 53]
-                if !navigation.contains(event.keyCode), mods.subtracting(.shift).isEmpty,
-                   let typed = event.characters, !typed.isEmpty,
-                   typed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
-                    tv.handle(.text(typed))
+            // A TV text field has the keyboard (Search, Settings' fields, a new profile's name, Add App, Movies' Add
+            // Network Share…; see TVTextField): its keys are its own, so an input method can compose in it, and
+            // Return, Delete, ⌘V and Left and Right do what they do in any text field. Up and Down stay the TV's (to
+            // the next field, to the results) unless an input method is composing; Esc is Back (above). If it didn't
+            // get the keyboard (it had only just appeared), it's asked to take it again and this key does nothing.
+            if tv.tvTextFieldEditing {
+                if let editor = self?.window.firstResponder as? NSTextView {
+                    if TextFieldKeys.belongToField(keyCode: event.keyCode, modifiers: mods, composing: editor.hasMarkedText()) {
+                        return event   // to the field, and through the main menu (Edit) to it
+                    }
+                } else if !TextFieldKeys.navigateWithoutKeyboard(keyCode: event.keyCode, modifiers: mods) {
+                    // The field doesn't have the keyboard (it had only just appeared, or a click took it): it takes it
+                    // again, and this key does nothing. Up, Down and Return still move on, as from the field.
+                    TVTextFieldFocus.shared.request()
                     return nil
                 }
             }

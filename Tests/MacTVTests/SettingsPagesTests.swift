@@ -248,7 +248,6 @@ import Testing
             tv.handleSettings(.select)
             tv.handleSettings(.select)
             #expect(tv.settings?.page == .profileName(second.id) && tv.settings?.typed == "Second")
-            #expect(tv.settings?.caret == 6)   // after the name
             for _ in 0..<6 { tv.handleSettings(.deleteBackward) }
             tv.handleSettings(.text("Ann\n"))
             #expect(tv.settings?.page == .profile(second.id) && tv.settings?.row == 0)

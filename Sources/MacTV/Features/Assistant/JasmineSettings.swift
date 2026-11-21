@@ -203,10 +203,10 @@ extension TVController {
             return SettingsRowContent(title: name, checked: settings.microphone == uid)
         case .keyField:
             guard case .jasmine(.key(let key))? = panel.page else { return SettingsRowContent(title: "") }
-            let caret = focused ? panel.secret.text.count : nil
-            return SettingsRowContent(title: "API Key", field: .init(text: panel.secret.text,
-                                                                    placeholder: settings.added.contains(key) ? "Added" : "Required",
-                                                                    caret: caret, secure: true))
+            return SettingsRowContent(title: "API Key", field: .init(
+                text: panel.secret.text, placeholder: settings.added.contains(key) ? "Added" : "Required", editing: focused, secure: true,
+                set: { [weak self] in self?.pages?.secret.text = $0 },
+                submit: { [weak self] in if let panel = self?.pages { self?.saveJasmineKey(panel) } }))
         case .keyDone: return SettingsRowContent(title: "Done")
         case .keyRemove: return SettingsRowContent(title: "Remove API Key")
         }
