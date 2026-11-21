@@ -34,8 +34,13 @@ struct AudioOutputTests {
         let airPlay = AudioOutputDevice(id: 8, name: "HomePod", transport: kAudioDeviceTransportTypeAirPlay, isDefault: false)
         #expect(airPlay.symbol == "airplayaudio")
 
+        // The Mac's own speakers: the Mac itself in the list (as macOS's Sound settings); Control Center's tile keeps the
+        // volume's speaker
         let builtIn = AudioOutputDevice(id: 9, name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn, isDefault: true)
-        #expect(builtIn.symbol == "speaker.wave.2.fill")
+        #expect(builtIn.symbol == "macbook" && builtIn.tileSymbol == AudioOutputDevice.speakerSymbol)
+        let mini = AudioOutputDevice(id: 10, name: "Mac mini Speakers", transport: kAudioDeviceTransportTypeBuiltIn, isDefault: false)
+        #expect(mini.symbol == "macmini" && mini.tileSymbol == AudioOutputDevice.speakerSymbol)
+        #expect(hdmiTV.tileSymbol == "tv.fill")
     }
 
     @Test
