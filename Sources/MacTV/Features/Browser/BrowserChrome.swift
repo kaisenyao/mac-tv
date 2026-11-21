@@ -140,7 +140,14 @@ struct BrowserTopBar: View {
                 circle(.back, symbol: "chevron.left", enabled: store.barCanGoBack)
                 circle(.forward, symbol: "chevron.right", enabled: store.barCanGoForward)
             }
-            track(width: Self.trackWidth(canvas: canvas.width))
+            // Into and out of Private Browsing the whole row of tabs crossfades to the other set, one over the other
+            // (never two sets side by side in one row, growing and shrinking against each other)
+            ZStack {
+                track(width: Self.trackWidth(canvas: canvas.width))
+                    .id(privateBrowsing)
+                    .transition(.opacity)
+            }
+            .frame(width: Self.trackWidth(canvas: canvas.width))
             HStack(spacing: Self.gap) {
                 circle(.newTab, symbol: "plus", enabled: true)
                 circle(.more, symbol: "ellipsis", enabled: true)
@@ -226,12 +233,13 @@ struct BrowserTopBar: View {
         .offset(x: -offset)
         .frame(width: viewport, height: Self.control, alignment: .leading)
         .padding(.horizontal, pad)
-        // 被截掉的那一头淡出去；没截掉的一头遮罩往外多留一点：选中的浮起来（放大、影子）、改地址的框，都不被切掉
+        // 被截掉的那一头淡出去；没截掉的一头不裁（遮罩放开到整条）：选中的浮起来、改地址的框、开关标签时正在滑的那几个，
+        // 动画里一路都不被切掉
         .mask {
             EdgeFadeMask(leading: hiddenBefore ? Self.fade : 0, trailing: hiddenAfter ? Self.fade : 0)
                 .padding(.vertical, -12)
-                .padding(.leading, hiddenBefore ? 0 : -Self.maskOutset)
-                .padding(.trailing, hiddenAfter ? 0 : -Self.maskOutset)
+                .padding(.leading, hiddenBefore ? 0 : -width)
+                .padding(.trailing, hiddenAfter ? 0 : -width)
         }
         // 放不下时：鼠标滚轮、触控板在这一排上滚，它就横着滚（不动画，跟着手）
         .background {
@@ -290,7 +298,7 @@ struct BrowserTopBar: View {
 
     /// 选中的标签浮起来放大多少：左右各多 4 点（标签之间留了 6，不压到旁边的）
     nonisolated static func liftScale(width: CGFloat) -> CGFloat { min(1.06, 1 + 8 / max(width, 100)) }
-    /// 这一排两头（没被截掉的那一头）遮罩往外多留的：浮起来多出来的 4 点和影子都在里面
+    /// 浮起来的标签两头多出来的（4 点和影子）最多这么宽：一头被截掉时它也不该超出淡出去的那一截以外
     nonisolated static let maskOutset: CGFloat = 16
 
     nonisolated static func tabWidths(count: Int, current: Int?, editing: Bool = false, available: CGFloat, gap: CGFloat = tabGap) -> [CGFloat] {
@@ -478,7 +486,9 @@ private struct BrowserTabPill: View {
                 .transition(.identity)
             } else {
                 // 标题本身不截断：标签变宽变窄时字不跟着一帧帧地重排、闪
-                TabTitle(inset: Self.icon + 10) { Text(title).lineLimit(1).fixedSize() }
+                // A title that changes (the tab becomes the one being watched: its site's name) crossfades in place,
+                // in step with the tab getting wider, instead of switching in one frame
+                TabTitle(inset: Self.icon + 10) { Text(title).lineLimit(1).fixedSize().contentTransition(.opacity) }
                     .mask { EdgeFadeMask(trailing: 28) }
                     .transition(.identity)
                 // 网站图标在最前面；选中、鼠标在上面时（能关的话）换成 ×
@@ -503,6 +513,7 @@ private struct BrowserTabPill: View {
         .scaleEffect(pressed ? 0.94 : 1)
         .animation(Motion.focus, value: focused)
         .animation(Motion.focus, value: showsClose)
+        .animation(Motion.focus, value: title)
         .animation(Motion.press, value: pressed)
         .contentShape(shape)
         .onTapGesture { store.tapBar(.tab(tab.id)) }
@@ -553,9 +564,10 @@ private struct StripScroll: Equatable {
     var key = ""
 }
 
-/// 新开的标签从它那一格的右边滑进来（像 Safari）：露出来的那一段贴着这一格的右边，从零宽长到整个，
-/// 和旁边的让开是同一下动画、同一条曲线，左边那个让到哪儿它就露到哪儿，不叠在一起。
-/// 长的时候裁掉多出来的；长完了不裁（选中时浮起来、影子不被切掉）
+/// A tab opening or closing (as Safari's): its place in the row opens up from nothing (or closes to nothing), so
+/// the tabs beside it slide over in the same motion, on the same curve, the whole way — never a jump at the end.
+/// The tab itself keeps its own width (nothing in it re-lays out or gets cut off) and grows from a little smaller
+/// as it fades in, over the later part, so it never sits over its neighbours while it's small.
 private struct TabGrow: ViewModifier, Animatable {
     let width: CGFloat
     var fraction: CGFloat
@@ -566,10 +578,10 @@ private struct TabGrow: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         content
-            .frame(width: width * fraction, alignment: .leading)
-            .mask { Rectangle().padding(fraction < 1 ? 0 : -40) }
-            .frame(width: width, alignment: .trailing)
-            .opacity(fraction)
+            .frame(width: width)
+            .scaleEffect(0.86 + 0.14 * fraction)
+            .opacity(Double(max(0, fraction * 1.5 - 0.5)))
+            .frame(width: width * fraction)
     }
 }
 
