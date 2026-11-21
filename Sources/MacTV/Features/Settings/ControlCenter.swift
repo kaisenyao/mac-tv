@@ -404,7 +404,7 @@ struct ControlCenterView: View {
             }
             HStack(spacing: Self.gap) {
                 // Speakers: the speaker that shows the volume (as the volume indicator's); headphones, a TV, AirPlay: theirs
-                tile(.audio, panel, symbol: tv.currentAudioDevice?.symbol ?? AudioOutputDevice.speakerSymbol, title: "Audio",
+                tile(.audio, panel, symbol: tv.currentAudioDevice?.tileSymbol ?? AudioOutputDevice.speakerSymbol, title: "Audio",
                      detail: tv.currentAudioDevice?.name ?? "Speakers", tinted: true)
                 tile(.sleepTimer, panel, symbol: "timer", title: "Sleep Timer",
                      detail: minutes > 0 ? "\(minutes) Minute\(minutes == 1 ? "" : "s") Left" : "Off")

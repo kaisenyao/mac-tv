@@ -92,9 +92,12 @@ struct DisplayPickerSheet: View {
                     let content = tv.controlCenterChoice(choice)
                     let focused = (panel.row == index)
                     HStack(spacing: 18) {
+                        // Every choice's symbol fitted to one box, as the audio outputs' (a wide MacBook, a TV, the same size)
                         Image(systemName: Self.symbol(choice))
-                            .font(.tvMenuSymbol)
-                            .frame(width: 40)
+                            .resizable()
+                            .fontWeight(.medium)
+                            .scaledToFit()
+                            .frame(width: 40, height: 30)
 
                         Text(content.title)
                             .font(.tvMenuItem)
@@ -148,7 +151,8 @@ struct DisplayPickerSheet: View {
         }
     }
 
-    /// A choice's symbol: Full Screen as Control Center's round button, a Mac's own display as a laptop, others a TV.
+    /// A choice's symbol: Full Screen as Control Center's round button, a MacBook's own display as the MacBook (as the
+    /// audio outputs show its speakers), others a TV.
     static func symbol(_ choice: ControlCenterPanel.Choice) -> String {
         switch choice {
         case .fullScreen: return "arrow.up.left.and.arrow.down.right"
@@ -157,7 +161,7 @@ struct DisplayPickerSheet: View {
             let screen = NSScreen.screens.first { screen in
                 CGDisplayCreateUUIDFromDisplayID(screen.displayID).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String } == id
             }
-            return screen.map { CGDisplayIsBuiltin($0.displayID) != 0 } == true ? "laptopcomputer" : "tv"
+            return screen.map { CGDisplayIsBuiltin($0.displayID) != 0 } == true ? "macbook" : "tv"
         default: return "display"
         }
     }

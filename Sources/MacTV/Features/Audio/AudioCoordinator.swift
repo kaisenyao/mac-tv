@@ -14,6 +14,10 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
     /// Speakers' symbol (anything that isn't headphones, a TV or AirPlay): Control Center draws the volume's speaker for it.
     static let speakerSymbol = "speaker.wave.2.fill"
 
+    /// Control Center's Audio tile: speakers (the Mac's own or any others) show the volume's speaker, whose waves follow
+    /// the volume; headphones, a TV, AirPlay their own symbol.
+    var tileSymbol: String { transport == kAudioDeviceTransportTypeBuiltIn ? Self.speakerSymbol : symbol }
+
     /// Maps transport type and device name to the appropriate tvOS SF Symbol.
     var symbol: String {
         let lower = name.lowercased()
@@ -23,6 +27,12 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
         if lower.contains("beats") || lower.contains("headphone") { return "headphones" }
 
         switch transport {
+        case kAudioDeviceTransportTypeBuiltIn:
+            // The Mac's own speakers: the Mac, as macOS's Sound settings show them
+            if lower.contains("mac mini") { return "macmini" }
+            if lower.contains("imac") { return "desktopcomputer" }
+            if lower.contains("macbook") { return "macbook" }
+            return Self.speakerSymbol
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
             return "headphones"
         case kAudioDeviceTransportTypeHDMI, 0x64707274 /* 'dprt' DisplayPort */:
@@ -462,9 +472,12 @@ struct AudioPickerSheet: View {
                     ForEach(Array(tv.audioDevices.enumerated()), id: \.element.id) { index, device in
                         let focused = (panel.row == index)
                         HStack(spacing: 18) {
+                            // Every output's symbol fitted to one box: a wide MacBook, a TV and AirPods look the same size
                             Image(systemName: device.symbol)
-                                .font(.tvMenuSymbol)
-                                .frame(width: 40)
+                                .resizable()
+                                .fontWeight(.medium)
+                                .scaledToFit()
+                                .frame(width: 40, height: 30)
 
                             Text(device.name)
                                 .font(.tvMenuItem)
