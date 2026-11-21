@@ -34,6 +34,21 @@ import Testing
         tv.goHome()
     }
 
+    /// Videos' Top Shelf plays the film it's showing: the one under way first, as its Continue Watching row.
+    @Test func theTopShelfPlaysTheFilmItShows() async throws {
+        var started = film("Started", position: 1200)
+        started.poster = "started.jpg"
+        var fresh = film("Fresh")
+        fresh.poster = "fresh.jpg"
+        var bare = film("No Picture")
+        bare.poster = nil
+        try await withTV([fresh, started, bare]) { tv, library, _ in
+            #expect(library.shelf.map(\.path).first == started.path, "under way first")
+            #expect(!library.shelf.contains { $0.path == bare.path }, "only films with a picture")
+            #expect(tv.videosShelfFilm?.path == library.shelf[tv.appShelf.beat % library.shelf.count].path)
+        }
+    }
+
     private func film(_ title: String, year: Int = 2020, position: Double? = nil) -> Movie {
         var movie = Movie(path: "/test/Films/\(title) (\(year)).mkv", title: title, year: year, added: .now, size: 1_000_000)
         movie.declared = "Movie"

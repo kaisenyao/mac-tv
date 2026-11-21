@@ -34,16 +34,18 @@ struct AlbumBackdrop: View {
         .frame(width: canvas.width, height: canvas.height)
     }
 
+    /// On the Top Shelf's grid (ShelfGrid): as tall as 得到's book, centred between the top bar and the dock, its right
+    /// edge where the other apps' artwork ends.
     private var cover: some View {
         let aspect = image.size.height > 0 ? image.size.width / image.size.height : 1
+        let height = ShelfGrid.book.height, width = min(height * aspect, height)
         return Image(nsImage: image)
             .resizable()
             .aspectRatio(aspect, contentMode: .fit)
-            .frame(width: aspect >= 1 ? 560 : 640 * aspect, height: aspect >= 1 ? 560 / aspect : 640)
+            .frame(width: width, height: width / aspect)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .shadow(color: .black.opacity(0.5), radius: 40, y: 24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.top, 150)
-            .padding(.trailing, 150)
+            .frame(width: width, height: height)
+            .position(x: ShelfGrid.artRight(canvas) - width / 2, y: ShelfGrid.artMidY(canvas))
     }
 }

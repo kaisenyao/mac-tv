@@ -29,8 +29,9 @@ struct TopShelf: View {
     }
 }
 
-/// 没有轮播的应用（网站、Mac 应用、Steam 游戏、影片）选中时的主屏顶部：这个应用的颜色铺满，左上角写名字；
-/// 影片是片库里的海报 / 剧照，Steam 游戏是它自己的图。从底下往上进来是"Open"。
+/// 没有轮播的应用（网站、Mac 应用、Steam 游戏、影片）选中时的主屏顶部：这个应用的颜色铺满，左下写名字；
+/// 影片是片库里的海报 / 剧照，左下是这部片子的标签、片名、年份 · 类型 · 片长、简介（和别的应用同一个格子，见 ShelfGrid）；
+/// Steam 游戏是它自己的图。从底下往上进来是"Open"。
 ///（哔哩哔哩、网易云、YouTube 的轮播见 AppShelf：那里显示的是你自己账号里的内容）
 struct AppBanner: View {
     @ObservedObject var tv: TVController
@@ -66,7 +67,7 @@ struct AppBanner: View {
                 // Posters sit on the right like album covers; frames from the film fill the screen. Only the picture
                 // showing is decoded, at the size it's drawn, and kept in Movies' picture cache.
                 if let image = movieLibrary.artwork.image(pick.file, maxPixel: 1920) {
-                    return (pick.path, movieLibrary.movie(pick.path)?.displayTitle ?? "Movies",
+                    return (pick.path, movieLibrary.movie(pick.path)?.displayTitle ?? "Videos",
                             image, image.size.height > image.size.width, false)
                 }
             }
@@ -77,8 +78,25 @@ struct AppBanner: View {
         return nil
     }
 
+    /// The film showing in Movies' Top Shelf, and what the shelf says about it, as the Movies app does: the tag is the
+    /// row it would be in (Continue Watching, Recently Added), the meta line its year, genre and length (or how much is
+    /// left), then its overview.
+    private func film(_ path: String) -> (tag: String, title: String, meta: String, overview: String?)? {
+        guard let movie = movieLibrary.movie(path) else { return nil }
+        let info = MovieInfo(movie: movie, library: movieLibrary)
+        var parts = info.parts
+        let watching = movieLibrary.continueWatching.contains { $0.path == path }
+        if watching, let duration = movie.duration, let position = movie.position, duration > position {
+            parts.removeAll { $0 == MovieInfo.length(duration) }
+            parts.append(MovieInfo.left(duration - position))
+        }
+        let tag = watching ? "Continue Watching" : movieLibrary.recentlyAdded.contains { $0.path == path } ? "Recently Added" : "Library"
+        return (tag, info.title, parts.joined(separator: " · "), info.overview)
+    }
+
     var body: some View {
         let show = backdrop
+        let about = show.flatMap { $0.appOwned ? nil : film($0.id) }
         ZStack(alignment: .topLeading) {
             // A Steam game's art is the base layer, so it can't be lost under a stale backdrop.
             if let show, show.appOwned {
@@ -103,9 +121,9 @@ struct AppBanner: View {
                     ShowBackdrop(image: show.image, since: clock.beatStarted)
                 }
             }
-            // Legibility: a soft top-left wash for the name, a bottom wash for the dock or button.
-            LinearGradient(stops: [.init(color: .black.opacity(expanded ? 0.8 : (show == nil ? 0.55 : 0.18)), location: 0),
-                                   .init(color: .black.opacity(expanded ? 0.4 : 0.15), location: 0.4),
+            // Legibility: a wash from the left for the text, a bottom wash for the dock or the button.
+            LinearGradient(stops: [.init(color: .black.opacity(about != nil || show == nil ? 0.7 : (expanded ? 0.6 : 0.18)), location: 0),
+                                   .init(color: .black.opacity(about != nil || expanded ? 0.35 : 0.12), location: 0.4),
                                    .init(color: .clear, location: 0.65)],
                            startPoint: .leading, endPoint: .trailing)
             LinearGradient(stops: [.init(color: .clear, location: 0.45),
@@ -115,30 +133,55 @@ struct AppBanner: View {
                 LinearGradient(colors: [.black.opacity(0.25), .clear], startPoint: .top, endPoint: .center)
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                if show == nil {
-                    // The artwork alone carries it; nothing is drawn over it. Without art, the app's name.
-                    Text(service.name)
-                        .font(.tv(.title1, emphasized: true))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.5)
-                        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
-                }
-                if expanded {
-                    ShelfButton(title: "Open \(service.name)", systemImage: "arrow.up.right", focused: tv.focus == .shelf(0)) {
+            // The column on the Top Shelf's grid (ShelfGrid), where every app's is. A Steam game's art carries itself.
+            if show?.appOwned != true {
+                ShelfColumn(width: ShelfGrid.wideColumn(canvas), expanded: expanded) {
+                    Group {
+                        if let about {
+                            ShelfInfo(title: about.title, shadow: true) {
+                                ShelfTag(text: about.tag, color: Color(hex: service.accent))
+                            } meta: {
+                                Text(about.meta)
+                            } detail: {
+                                if let overview = about.overview, !overview.isEmpty {
+                                    Text(overview)
+                                        .font(ShelfGrid.bodyFont)
+                                        .foregroundStyle(.white.opacity(ShelfGrid.bodyOpacity))
+                                        .lineSpacing(ShelfGrid.bodyLineSpacing)
+                                        .lineLimit(2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .id(show?.id)
+                            .transition(.opacity)
+                        } else {
+                            // Without art (or a film's details), the app's name, where a title goes.
+                            Text(service.name)
+                                .font(.tvHeroTitle)
+                                .lineLimit(2)
+                                .shadow(color: .black.opacity(0.35), radius: 14, y: 4)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        }
+                    }
+                } buttons: {
+                    // Videos: Play the film showing (Resume one that's under way); otherwise the app opens
+                    let film = isMovies && about != nil
+                    ShelfButton(title: film ? (about?.tag == "Continue Watching" ? "Resume" : "Play") : "Open \(service.name)",
+                                systemImage: film ? "play.fill" : "arrow.up.right", focused: tv.focus == .shelf(0)) {
                         tv.setFocus(.shelf(0)); tv.activateShelf(0)
                     }
-                    .padding(.top, 20)
                     .tvGlassTransition()
+                } dots: {
+                    // Movies' films turn on the Top Shelf's beat: which one is showing.
+                    let count = isMovies ? movieLibrary.shelf.count : 0
+                    ShelfDots(count: count, current: count > 0 ? clock.beat % count : 0)
+                        .opacity(count > 1 ? 1 : 0)
                 }
             }
-            .frame(width: 1100, alignment: .leading)
-            .padding(.leading, 96)
-            .frame(maxHeight: .infinity, alignment: expanded ? .bottomLeading : .topLeading)
-            .padding(.top, 96)
-            .padding(.bottom, 110)
         }
     }
+
+    private var isMovies: Bool { if case .movies = service.kind { true } else { false } }
 }
 
 /// Full-bleed Steam art via a layer (SwiftUI `Image(nsImage:)` was unreliable for some Steam PNGs).

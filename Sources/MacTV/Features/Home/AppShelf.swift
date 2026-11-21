@@ -532,6 +532,152 @@ extension AppShelf {
 
 // MARK: 画面
 
+/// One grid for every app's Top Shelf (哔哩哔哩, YouTube, 网易云, 得到, Movies), so that moving along the dock nothing
+/// that means the same thing jumps. The left column starts where the dock does and is anchored at its bottom: the dots
+/// sit the same distance above the dock in every app (collapsed), and the buttons and dots the same distance above the
+/// screen's bottom edge once the dock has slid away (expanded). Top to bottom: tag, title (one or two lines, as long as
+/// it is), meta line, the body (songs, an intro, a film's overview), buttons, dots. Artwork on the right (a record, a
+/// book, a poster) is centred between the top bar and the dock and ends at the same distance from the right edge.
+enum ShelfGrid {
+    /// The column's left edge: the dock's.
+    static let leading: CGFloat = 96
+    /// The coloured tag at the top ("每日推荐", "Continue Watching").
+    static let tag: CGFloat = 34
+    static let tagToTitle: CGFloat = 18
+    /// Between the title's two lines.
+    static let titleLineSpacing: CGFloat = 6
+    static let titleToMeta: CGFloat = 12
+    /// The meta line (who, how long, how many): one line, as tall as 哔哩哔哩's avatar beside it.
+    static let meta: CGFloat = 40
+    static let metaToBody: CGFloat = 30
+    /// Between the parts of a body (a progress row and a paragraph, a paragraph and the next lectures).
+    static let bodyGap: CGFloat = 22
+    static let bodyToButtons: CGFloat = 34
+    static let buttons: CGFloat = 76
+    static let buttonsToDots: CGFloat = 28
+    /// Collapsed there are no buttons: the body, then the dots.
+    static let bodyToDots: CGFloat = 34
+    static let dots: CGFloat = 8   // ShelfDots.height
+    /// Collapsed: from the dots to the dock's top edge.
+    static let aboveDock: CGFloat = 60
+    /// Expanded: from the dots to the screen's bottom edge.
+    static let expandedBottom: CGFloat = 130
+
+    /// A paragraph (an intro, an overview, the lines last heard): two or three lines, with room between them for
+    /// Chinese characters.
+    static let bodyFont = Font.tv(.caption1)
+    static let bodyLineSpacing: CGFloat = 8
+    /// The same role is equally bright in every app.
+    static let metaOpacity = 0.7
+    static let bodyOpacity = 0.78
+    static let detailOpacity = 0.55
+
+    /// 网易云's sleeve, and the vinyl that slides out of it: a 12" record (about 302 mm) in a 12⅜" sleeve (about
+    /// 314 mm) is 0.96 of it. And 得到's book.
+    static let sleeve: CGFloat = 540
+    static var disc: CGFloat { (sleeve * 0.96).rounded() }
+    /// The record's whole width: the sleeve and the half of the vinyl sticking out of it.
+    static var record: CGFloat { sleeve + disc / 2 + 30 }
+    static let book = CGSize(width: 420, height: 560)
+    /// From the artwork's right edge to the screen's.
+    static let artTrailing: CGFloat = 200
+    /// At least this much between the column and the artwork.
+    static let artGap: CGFloat = 80
+
+    /// The dock's top edge (Home's dock sits a fixed distance from the bottom).
+    static func dockTop(_ canvas: CGSize) -> CGFloat { canvas.height - 320 }
+    /// Under the top bar: nothing in the Top Shelf goes above it.
+    static var top: CGFloat { TopBar.top + TopBar.height }
+    /// From the column's bottom (the dots) to the screen's bottom edge.
+    static func bottom(_ canvas: CGSize, expanded: Bool) -> CGFloat {
+        expanded ? expandedBottom : canvas.height - dockTop(canvas) + aboveDock
+    }
+    /// The box the text (tag to body) is drawn in, bottom-aligned: from under the top bar to the body's bottom while
+    /// collapsed. Every page has the same box, so a page turn never has to measure anything.
+    static func info(_ canvas: CGSize) -> CGFloat { dockTop(canvas) - aboveDock - dots - bodyToDots - top }
+    /// Artwork's vertical centre: halfway between the top bar and the dock.
+    static func artMidY(_ canvas: CGSize) -> CGFloat { (top + dockTop(canvas)) / 2 }
+    static func artRight(_ canvas: CGSize) -> CGFloat { canvas.width - artTrailing }
+    /// The column beside artwork (网易云, 得到): it ends well before the record, the widest artwork.
+    static func artColumn(_ canvas: CGSize) -> CGFloat { artRight(canvas) - record - artGap - leading }
+    /// The column over a full-screen picture (videos, Movies).
+    static func wideColumn(_ canvas: CGSize) -> CGFloat { canvas.width * 0.5 }
+}
+
+/// The coloured tag at the top of a Top Shelf page.
+struct ShelfTag: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.tvBadge)
+            .tracking(0.6)
+            .padding(.horizontal, 14).frame(height: ShelfGrid.tag)
+            .background(color, in: Capsule())
+            .foregroundStyle(.white)
+    }
+}
+
+/// A Top Shelf page's text, on the grid: tag, title, meta line and an optional body, bottom-aligned in the box it
+/// is given (ShelfGrid.info).
+struct ShelfInfo<Tag: View, Meta: View, Detail: View>: View {
+    let title: String
+    /// Over a picture: a soft shadow under the title.
+    var shadow = false
+    @ViewBuilder let tag: () -> Tag
+    @ViewBuilder let meta: () -> Meta
+    @ViewBuilder let detail: () -> Detail
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            tag().frame(height: ShelfGrid.tag)
+            Text(title)
+                .font(.tvHeroTitle)
+                .lineLimit(2)
+                .lineSpacing(ShelfGrid.titleLineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
+                .shadow(color: .black.opacity(shadow ? 0.35 : 0), radius: 14, y: 4)
+                .padding(.top, ShelfGrid.tagToTitle)
+            HStack(spacing: 12) { meta() }
+                .font(.tvHeroMeta.monospacedDigit())
+                .foregroundStyle(.white.opacity(ShelfGrid.metaOpacity))
+                .lineLimit(1)
+                .frame(height: ShelfGrid.meta, alignment: .leading)
+                .padding(.top, ShelfGrid.titleToMeta)
+            if Detail.self != EmptyView.self {
+                detail().padding(.top, ShelfGrid.metaToBody)
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    }
+}
+
+/// The left column on the grid: the text's box, then the buttons (expanded) and the dots, bottom-anchored above the
+/// dock (collapsed) or above the screen's bottom edge (expanded).
+struct ShelfColumn<Info: View, Buttons: View, Dots: View>: View {
+    let width: CGFloat
+    let expanded: Bool
+    @ViewBuilder let info: () -> Info
+    @ViewBuilder let buttons: () -> Buttons
+    @ViewBuilder let dots: () -> Dots
+    @Environment(\.canvasSize) private var canvas
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            info().frame(width: width, height: ShelfGrid.info(canvas))
+            if expanded { buttons().frame(height: ShelfGrid.buttons).padding(.top, ShelfGrid.bodyToButtons) }
+            dots().frame(height: ShelfGrid.dots).padding(.top, expanded ? ShelfGrid.buttonsToDots : ShelfGrid.bodyToDots)
+        }
+        .foregroundStyle(.white)
+        .frame(width: width, alignment: .leading)
+        .padding(.leading, ShelfGrid.leading)
+        .frame(maxHeight: .infinity, alignment: .bottomLeading)
+        .padding(.bottom, ShelfGrid.bottom(canvas, expanded: expanded))
+    }
+}
+
 /// 哔哩哔哩、网易云、YouTube 选中时的主屏顶部，是整个主屏的门面，按 Apple TV / Apple Music 的样子做：
 /// - 视频、直播：封面占右边三分之二、顶到屏幕上沿，左边和下边慢慢淡进一片从封面里取的颜色，
 ///   标题、UP 主写在左边那片颜色上；封面慢慢放大一点点，不是一张死图。
@@ -602,14 +748,7 @@ struct AppShelfBanner: View {
         ])
     }
 
-    private func tag(_ item: AppShelfItem) -> some View {
-        Text(tagText(item))
-            .font(.tvBadge)
-            .tracking(0.6)
-            .padding(.horizontal, 14).frame(height: 34)
-            .background(accent, in: Capsule())
-            .foregroundStyle(.white)
-    }
+    private func tag(_ item: AppShelfItem) -> some View { ShelfTag(text: tagText(item), color: accent) }
 
     /// 第几个：一排小点，现在这个是一段长一点的。不跟着换页滑，一直在原地
     private var dots: some View {
@@ -630,7 +769,6 @@ struct AppShelfBanner: View {
                 .transaction { $0.animation = nil }
             }
             .opacity(count > 1 ? 1 : 0)
-            .frame(height: 8)
     }
 
     /// "播放"：一直在同一个地方，不跟着换页滑（焦点在它上面，左右翻页时它不动）
@@ -643,19 +781,28 @@ struct AppShelfBanner: View {
                 }
             }
         }
-        .frame(height: 76, alignment: .leading)
         .tvGlassTransition()
     }
 
-    /// 应用图标那一排的上沿（平时文字要在它上面；往上滑进来时图标让开）
-    private var dockTop: CGFloat { canvas.height - 320 }
+    /// 左边那一栏（ShelfGrid）：跟着换页滑的字（标签、标题、一行小字、下面那块），和不跟着滑的按钮、小点。
+    /// 字在一个每一页一样大的框里贴着下沿排：换页不用重新量，按钮、小点在每个应用的同一个位置
+    private func column<Info: View>(_ item: AppShelfItem, width: CGFloat, _ extra: AnyHashable...,
+                                    @ViewBuilder info: @escaping () -> Info) -> some View {
+        let box = CGSize(width: width, height: ShelfGrid.info(canvas))
+        return ShelfColumn(width: width, expanded: expanded) {
+            ShelfPage(offset: CGFloat(shelf.direction) * 70, id: item.id, key: [AnyHashable(item), AnyHashable(tagText(item))] + extra,
+                      content: info)
+                .frame(width: box.width, height: box.height)
+        } buttons: {
+            buttons
+        } dots: {
+            dots
+        }
+    }
 
     // MARK: 视频、直播
     //
-    // 每一页的东西都在同一个位置、同一个大小：标签、两行高的标题框（标题一行时下面留空，不往上挤）、
-    // UP 主那一行、按钮、小点。换页时只有内容在滑，框不动
-
-    private static let videoTitleBox: CGFloat = 140
+    // 封面铺在右上（不跟着栏），左边是 ShelfGrid 那一栏：标签、标题（一行就一行高）、UP 主那一行
 
     @ViewBuilder private func videoLayout(_ item: AppShelfItem) -> some View {
         let colors = colors(item)
@@ -676,6 +823,7 @@ struct AppShelfBanner: View {
                 .mask(LinearGradient(stops: [.init(color: .black, location: 0.62), .init(color: .clear, location: 1)],
                                      startPoint: .top, endPoint: .bottom))
         }
+        .frame(width: width, height: height)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         // 托字：左下角再压一层底色，标题落在封面上的那一截也看得清
         ShelfBackdrop(layers: [
@@ -683,92 +831,49 @@ struct AppShelfBanner: View {
                           colors: [colors.base.opacity(0.85), colors.base.opacity(0.35), .clear], locations: [0, 0.38, 0.6]),
         ])
         .frame(width: canvas.width, height: canvas.height)
-        VStack(alignment: .leading, spacing: 0) {
-            // 标签每一页都一样（"关注更新""为你推荐"），不跟着滑
-            tag(item)
-            // 跟着换页滑的那一块
-            page(70, item) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(item.title)
-                        .font(.tvHeroTitle)
-                        .lineLimit(2)
-                        .lineSpacing(2)
-                        .shadow(color: .black.opacity(0.35), radius: 14, y: 4)
-                        .frame(height: Self.videoTitleBox, alignment: .topLeading)
-                        .padding(.top, 20)
-                    HStack(spacing: 12) {
-                        // 头像：哔哩哔哩每一页都有这个位置（没头像时空着，名字不跳）；YouTube 没有头像，名字顶格
-                        if service.id == BilibiliStore.appID {
-                            BiliImage(url: item.avatar).frame(width: 40, height: 40).clipShape(Circle())
-                                .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1.5))
-                                .opacity(item.avatar == nil ? 0 : 1)
-                        }
-                        Text(item.subtitle).font(.tvHeroMeta).foregroundStyle(.white.opacity(0.92))
-                        Text(item.detail).font(.tvHeroMeta).foregroundStyle(.white.opacity(0.62))
-                    }
-                    .lineLimit(1)
-                    .frame(height: 40)
-                    .padding(.top, 14)
+        column(item, width: ShelfGrid.wideColumn(canvas)) {
+            ShelfInfo(title: item.title, shadow: true) {
+                tag(item)
+            } meta: {
+                // 头像：哔哩哔哩每一页都有这个位置（没头像时空着，名字不跳）；YouTube 没有头像，名字顶格
+                if service.id == BilibiliStore.appID {
+                    BiliImage(url: item.avatar).frame(width: 40, height: 40).clipShape(Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 1.5))
+                        .opacity(item.avatar == nil ? 0 : 1)
                 }
-                .foregroundStyle(.white)
+                Text([item.subtitle, item.detail].filter { !$0.isEmpty }.joined(separator: " · "))
+            } detail: {
+                EmptyView()
             }
-            // 不跟着滑的：按钮、小点
-            if expanded { buttons.padding(.top, 34) }
-            dots.padding(.top, 32)
         }
-        .foregroundStyle(.white)
-        .frame(width: canvas.width * 0.5, alignment: .leading)
-        .padding(.leading, 96)
-        .frame(maxHeight: .infinity, alignment: .bottomLeading)
-        .padding(.bottom, expanded ? 130 : canvas.height - dockTop + 70)
     }
 
     // MARK: 歌单
-    //
-    // 同样每一页同一个位置、同一个大小：标题框两行高、一种字号（不按字数变大变小），歌固定四行的位置
 
-    private static let playlistTitleBox: CGFloat = 140
+    /// 唱片放在哪：右边（连滑出来的黑胶）停在 ShelfGrid 的右边线上，上下在顶栏和应用图标那一排的正中间
+    private var sleeveOrigin: CGPoint {
+        CGPoint(x: ShelfGrid.artRight(canvas) - ShelfGrid.record, y: ShelfGrid.artMidY(canvas) - ShelfGrid.sleeve / 2)
+    }
 
-    /// 封套里的黑胶比封套小一点：12 寸唱片（约 302 毫米）装在 12⅜ 寸的封套里（约 314 毫米），是封套的 0.96
-    static func disc(in sleeve: CGFloat) -> CGFloat { (sleeve * 0.96).rounded() }
+    /// 唱片后面那一圈亮
+    private var recordGlow: UnitPoint {
+        UnitPoint(x: (sleeveOrigin.x + ShelfGrid.sleeve) / canvas.width, y: ShelfGrid.artMidY(canvas) / canvas.height)
+    }
 
     /// 网易云：歌单的封面是一张唱片的封套，一张黑胶从封套里滑出来、慢慢转（网易云自己的标志就是这张转着的黑胶）。
     /// 左边是歌单名、多少首，下面是前四首歌
     @ViewBuilder private func playlistLayout(_ item: AppShelfItem) -> some View {
         let colors = colors(item)
-        let sleeve: CGFloat = 540, disc = Self.disc(in: sleeve)
-        let sleeveX = canvas.width - 510 - sleeve, top: CGFloat = 140
+        let sleeve = ShelfGrid.sleeve, origin = sleeveOrigin
         // 背景：封面里的颜色斜着渐变，唱片后面透出一大圈亮
-        wash(colors, center: UnitPoint(x: (sleeveX + sleeve) / canvas.width, y: 0.3), radius: 620)
+        wash(colors, center: recordGlow, radius: 620)
             .frame(width: canvas.width, height: canvas.height)
-        page(160, item) { RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: disc, daily: isDaily(item)).id(item.id) }
-            .padding(.leading, sleeveX).padding(.top, top)
-        VStack(alignment: .leading, spacing: 0) {
-            page(70, item, tagText(item)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    tag(item)
-                    Text(item.title)
-                        .font(.tvHeroTitle)
-                        .lineLimit(2)
-                        .lineSpacing(2)
-                        .frame(height: Self.playlistTitleBox, alignment: .topLeading)
-                        .padding(.top, 18)
-                    Text(item.subtitle)
-                        .font(.tvHeroMeta)
-                        .foregroundStyle(.white.opacity(0.65))
-                        .lineLimit(1)
-                        .frame(height: 36, alignment: .leading)
-                    songList(item).padding(.top, 22)
-                }
-                .foregroundStyle(.white)
-            }
-            if expanded { buttons.padding(.top, 30) }
-            dots.padding(.top, 30)
+        page(160, item) { RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: ShelfGrid.disc, daily: isDaily(item)).id(item.id) }
+            .frame(width: ShelfGrid.record + 30, height: sleeve)
+            .padding(.leading, origin.x).padding(.top, origin.y)
+        column(item, width: ShelfGrid.artColumn(canvas)) {
+            ShelfInfo(title: item.title) { tag(item) } meta: { Text(item.subtitle) } detail: { songList(item) }
         }
-        .foregroundStyle(.white)
-        .frame(width: sleeveX - 96 - 70, alignment: .leading)
-        .padding(.leading, 96)
-        .padding(.top, top + 6)
     }
 
     // MARK: 正在播放（网易云在后台放的歌）
@@ -778,65 +883,35 @@ struct AppShelfBanner: View {
 
     @ViewBuilder private func nowPlayingLayout(_ item: AppShelfItem, song: NeteaseSong, paused: Bool) -> some View {
         let colors = colors(item)
-        let sleeve: CGFloat = 540, disc = Self.disc(in: sleeve)
-        let sleeveX = canvas.width - 510 - sleeve, top: CGFloat = 140
+        let sleeve = ShelfGrid.sleeve, origin = sleeveOrigin
         let store = tv.neteaseStore
-        wash(colors, center: UnitPoint(x: (sleeveX + sleeve) / canvas.width, y: 0.3), radius: 620)
+        wash(colors, center: recordGlow, radius: 620)
             .frame(width: canvas.width, height: canvas.height)
         page(160, item) {
-            RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: disc, daily: false,
+            RecordSleeve(cover: item.image, label: item.thumbnail, sleeve: sleeve, disc: ShelfGrid.disc, daily: false,
                          playing: paused ? .paused : .playing)
                 .id(item.id)
         }
-        .padding(.leading, sleeveX).padding(.top, top)
-        VStack(alignment: .leading, spacing: 0) {
-            page(70, item, tagText(item)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    tag(item)
-                    Text(item.title)
-                        .font(.tvHeroTitle)
-                        .lineLimit(2)
-                        .lineSpacing(2)
-                        .frame(height: Self.playlistTitleBox, alignment: .topLeading)
-                        .padding(.top, 18)
-                    Text(item.subtitle)
-                        .font(.tvHeroMeta)
-                        .foregroundStyle(.white.opacity(0.65))
-                        .lineLimit(1)
-                        .frame(height: 36, alignment: .leading)
-                    NeteaseNowPanel(store: store, clock: store.clock).padding(.top, 22)
-                }
-                .foregroundStyle(.white)
+        .frame(width: ShelfGrid.record + 30, height: sleeve)
+        .padding(.leading, origin.x).padding(.top, origin.y)
+        column(item, width: ShelfGrid.artColumn(canvas)) {
+            ShelfInfo(title: item.title) { tag(item) } meta: { Text(item.subtitle) } detail: {
+                NeteaseNowPanel(store: store, clock: store.clock)
             }
-            if expanded { buttons.padding(.top, 30) }
-            dots.padding(.top, 30)
         }
-        .foregroundStyle(.white)
-        .frame(width: sleeveX - 96 - 70, alignment: .leading)
-        .padding(.leading, 96)
-        .padding(.top, top + 6)
     }
 
     // MARK: 得到（书、课、正在听的那一讲）
     //
-    // 和网易云的歌单那一页同一套框：同样的左边距、一样宽的左栏，按钮、小点在同一个位置（换到网易云、从网易云换过来，它们不跳）。
-    // 左边的字从下往上排：最后一行落在网易云第四首歌的位置，离按钮、小点一样近；字少（书名一行、介绍两行）时
-    // 整块沉下来挨着按钮，不贴在顶上、和按钮之间空一大截。几行之间按组留空：标签、书名和它下面那行小字一组，介绍、
-    // 上架和评分（或者听到哪了）另一组。
-    // 背景是封面里取的颜色铺开（同网易云，不糊图）；右边是一本竖着的书：封面、书脊的明暗、右边一摞书页、柔和的影子。
-    // 书和网易云的唱片在同一条线上（上沿低于右上角那排按钮、下沿在应用图标那一排上面），往右靠，不挤在屏幕中间
-
-    private static let dedaoBook = CGSize(width: 420, height: 560)
-    /// 左边标签到内容底下那一整块最多多高：和网易云歌单那一页一样（标签 34、书名框 18 + 140、一行小字 36、22、四行歌 272）
-    private static let dedaoInfoHeight: CGFloat = 34 + 18 + 140 + 36 + 22 + 272
+    // 和网易云同一套框（ShelfGrid）：同样宽的左栏，标签、书名、一行小字，下面一块（评分和介绍，或者听到哪了）；
+    // 右边是一本竖着的书（封面、书脊的明暗、右边一摞书页、柔和的影子），和网易云的唱片一样上下居中、右边对齐
 
     @ViewBuilder private func dedaoLayout(_ item: AppShelfItem, paused: Bool, now: Bool) -> some View {
         let colors = colors(item)
-        let book = Self.dedaoBook
-        // 左边那一栏和网易云一样宽（它的封套从 canvas.width - 510 - 540 开始）；书的右边离屏幕右边 300
-        let columnEnd = canvas.width - 510 - 540
-        let bookX = canvas.width - 300 - book.width, top: CGFloat = 150
-        wash(colors, center: UnitPoint(x: (bookX + book.width / 2) / canvas.width, y: (top + book.height / 2) / canvas.height),
+        let book = ShelfGrid.book
+        // 书连右边那摞书页（多出 10）停在右边线上
+        let origin = CGPoint(x: ShelfGrid.artRight(canvas) - book.width - 10, y: ShelfGrid.artMidY(canvas) - book.height / 2)
+        wash(colors, center: UnitPoint(x: (origin.x + book.width / 2) / canvas.width, y: ShelfGrid.artMidY(canvas) / canvas.height),
              radius: 640)
             .frame(width: canvas.width, height: canvas.height)
         page(160, item, now, paused) {
@@ -844,62 +919,38 @@ struct AppShelfBanner: View {
                 .scaleEffect(now && paused ? 0.94 : 1)
                 .animation(.spring(response: 0.5, dampingFraction: 0.85), value: paused)
         }
-        .padding(.leading, bookX).padding(.top, top)
-        VStack(alignment: .leading, spacing: 0) {
-            page(70, item, tagText(item)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 12) {
-                        tag(item)
-                        // 书名前面的"英文新书""英文原版"这些：一个小小的框，不放进大标题里
-                        if let badge = dedaoBadge(item) {
-                            Text(badge)
-                                .font(.tvBadge)
-                                .padding(.horizontal, 12).frame(height: 32)
-                                .overlay(PillOutline().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                    }
-                    // 书名不占两行的空位（一行的书名下面不留一大块空）；整块贴着下沿，按钮、小点照样在网易云的位置
-                    Text(item.title)
-                        .font(.tvHeroTitle)
-                        .lineLimit(2)
-                        .lineSpacing(4)
-                        .padding(.top, 24)
-                    Text(item.subtitle)
-                        .font(.tvHeroMeta)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(1)
-                        .frame(height: 36, alignment: .leading)
-                        .padding(.top, 16)
-                    switch item.kind {
-                    case .dedaoNow(let track, let paused):
-                        DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: track, book: nil,
-                                            paused: paused, intro: track.summary)
-                            .padding(.top, 34)
-                    case .dedao(let book, true):
-                        DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: nil, book: book,
-                                            paused: true, intro: book.intro)
-                            .padding(.top, 34)
-                    case .dedao(let book, false):
-                        DedaoShelfDetail(item: book, intro: item.detail).padding(.top, 34)
-                    default:
-                        EmptyView()
+        .frame(width: book.width + 10, height: book.height)
+        .padding(.leading, origin.x).padding(.top, origin.y)
+        column(item, width: ShelfGrid.artColumn(canvas)) {
+            ShelfInfo(title: item.title) {
+                HStack(spacing: 12) {
+                    tag(item)
+                    // 书名前面的"英文新书""英文原版"这些：一个小小的框，不放进大标题里
+                    if let badge = dedaoBadge(item) {
+                        Text(badge)
+                            .font(.tvBadge)
+                            .padding(.horizontal, 12).frame(height: ShelfGrid.tag)
+                            .overlay(PillOutline().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
+                            .foregroundStyle(.white.opacity(0.85))
                     }
                 }
-                // 最后一行字和按钮（收起时是小点）之间留出和网易云最后一首歌一样的空
-                .padding(.bottom, 16)
-                // 字多得放不下（两行的书名、正在听一门课还有接下来两讲）时往上长，不把书名挤成一行
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(height: Self.dedaoInfoHeight, alignment: .bottomLeading)
-                .foregroundStyle(.white)
+            } meta: {
+                Text(item.subtitle)
+            } detail: {
+                switch item.kind {
+                case .dedaoNow(let track, let paused):
+                    DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: track, book: nil,
+                                        paused: paused, intro: track.summary)
+                case .dedao(let book, true):
+                    DedaoListeningPanel(store: tv.dedaoStore, player: tv.dedaoStore.player, item: item, track: nil, book: book,
+                                        paused: true, intro: book.intro)
+                case .dedao(let book, false):
+                    DedaoShelfDetail(item: book, intro: item.detail)
+                default:
+                    EmptyView()
+                }
             }
-            if expanded { buttons.padding(.top, 30) }
-            dots.padding(.top, 30)
         }
-        .foregroundStyle(.white)
-        .frame(width: columnEnd - 96 - 70, alignment: .leading)
-        .padding(.leading, 96)
-        .padding(.top, 140 + 6)
     }
 
     /// 书名前面的小框（"英文新书"）：正在听的那一讲从它的名字里取
@@ -935,7 +986,7 @@ struct AppShelfBanner: View {
 /// 网易云那几页左下角的一首歌：序号、小封面、歌名、歌手。歌单那一页和正在播放那一页用同一个，位置一模一样。
 /// divider：下面画一条细线（和下一行隔开；最后一行不画）
 private struct ShelfSongRow: View {
-    static let height: CGFloat = 68
+    static let height: CGFloat = 64
     static let width: CGFloat = 680
     let number: Int
     let song: NeteaseSong
@@ -951,7 +1002,7 @@ private struct ShelfSongRow: View {
                 .frame(width: 46, height: 46)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             Text(song.name).font(.tvCardTitle).lineLimit(1)
-            Text(song.artist).font(.tvCardDetail).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+            Text(song.artist).font(.tvCardDetail).foregroundStyle(.white.opacity(ShelfGrid.detailOpacity)).lineLimit(1)
             Spacer(minLength: 0)
         }
         .frame(height: Self.height)
@@ -1296,7 +1347,7 @@ private struct NeteaseNowPanel: View {
                     Text("−" + clockText(max(0, clock.duration - clock.time)))
                 }
                 .font(.tvTimecode)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(ShelfGrid.detailOpacity))
             }
             .frame(width: width, height: ShelfSongRow.height)
             .overlay(alignment: .bottom) {
@@ -1354,26 +1405,19 @@ private struct DedaoShelfBook: View {
     }
 }
 
-/// 得到一本书、一门课那一页下面那块（和正在听那一块一样高）：两三行介绍，下面一行听到哪了——
-/// "已听 40%"和一条细进度、"已听完"，没听过的写评分和多少人学过（课程写一共几讲）
+/// 得到一本书、一门课那一页下面那块，和正在听那一块同一个排法：先一行听到哪了——"已听 40%"和一条细进度、"已听完"，
+/// 没听过的写评分和多少人学过（课程写一共几讲）；下面两三行介绍
 private struct DedaoShelfDetail: View {
     let item: DedaoAPI.Item
     let intro: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 30) {
-            if !intro.isEmpty {
-                Text(intro)
-                    .font(.tv(.caption1))   // 同得到 App 里书的简介
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineSpacing(9)
-                    .lineLimit(3)
-            }
-            HStack(spacing: 28) {
+        VStack(alignment: .leading, spacing: ShelfGrid.bodyGap) {
+            HStack(spacing: 24) {
                 if item.finished || item.progress >= 100 {
                     Label("已听完", systemImage: "checkmark.circle.fill")
                 } else if item.progress > 0 {
-                    Text("已听 \(item.progress)%").monospacedDigit()
+                    Text("已听 \(item.progress)%")
                     ZStack(alignment: .leading) {
                         Capsule().fill(.white.opacity(0.22))
                         Capsule().fill(.white).frame(width: 300 * CGFloat(item.progress) / 100)
@@ -1386,16 +1430,25 @@ private struct DedaoShelfDetail: View {
                     if !item.heat.isEmpty { Text(item.heat) }
                 }
             }
-            .font(.tvHeroMeta)
-            .foregroundStyle(.white.opacity(0.62))
+            .font(.tvTimecode)
+            .foregroundStyle(.white.opacity(ShelfGrid.detailOpacity))
             .lineLimit(1)
+            if !intro.isEmpty {
+                Text(intro)
+                    .font(ShelfGrid.bodyFont)   // 同得到 App 里书的简介
+                    .foregroundStyle(.white.opacity(ShelfGrid.bodyOpacity))
+                    .lineSpacing(ShelfGrid.bodyLineSpacing)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
 
 /// 正在听的书那一页下面那块（放着、停着、这次还没放过的"继续学习"都是它）：
 /// 一条细进度，下面左边"已听 22%"、右边"还剩 15:24"；再是"上次听到"那几句文稿（左边一条细细的颜色，像引文）；
-/// 不止一讲时最后是接下来的两讲。只有进度跟着播放器变（放着时一秒两次）；那几句在暂停、翻到这一页时才重新取
+/// 不止一讲时最后是接下来的一两讲（排得下几讲看书名是一行还是两行）。只有进度跟着播放器变（放着时一秒两次）；
+/// 那几句在暂停、翻到这一页时才重新取
 private struct DedaoListeningPanel: View {
     let store: DedaoStore
     @ObservedObject var player: DedaoPlayer
@@ -1412,7 +1465,9 @@ private struct DedaoListeningPanel: View {
 
     var body: some View {
         let (fraction, left) = progress
-        let next = track == nil ? [] : DedaoStore.upcoming(player.queue, after: player.index, count: 2)
+        // 书名两行时少排一点，整块不顶到顶栏
+        let longTitle = item.title.count > 12
+        let next = track == nil ? [] : DedaoStore.upcoming(player.queue, after: player.index, count: longTitle ? 1 : 2)
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 12) {
                 ZStack(alignment: .leading) {
@@ -1426,7 +1481,7 @@ private struct DedaoListeningPanel: View {
                     if left > 0 { Text("还剩 " + clockText(left)) }
                 }
                 .font(.tvTimecode)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(ShelfGrid.detailOpacity))
             }
             .frame(width: width)
             // 上次听到：那一段文稿的两三行；没有文稿时放介绍（介绍上面不写标题）
@@ -1440,15 +1495,15 @@ private struct DedaoListeningPanel: View {
                                 .font(.tv(.caption2, emphasized: true)).foregroundStyle(Self.accent)
                         }
                         Text(text)
-                            .font(.tv(.caption1))   // 同得到 App 里书的简介
-                            .foregroundStyle(.white.opacity(0.8))
-                            .lineSpacing(6)
-                            .lineLimit(item.title.count > 12 ? 2 : 3)
+                            .font(ShelfGrid.bodyFont)   // 同得到 App 里书的简介
+                            .foregroundStyle(.white.opacity(ShelfGrid.bodyOpacity))
+                            .lineSpacing(ShelfGrid.bodyLineSpacing)
+                            .lineLimit(longTitle || !next.isEmpty ? 2 : 3)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: width, alignment: .leading)
-                .padding(.top, 26)
+                .padding(.top, ShelfGrid.bodyGap)
             }
             if !next.isEmpty {
                 VStack(spacing: 0) {
@@ -1462,14 +1517,15 @@ private struct DedaoListeningPanel: View {
                                 .font(.tvCardTitle).lineLimit(1)
                             Spacer(minLength: 0)
                             if lecture.track.duration > 0 {
-                                Text(clockText(lecture.track.duration)).font(Font.tvCardDetail.monospacedDigit()).foregroundStyle(.white.opacity(0.55))
+                                Text(clockText(lecture.track.duration)).font(Font.tvCardDetail.monospacedDigit())
+                                    .foregroundStyle(.white.opacity(ShelfGrid.detailOpacity))
                             }
                         }
-                        .frame(width: width, height: 58)
+                        .frame(width: width, height: ShelfSongRow.height)
                         .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.09)).frame(height: 1) }
                     }
                 }
-                .padding(.top, 20)
+                .padding(.top, ShelfGrid.bodyGap)
             }
         }
         .frame(width: width, alignment: .leading)

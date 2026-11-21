@@ -97,8 +97,21 @@ extension TVController {
         }
     }
 
+    /// The film showing on Videos' Top Shelf now (its films take turns on the shelf's beat).
+    var videosShelfFilm: Movie? {
+        let shelf = movieLibrary.shelf
+        guard !shelf.isEmpty else { return nil }
+        return movieLibrary.movie(shelf[appShelf.beat % shelf.count].path)
+    }
+
     func activateShelf(_ index: Int) {
         let id = shelfService.id
+        // Videos: Play (or Resume) the film showing, as Apple TV's Top Shelf does; with none, the app
+        if case .movies = shelfService.kind, let film = videosShelfFilm {
+            openApp(shelfService.id)
+            playFromMovies(film)
+            return
+        }
         if AppShelf.services.contains(id), appShelf.current(for: id) != nil {
             let actions = appShelf.actions(for: id)
             if actions.indices.contains(index) { appShelf.activate(actions[index], for: id) }
