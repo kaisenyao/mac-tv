@@ -1023,14 +1023,28 @@ extension TVController {
 
 /// Settings' sizes, matched to Apple TV's own Settings at 1080p: a row about 6% of the screen's height and 41% of
 /// its width, its title in tvOS's Headline (38 points, as Apple's measure) and its value a step smaller.
+/// Apple TV's Settings, measured from tvOS 27 at 1920 points wide: the list 779 wide and 80 from the right edge, its
+/// first row 190 from the top; rows 66 tall and 14 apart, capsules; a row's title and its value both 38 points,
+/// medium, 33 in from the row's ends, the value grey; the focused row a white capsule 4 larger all round. A group's
+/// title is 27 points, in line with the rows' text, and 94 lie between the last row of one group and the first of the
+/// next. On the left, one big picture, 540 square, centred 525 across and 507 down.
 enum SettingsMetrics {
     static let title = Font.tv(.headline)
-    static let value = Font.tv(.callout)
+    static let value = Font.tv(.headline)
     static let rowHeight: CGFloat = 66
-    static let rowSpacing: CGFloat = 12
-    static let listWidth: CGFloat = 790
-    static let corner: CGFloat = 20
-    static let inset: CGFloat = 26
+    static let rowSpacing: CGFloat = 14
+    static let listWidth: CGFloat = 779
+    static let listTrailing: CGFloat = 80
+    static let listTop: CGFloat = 190
+    /// A row is a capsule.
+    static let corner: CGFloat = rowHeight / 2
+    static let inset: CGFloat = 33
+    static let groupTitle = Font.system(size: 27, weight: .medium)
+    /// Above a group's title (after the rows' own spacing) and under it: 94 from row to row across it.
+    static let groupTop: CGFloat = 36
+    static let groupToRow: CGFloat = 12
+    static let hero: CGFloat = 540
+    static let heroCentre = CGPoint(x: 525, y: 507)
     /// The bottom of Home's status bar (the time, Control Center and the avatar), which a scrolling page stays below.
     static let belowStatusBar: CGFloat = 104
 }
@@ -1081,10 +1095,9 @@ struct SettingsPages: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        ZStack(alignment: .topTrailing) {
             hero(panel)
-                .padding(.leading, 120)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             Group {
                 if !panel.open {
                     sections(panel)
@@ -1098,7 +1111,7 @@ struct SettingsPages: View {
                 }
             }
             .frame(width: SettingsMetrics.listWidth)
-            .padding(.trailing, 100)
+            .padding(.trailing, SettingsMetrics.listTrailing)
         }
         .foregroundStyle(.white)
         .frame(width: canvas.width, height: canvas.height)
@@ -1115,30 +1128,35 @@ struct SettingsPages: View {
 
     private func hero(_ panel: SettingsPanel) -> some View {
         let hero = tv.settingsHero(panel)
-        return VStack(alignment: .leading, spacing: 28) {
+        // The picture where Apple TV's is, and as big; "SETTINGS" over it and the page's name under it, on its left edge
+        let side = SettingsMetrics.hero, corner = side * 0.235, label: CGFloat = 28, gap: CGFloat = 28
+        return VStack(alignment: .leading, spacing: gap) {
             Text("SETTINGS").font(.tv(.caption2, emphasized: true)).tracking(1.6).opacity(panel.connectRemote ? 0 : 0.5)
+                .frame(height: label)
             ZStack {
                 if let avatar = hero.avatar {
-                    ProfileAvatar(profile: avatar, size: 280)
+                    ProfileAvatar(profile: avatar, size: side)
                         .transition(.opacity)
                 } else {
                     // A quick crossfade as focus moves between sections, or between the remotes.
                     Image(systemName: hero.symbol)
-                        .font(.system(size: 120, weight: .regular))
-                        .frame(width: 280, height: 280)
+                        .font(.system(size: side * 0.43, weight: .regular))
+                        .frame(width: side, height: side)
                         .id(hero.symbol)
                         .transition(.opacity)
                 }
             }
-            .frame(width: 280, height: 280)
+            .frame(width: side, height: side)
             // A plain tile, not glass: Settings sits on a frosted backdrop, and glass there would read flat.
-            .background(.white.opacity(hero.avatar == nil ? 0.08 : 0), in: RoundedRectangle(cornerRadius: 66, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 66, style: .continuous).strokeBorder(.white.opacity(hero.avatar == nil ? 0.14 : 0)))
+            .background(.white.opacity(hero.avatar == nil ? 0.08 : 0), in: RoundedRectangle(cornerRadius: corner, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(.white.opacity(hero.avatar == nil ? 0.14 : 0)))
             .animation(.easeInOut(duration: 0.18), value: hero.symbol)
             Text(hero.title).font(.tv(.title2, emphasized: true)).lineLimit(1)
                 .id(hero.title)
                 .transition(.opacity)
         }
+        .padding(.leading, SettingsMetrics.heroCentre.x - side / 2)
+        .padding(.top, SettingsMetrics.heroCentre.y - side / 2 - gap - label)
         .animation(Motion.appear, value: hero.title)
         .animation(Motion.appear, value: hero.avatar == nil)
     }
@@ -1154,6 +1172,8 @@ struct SettingsPages: View {
                 .equatable()
             }
         }
+        .padding(.top, SettingsMetrics.listTop)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func page(_ panel: SettingsPanel) -> some View {
@@ -1169,11 +1189,12 @@ struct SettingsPages: View {
                     // 按行本身认（不按第几行）：换了屏保类型、少了一行"显示时钟"时，那一行淡出、下面的平滑往上挪，
                     // 不会变成"第三行的字突然换成预览、最后一行一下子没了"
                     ForEach(Array(rows.enumerated()), id: \.element) { index, row in
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: SettingsMetrics.groupToRow) {
                             if let group = tv.settingsHeader(row, panel: panel),
                                index == 0 || tv.settingsHeader(rows[index - 1], panel: panel) != group {
-                                Text(group).font(.tv(.caption1, emphasized: true)).tracking(1.4).opacity(0.5)
-                                    .padding(.leading, 6).padding(.top, index == 0 ? 0 : 12)
+                                Text(group).font(SettingsMetrics.groupTitle).opacity(0.5)
+                                    .padding(.leading, SettingsMetrics.inset)
+                                    .padding(.top, index == 0 ? 0 : SettingsMetrics.groupTop)
                             }
                             rowView(row, focused: index == focus, panel: panel)
                         }
@@ -1188,10 +1209,11 @@ struct SettingsPages: View {
                             .padding(.horizontal, SettingsMetrics.inset).padding(.top, 6)
                     }
                 }
-                // Starts below the status bar, so a long list's first row is never under it.
-                .padding(.top, SettingsMetrics.belowStatusBar + 50)
+                // From the top, where Apple TV's lists start (below the status bar, so a long list's first row is
+                // never under it).
+                .padding(.top, SettingsMetrics.listTop)
                 .padding(.bottom, 60)
-                .frame(minHeight: canvas.height)
+                .frame(minHeight: canvas.height, alignment: .top)
             }
             .scrollDisabled(true)
             .scrollClipDisabled()
@@ -1281,13 +1303,13 @@ struct SettingsRow: View, Equatable {
                 // tvOS focus: a bright white platter with dark text; a row asking to press again turns red.
                 .foregroundStyle(focused && !content.warning ? .black : .white)
                 .background {
-                    let shape = RoundedRectangle(cornerRadius: SettingsMetrics.corner, style: .continuous)
+                    // A capsule, filled as a plain path (see PillOutline)
+                    let shape = PillOutline()
                     if focused {
-                        // One platter that glides from row to row as focus moves, like tvOS. Its shadow is the
-                        // platter's alone, not cast by the text on it.
+                        // One platter that glides from row to row as focus moves, like tvOS: 4 points larger all
+                        // round. Its shadow is the platter's alone, not cast by the text on it.
                         shape.fill(content.warning ? Color(hex: "#FF453A") : .white)
-                            .padding(.horizontal, -8)
-                            .padding(.vertical, -4)
+                            .padding(-4)
                             .shadow(color: .black.opacity(0.4), radius: 16, y: 10)
                             .matchedGeometryEffect(id: "focus", in: focusSpace)
                     } else {
@@ -1295,7 +1317,7 @@ struct SettingsRow: View, Equatable {
                     }
                 }
                 .animation(Motion.focus, value: focused)
-                .contentShape(Rectangle())
+                .contentShape(Capsule())
         }
         .buttonStyle(PressDip(presses: presses, focused: focused))
     }
