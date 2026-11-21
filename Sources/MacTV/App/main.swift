@@ -375,6 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self, event.window === window else { return event }
             if tv.noteActivity() { return nil }
+            if ScrollClaims.take(event) { return nil }   // over the browser's tab strip: the strip scrolls
             return tv.trackpadGestures.feed(TrackpadGestures.Sample(event), from: .trackpad) ? nil : event
         }
         // ⌘ let go while ⌘Q is held: too soon, Mac TV stays (see AppQuit). Let go while ⌘H is held: the TV button is.

@@ -153,3 +153,21 @@ extension TrackpadGestures.Sample {
         self.precise = precise
     }
 }
+
+/// Views that scroll themselves under the pointer (the browser's tab strip): a mouse wheel or trackpad scroll over one,
+/// while the pointer is in use, goes to it before Mac TV's own scroll rules (TrackpadGestures), so a long row of tabs
+/// follows the hand anywhere — on the Start Page and with focus in the bar too. main.swift's scroll monitor asks first.
+@MainActor
+enum ScrollClaims {
+    private static var handlers: [ObjectIdentifier: (NSEvent) -> Bool] = [:]
+
+    /// `handler` takes a scroll (true) when it's over its view.
+    static func add(_ owner: AnyObject, _ handler: @escaping (NSEvent) -> Bool) { handlers[ObjectIdentifier(owner)] = handler }
+    static func remove(_ owner: AnyObject) { handlers[ObjectIdentifier(owner)] = nil }
+
+    /// A view under the pointer took this scroll.
+    static func take(_ event: NSEvent) -> Bool {
+        guard PointerActivity.shared.active else { return false }
+        return handlers.values.contains { $0(event) }
+    }
+}

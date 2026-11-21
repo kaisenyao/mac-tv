@@ -366,8 +366,8 @@ private struct BarButton: View {
 }
 
 /// 鼠标滚轮、触控板在标签那一排上滚：告诉 track 横着滚多少（画布上的点，往左滚是负的）。
-/// 一个看不见、点不到的视图垫在那一排后面，只看这一下滚动落在不在自己身上。Mac TV 自己的滚动规则（TrackpadGestures：
-/// 开始页上、焦点在标签栏里时滚动是走焦点）先拿到这一下，它不要的（网页上、焦点在网页里时）才到这里
+/// 一个看不见、点不到的视图垫在那一排后面，只看这一下滚动落在不在自己身上。鼠标在用时，落在它身上的滚动先给它
+/// （ScrollClaims，排在 Mac TV 自己的滚动规则前面），开始页上、焦点在标签栏里也一样跟着手滚
 private struct StripScrollWheel: NSViewRepresentable {
     let scroll: (CGFloat) -> Void
 
@@ -376,25 +376,22 @@ private struct StripScrollWheel: NSViewRepresentable {
 
     final class WheelView: NSView {
         var scroll: ((CGFloat) -> Void)?
-        private var monitor: Any?
-
         override func hitTest(_ point: NSPoint) -> NSView? { nil }   // 点击照常给标签
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
+            ScrollClaims.remove(self)
             guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self, let window = self.window, event.window === window, !self.isHiddenOrHasHiddenAncestor else { return event }
+            ScrollClaims.add(self) { [weak self] event in
+                guard let self, let window = self.window, event.window === window, !self.isHiddenOrHasHiddenAncestor else { return false }
                 let frame = self.convert(self.bounds, to: nil)
-                guard frame.width > 0, frame.contains(event.locationInWindow) else { return event }
+                guard frame.width > 0, frame.contains(event.locationInWindow) else { return false }
                 let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
                 // 横着滑是横着滚；鼠标滚轮（只有竖的）也滚这一排。滚轮一格是一行，换成点
                 var delta = abs(dx) >= abs(dy) ? dx : dy
                 if !event.hasPreciseScrollingDeltas { delta *= 16 }
                 self.scroll?(delta * self.bounds.width / frame.width)
-                return nil
+                return true
             }
         }
     }
