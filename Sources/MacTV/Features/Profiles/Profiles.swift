@@ -513,15 +513,20 @@ struct ProfileDropdown: View {
                         .frame(width: Self.side, height: Self.side)
                 }
             }
+            // The focus ring first, then the tick on top of it (on the avatar's edge, never under the ring), both
+            // growing with the avatar
+            .overlay(Circle().strokeBorder(.white, lineWidth: 3).padding(-5).opacity(focused ? 1 : 0))
             .overlay(alignment: .topTrailing) {
                 if profile?.id == tv.profile.id {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .heavy))
                         .frame(width: 34, height: 34)
                         .background(Circle().fill(Color(hex: "#30D158")))
-                        .offset(x: 2, y: -2)
+                        .overlay(Circle().strokeBorder(.black.opacity(0.25), lineWidth: 1))
+                        .offset(x: 8, y: -8)
                 }
             }
-            .avatarFocus(focused: focused)
+            .scaleEffect(focused ? 1.12 : 1)
+            .shadow(color: .black.opacity(focused ? 0.4 : 0), radius: 14, y: 8)
             Text(profile?.name ?? "Add Profile")
                 .font(.tvMenuDetail)
                 .lineLimit(1)
