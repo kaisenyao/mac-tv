@@ -377,9 +377,10 @@ struct ControlCenterView: View {
     /// is in Control Center.
     private static let glyph = CGSize(width: 42, height: 42)
     /// Symbols Apple draws in a round button of its own (the iPhone's Apple TV Remote, in Apple's guide), at the same
-    /// share of the button: Play/Pause and a screen 37% of it across, so 35 points in ours; the speaker 34% of it tall.
+    /// share of the button: Play/Pause and a screen 37% of it across, so 35 points in ours; the speaker itself 34% of
+    /// it tall, so 32 points (its box is the one the speaker with all three waves fills at that size).
     private static let glyphWidths: [String: CGFloat] = ["playpause.fill": 35, "tv.slash": 35, "sparkles.tv": 35]
-    private static let speakerRoundGlyph = CGSize(width: 44, height: 32)
+    private static let speakerRoundGlyph = CGSize(width: 61, height: 44)
     /// The box every tile's symbol is fitted to: Apple TV's Wi-Fi is 45 across, its round ones (Sleep Timer) 41. A remote
     /// or a phone is narrow, so it's drawn taller than the box, to weigh what a display or a dial does.
     private static let tileGlyph = CGSize(width: 45, height: 41)
