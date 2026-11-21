@@ -340,7 +340,7 @@ extension TVController {
 // MARK: Views
 
 /// Drawn at Apple TV's own sizes at 1080p: tiles about 206 points wide and 95 tall, Sleep Now as tall as two, round
-/// buttons as wide as a tile is tall, and Apple's tile text: 24-point titles, 22-point details.
+/// buttons as wide as a tile is tall, and Apple's tile text: 20-point titles and details, medium.
 struct ControlCenterView: View {
     @ObservedObject var tv: TVController
     @ObservedObject private var siriRemote = SiriRemoteStatus.shared
@@ -352,6 +352,8 @@ struct ControlCenterView: View {
     private static let width = column * 2 + gap
     /// The box every round button's symbol is fitted to.
     private static let glyph = CGSize(width: 40, height: 36)
+    /// The box every tile's symbol is fitted to: as tall as Apple TV's beside 20-point text.
+    private static let tileGlyph = CGSize(width: 36, height: 32)
     /// The blue of a connected remote or the sound output, as on Apple TV.
     private static let tint = Color(hex: "#5AC8FA")
 
@@ -513,9 +515,9 @@ struct ControlCenterView: View {
         let focused = panel.item == .sleepNow
         let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
         return Button { tv.activateControl(.sleepNow) } label: {
-            VStack(spacing: 10) {
-                Image(systemName: "power").font(.system(size: 76, weight: .regular))
-                Text("Sleep Now").font(.system(size: 22, weight: .semibold))
+            VStack(spacing: 16) {
+                Image(systemName: "power").font(.system(size: 88, weight: .light))
+                Text("Sleep Now").font(.system(size: 20, weight: .medium))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
             }
@@ -532,23 +534,28 @@ struct ControlCenterView: View {
                       title: String, detail: String, tinted: Bool = false) -> some View {
         let focused = panel.item == item
         return Button { tv.activateControl(item) } label: {
-            HStack(spacing: 8) {
+            // As Apple TV's: the symbol well in from the edge with room before the text, the title and its detail the
+            // same size and weight (the detail only dimmer), smaller than the tile so it breathes.
+            HStack(spacing: 12) {
+                // Every tile's symbol fitted to the same box, so a tall remote and a wide display look the same size
                 Image(systemName: symbol)
-                    .font(.system(size: 28, weight: .medium))
+                    .resizable()
+                    .fontWeight(.regular)
+                    .scaledToFit()
+                    .frame(width: Self.tileGlyph.width, height: Self.tileGlyph.height)
                     .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(focused ? Color.black : tinted ? Self.tint : .white)
-                    .frame(width: 34)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.system(size: 24, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 20, weight: .medium))
                         .minimumScaleFactor(0.85)
-                    Text(detail).font(.system(size: 22, weight: .medium)).opacity(0.62)
+                    Text(detail).font(.system(size: 20, weight: .medium)).opacity(0.6)
                         .minimumScaleFactor(0.75)   // "Game Controller · 70%" still fits
                         .contentTransition(detail.first?.isNumber == true ? .numericText() : .opacity)
                 }
                 .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 14)
+            .padding(.leading, 18)
             .padding(.trailing, 10)
             .foregroundStyle(focused ? .black : .white)
             .frame(width: Self.column, height: Self.row)
