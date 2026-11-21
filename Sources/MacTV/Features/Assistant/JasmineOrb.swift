@@ -171,14 +171,13 @@ enum OrbShader {
       float deep = ss(.62, 1., r);
       float3 color = mix(picture*(1.-.09*deep*deep), mix(picture, float3(1.), deep*deep*.22), u.page);
 
-      // The light on the ball, from the upper left and swaying a little: a faint arc, as a window lies on glass, with
-      // a small bright point in it; and opposite, low in the ball, the light the glass gathers.
-      float3 n = float3(p, sqrt(max(1.-r*r, 0.)));
-      float3 light = normalize(float3(-.46+.05*sin(u.time*.37), .60+.04*cos(u.time*.29), .65));
-      float facing = max(dot(n, normalize(light+float3(0., 0., 1.))), 0.);
-      float lit = dot(around, normalize(light.xy));
+      // The light on the ball, from the upper left and swaying a little: a faint arc, as a window lies on glass (no
+      // bright point in it: a dot of light on her sky reads as a blemish); and opposite, low in the ball, the light
+      // the glass gathers.
+      float2 light = normalize(float2(-.46+.05*sin(u.time*.37), .60+.04*cos(u.time*.29)));
+      float lit = dot(around, light);
       float arc = ss(.52, .72, r)*(1.-ss(.80, .95, r))*pow(max(lit, 0.), 3.);
-      color += float3(1.)*(arc*.14+pow(facing, 320.)*.42)*(1.+.5*u.level);
+      color += float3(1.)*arc*.14*(1.+.5*u.level);
       float pool = ss(.55, .88, r)*(1.-ss(.90, 1., r))*pow(max(-lit, 0.), 2.);
       color += float3(.86, .93, 1.)*pool*.11;
 
