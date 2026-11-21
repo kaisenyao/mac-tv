@@ -802,35 +802,33 @@ struct AppShelfBanner: View {
 
     // MARK: 视频、直播
     //
-    // 封面铺在右上（不跟着栏），左边是 ShelfGrid 那一栏：标签、标题（一行就一行高）、UP 主那一行
+    // 封面铺满整个屏幕，一直到 Dock 后面（像 Apple TV 的 Top Shelf：Dock 是通透的玻璃，后面要有画面）；
+    // 左边是 ShelfGrid 那一栏：标签、标题（一行就一行高）、UP 主那一行，下面压一层封面里取的深色托住字
 
     @ViewBuilder private func videoLayout(_ item: AppShelfItem) -> some View {
         let colors = colors(item)
-        let width = canvas.width * 0.7, height = width * 9 / 16
-        // 底色：封面里取的深色，右上角透出一点封面的亮色（换页时颜色跟着动画慢慢变）
-        ShelfBackdrop(layers: [
-            ShelfGradient(kind: .solid, colors: [colors.base]),
-            ShelfGradient(kind: .radial(center: UnitPoint(x: 0.82, y: 0.3), radius: canvas.width * 0.55),
-                          colors: [colors.glow.opacity(0.45), .clear]),
-        ])
-        .frame(width: canvas.width, height: canvas.height)
-        // 封面：右上角，左边、下边淡进底色里
-        page(140, item) {
-            DriftingCover(url: item.image)
-                .frame(width: width, height: height)
-                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.42)],
-                                     startPoint: .leading, endPoint: .trailing))
-                .mask(LinearGradient(stops: [.init(color: .black, location: 0.62), .init(color: .clear, location: 1)],
-                                     startPoint: .top, endPoint: .bottom))
+        // 底色：封面里取的深色（封面还没下好、换页的那一瞬间看到的是它；换页时颜色跟着动画慢慢变）
+        ShelfBackdrop(layers: [ShelfGradient(kind: .solid, colors: [colors.base])])
+            .frame(width: canvas.width, height: canvas.height)
+        // 换页时整张图只滑一小段，而且两边各多出这一段：滑的过程中屏幕边上不会露出底色
+        let slide: CGFloat = 60
+        page(slide, item) {
+            DriftingCover(url: item.image).frame(width: canvas.width + slide * 2, height: canvas.height)
         }
-        .frame(width: width, height: height)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        // 托字：左下角再压一层底色，标题落在封面上的那一截也看得清
+        .frame(width: canvas.width + slide * 2, height: canvas.height)
+        .frame(width: canvas.width, height: canvas.height)
+        // 托字：从左边压一层底色，只压到 Dock 上方为止（往下淡掉），Dock 后面整条都是画面
         ShelfBackdrop(layers: [
             ShelfGradient(kind: .linear(start: .leading, end: .trailing),
-                          colors: [colors.base.opacity(0.85), colors.base.opacity(0.35), .clear], locations: [0, 0.38, 0.6]),
+                          colors: [colors.base.opacity(0.94), colors.base.opacity(0.78), colors.base.opacity(0.36), .clear],
+                          locations: [0, 0.28, 0.5, 0.7]),
         ])
         .frame(width: canvas.width, height: canvas.height)
+        .mask(alignment: .top) {
+            let end = expanded ? 1 : (ShelfGrid.dockTop(canvas) + 10) / canvas.height
+            LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: max(0, end - 0.09)),
+                                   .init(color: expanded ? .black : .clear, location: end)], startPoint: .top, endPoint: .bottom)
+        }
         column(item, width: ShelfGrid.wideColumn(canvas)) {
             ShelfInfo(title: item.title, shadow: true) {
                 tag(item)

@@ -121,14 +121,17 @@ struct AppBanner: View {
                     ShowBackdrop(image: show.image, since: clock.beatStarted)
                 }
             }
-            // Legibility: a wash from the left for the text, a bottom wash for the dock or the button.
+            // Legibility: a wash from the left for the text. A picture runs to the bottom of the screen, behind the
+            // dock, as Apple TV's Top Shelf does (the dock is clear glass: it needs the picture behind it); only the
+            // plain artwork of an app with nothing to show still darkens downwards.
             LinearGradient(stops: [.init(color: .black.opacity(about != nil || show == nil ? 0.7 : (expanded ? 0.6 : 0.18)), location: 0),
                                    .init(color: .black.opacity(about != nil || expanded ? 0.35 : 0.12), location: 0.4),
                                    .init(color: .clear, location: 0.65)],
                            startPoint: .leading, endPoint: .trailing)
-            LinearGradient(stops: [.init(color: .clear, location: 0.45),
-                                   .init(color: .black.opacity(show == nil ? 0.75 : 0.85), location: 1)],
-                           startPoint: .top, endPoint: .bottom)
+            if show == nil {
+                LinearGradient(stops: [.init(color: .clear, location: 0.45), .init(color: .black.opacity(0.75), location: 1)],
+                               startPoint: .top, endPoint: .bottom)
+            }
             if show != nil {
                 LinearGradient(colors: [.black.opacity(0.25), .clear], startPoint: .top, endPoint: .center)
             }
