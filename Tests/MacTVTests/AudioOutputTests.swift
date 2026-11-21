@@ -26,10 +26,10 @@ struct AudioOutputTests {
         #expect(btHeadphones.symbol == "headphones")
 
         let hdmiTV = AudioOutputDevice(id: 6, name: "LG TV", transport: kAudioDeviceTransportTypeHDMI, isDefault: false)
-        #expect(hdmiTV.symbol == "tv.fill")
+        #expect(hdmiTV.symbol == "tv", "Apple TV's TV glyph, as the display list's")
 
         let dprtMonitor = AudioOutputDevice(id: 7, name: "DELL S2721DS", transport: 0x64707274, isDefault: false)
-        #expect(dprtMonitor.symbol == "tv.fill")
+        #expect(dprtMonitor.symbol == "tv")
 
         let airPlay = AudioOutputDevice(id: 8, name: "HomePod", transport: kAudioDeviceTransportTypeAirPlay, isDefault: false)
         #expect(airPlay.symbol == "airplayaudio")
@@ -40,7 +40,7 @@ struct AudioOutputTests {
         #expect(builtIn.symbol == "macbook" && builtIn.tileSymbol == AudioOutputDevice.speakerSymbol)
         let mini = AudioOutputDevice(id: 10, name: "Mac mini Speakers", transport: kAudioDeviceTransportTypeBuiltIn, isDefault: false)
         #expect(mini.symbol == "macmini" && mini.tileSymbol == AudioOutputDevice.speakerSymbol)
-        #expect(hdmiTV.tileSymbol == "tv.fill")
+        #expect(hdmiTV.tileSymbol == "tv")
     }
 
     @Test

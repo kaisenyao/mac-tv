@@ -66,9 +66,10 @@ import UniformTypeIdentifiers
 
     // MARK: The picture
 
-    /// orb.js's shader compiled for Metal and drawn offscreen: her blue in a plain circle, nothing around it. With
-    /// MACTV_ORB_PREVIEW set to a folder, the three pictures go there as PNGs (idle, hearing, speaking).
-    @Test func theOrbIsDrawnAsPianaSoulsIs() throws {
+    /// orb.js's shader compiled for Metal and drawn offscreen: her blue in a ball of glass, nothing around it. With
+    /// MACTV_ORB_PREVIEW set to a folder, the three pictures go there as PNGs (idle, hearing, speaking), and the
+    /// frames of five seconds of her moving.
+    @MainActor @Test func theOrbIsDrawnAsPianaSoulsIs() throws {
         guard let pipeline = OrbPipeline.shared else { return }   // no Metal here: nothing to check
         let side = 226                                            // the orb at 100 points, 2× pixels, its room
         let frame = OrbMotion.Frame(time: 12, level: 0.3, scale: 1)
@@ -78,11 +79,15 @@ import UniformTypeIdentifiers
             let i = (y * side + x) * 4
             return (Int(pixels[i + 2]), Int(pixels[i + 1]), Int(pixels[i]), Int(pixels[i + 3]))
         }
-        #expect(at(0, 0).a == 0 && at(side - 1, side / 2).a == 0, "nothing outside the circle: no ring")
+        #expect(at(0, 0).a == 0 && at(side - 1, side / 2).a == 0, "nothing outside the ball: no ring")
         let top = at(side / 2, side / 2 - 70)                     // the sky
         #expect(top.a == 255 && top.b > top.r && top.b > 150, "her blue sky: \(top)")
         let low = at(side / 2, side / 2 + 70)                     // the tide's bright face
         #expect(low.r > 170 && low.g > 200 && low.b > 220, "the tide: \(low)")
+        // Clear glass, no line round it: at the very edge the picture is whole, and no brighter than just inside it
+        let edge = at(side / 2, side / 2 - 97), inside = at(side / 2, side / 2 - 88)
+        #expect(edge.a == 255 && edge.b <= inside.b + 6, "no rim: \(edge) beside \(inside)")
+        #expect(OrbStill.image(pixels: 96) != nil, "a still of her, for a button")
 
         // The cost of a frame, and the previews
         var gpu: TimeInterval = 0
@@ -116,8 +121,21 @@ import UniformTypeIdentifiers
             let page = try #require(onDarkPage([image], side: side))
             strip.append(image)
             try write(page, to: folder.appendingPathComponent("orb-preview-\(look.name).png"))
+            try write(image, to: folder.appendingPathComponent("orb-alone-\(look.name).png"))   // to lay over a picture
         }
         try write(try #require(onDarkPage(strip, side: side)), to: folder.appendingPathComponent("orb-preview-all.png"))
+
+        // The motion, frame by frame (30 a second, to be joined into a film): a second resting, two hearing, two speaking
+        var motion = OrbMotion()
+        var clock = 20.0
+        for i in 0..<150 {
+            let t = Double(i) / 30
+            let look = t < 1 ? looks[0] : t < 3 ? looks[1] : looks[2]
+            let frame = motion.step(now: t, input: look.voice(t), energy: OrbMotion.energy(look.phase), reduced: false, clock: &clock)
+            let image = try #require(pipeline.image(side: 384, frame: frame)?.image)
+            try write(try #require(onDarkPage([image], side: 384)),
+                      to: folder.appendingPathComponent(String(format: "orb-motion-%03d.png", i)))
+        }
     }
 
     /// Mac TV's dark wallpaper behind them, side by side.

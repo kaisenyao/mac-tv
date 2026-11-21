@@ -36,7 +36,7 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
             return "headphones"
         case kAudioDeviceTransportTypeHDMI, 0x64707274 /* 'dprt' DisplayPort */:
-            return "tv.fill"
+            return NSScreen.externalSymbol   // a TV or a monitor: the same symbol the display list and Control Center's Display show for it
         case kAudioDeviceTransportTypeAirPlay:
             return "airplayaudio"
         default:
