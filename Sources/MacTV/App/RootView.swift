@@ -87,8 +87,8 @@ struct ModalSheetRouter: View {
         ForEach(tv.sheets.open.filter { $0 != .organizer || tv.organizer?.onHome != true }, id: \.self) { layer in
             // Control Center is a panel (DesignSystem/Layers): the screen behind dims, fading while the panel drops
             // in, and a click on it closes Control Center.
-            if layer == .controlCenter {
-                DimBackdrop { tv.controlCenter = nil }
+            if isPanel(layer) {
+                DimBackdrop { layer == .controlCenter ? (tv.controlCenter = nil) : (tv.profilePicker = nil) }
                     .allowsHitTesting(tv.isTopSheet(layer))
                     .transition(.opacity)
                     .zIndex(0.5 + Double(layer.rawValue))
@@ -97,7 +97,7 @@ struct ModalSheetRouter: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(tv.isTopSheet(layer))
                 .accessibilityHidden(!tv.isTopSheet(layer))
-                .background { if layer != .controlCenter { SheetBackdrop() } }
+                .background { if !isPanel(layer) { SheetBackdrop() } }
                 .transition(transition(layer))
                 // 固定的层级：不然收起时 SwiftUI 把它挪到主屏下面，收回去的动画被挡住，看起来是一下子没了
                 .zIndex(1 + Double(layer.rawValue))
@@ -117,9 +117,15 @@ struct ModalSheetRouter: View {
         case .displayPicker: DisplayPickerSheet(tv: tv)
         case .appSwitcher: AppSwitcherView(tv: tv)
         case .search: SystemSearchSheet(tv: tv)
-        case .profilePicker: ProfilesScreen(tv: tv)
+        case .profilePicker:
+            if tv.profilePicker?.dropdown == true { ProfileDropdown(tv: tv) } else { ProfilesScreen(tv: tv) }
         case .setup: SetupScreen(tv: tv)
         }
+    }
+
+    /// Panels over Home's status row (Control Center, the profiles dropped down from the avatar): Home stays, dimmed.
+    private func isPanel(_ layer: SheetStack.Layer) -> Bool {
+        layer == .controlCenter || (layer == .profilePicker && tv.profilePicker?.dropdown == true)
     }
 
     /// Control Center drops from the top like tvOS's; full-screen flows fade; the rest settle in.

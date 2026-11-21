@@ -195,13 +195,9 @@ struct NeteaseScreen: View {
                 if store.page == nil, !store.settingsOpen {
                     searchField
                     let focused = store.topFocus == .account
-                    BiliImage(url: store.account?.avatar)
-                        .frame(width: TopBar.height, height: TopBar.height)
-                        .clipShape(Circle())
-                        .overlay(Circle().strokeBorder(.white.opacity(focused ? 1 : 0.2), lineWidth: focused ? 4 : 1.5))
-                        .scaleEffect(focused ? 1.12 : 1)
-                        .contentShape(Circle())
-                        .hoverLift(scale: 1.08)
+                    AccountAvatar(focused: focused, lit: store.menu?.anchor == .account) {
+                        BiliImage(url: store.account?.avatar)
+                    }
                         .onTapGesture { store.tapTop(.account) }
                         .anchorPreference(key: NeteaseAnchors.self, value: .bounds) { ["account": $0] }
                 }

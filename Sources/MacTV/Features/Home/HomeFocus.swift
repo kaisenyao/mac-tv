@@ -93,7 +93,7 @@ extension TVController {
         switch item {
         case .lid: openSettings(to: .lidOverride)
         case .controlCenter: openControlCenter()
-        case .profile: openProfiles()
+        case .profile: openProfiles(dropdown: true)
         }
     }
 

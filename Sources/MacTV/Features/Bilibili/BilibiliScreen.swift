@@ -219,7 +219,7 @@ struct BilibiliScreen: View {
 
     /// 顶部一行的右边：账号胶囊和它下面的菜单
     private var accountBar: some View {
-        AccountPill(name: store.account?.name ?? "未登录", focused: store.accountFocused, lit: store.accountMenuOpen) {
+        AccountAvatar(focused: store.accountFocused, lit: store.accountMenuOpen) {
             if let face = store.account?.face {
                 BiliImage(url: face)
             } else {
@@ -229,7 +229,7 @@ struct BilibiliScreen: View {
         .animation(Motion.focus, value: store.accountFocused)
         .onTapGesture { store.tapAccount() }
         // 账号菜单：从头像下面滑出来，和左边栏是同一种玻璃和同一条曲线
-        .overlay(alignment: .topTrailing) { accountMenu.offset(y: 84) }
+        .overlay(alignment: .topTrailing) { accountMenu.offset(y: TopBar.height + 16) }
         .padding(.trailing, TopBar.trailing)
         .padding(.top, TopBar.top)
         .frame(width: canvas.width, alignment: .trailing)

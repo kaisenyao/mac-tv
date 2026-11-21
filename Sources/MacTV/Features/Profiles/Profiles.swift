@@ -111,6 +111,13 @@ struct ProfilePicker: Equatable {
     var onConfirm = false
     /// The new profile's name while it's being typed.
     var naming: String?
+    /// Dropped down from Home's avatar, as tvOS 26's: the profiles in a grid under the status row, the one watching
+    /// ticked, and Add Profile. (At launch, and from Control Center, it's the full "Who's Watching?" screen.)
+    /// Adding a profile goes on to the full screen to name it; removing one is in Settings › Profiles and Accounts.
+    var dropdown = false
+
+    /// Columns of the dropdown's grid.
+    static let dropdownColumns = 2
 }
 
 /// Typing a profile's name, on "Who's Watching?" and in Settings: the keyboard, or the phone's Type on TV.
@@ -135,9 +142,9 @@ enum ProfileName {
 }
 
 extension TVController {
-    func openProfiles() {
+    func openProfiles(dropdown: Bool = false) {
         let index = profiles.all.firstIndex { $0.id == profile.id } ?? 0
-        profilePicker = ProfilePicker(index: index)
+        profilePicker = ProfilePicker(index: index, dropdown: dropdown)
     }
 
     /// Someone else starts watching. The order matters: everything the last person had open closes and
@@ -219,6 +226,30 @@ extension TVController {
             return
         }
 
+        if picker.dropdown {
+            // The grid under the avatar: Left, Right, Up, Down move; up from its top row, or Back, it goes up again
+            let columns = ProfilePicker.dropdownColumns, count = addIndex + 1
+            switch command {
+            case .back:
+                profilePicker = nil
+                return
+            case .move(.left) where picker.index % columns > 0: picker.index -= 1
+            case .move(.right) where picker.index % columns < columns - 1 && picker.index + 1 < count: picker.index += 1
+            case .move(.down) where picker.index + columns < count: picker.index += columns
+            case .move(.down) where picker.index / columns < (count - 1) / columns: picker.index = count - 1
+            case .move(.up):
+                if picker.index < columns { profilePicker = nil; return }
+                picker.index -= columns
+            case .select:
+                profilePicker = picker
+                activateProfile(picker.index)
+                return
+            default: break
+            }
+            profilePicker = picker
+            return
+        }
+
         if picker.confirmingRemove {
             switch command {
             case .back: picker.confirmingRemove = false   // back on the Remove button
@@ -266,6 +297,7 @@ extension TVController {
         if index >= all.count {
             picker.naming = ""
             picker.onRemove = false
+            picker.dropdown = false   // naming is the full screen's
         } else if remove {
             picker.onRemove = true
             picker.confirmingRemove = true
@@ -438,5 +470,65 @@ struct ProfileNameField: View {
         .padding(.horizontal, 36)
         .frame(minWidth: 520, minHeight: 84)
         .tvPanel(in: Capsule())
+    }
+}
+
+/// The profiles dropped down from Home's avatar, as tvOS 26's: a grid of avatars under the status row, its right edge
+/// on the row's, each with its name, the one watching ticked in green, then Add Profile. Focus lifts an avatar and
+/// rings it white, as the avatar in the row.
+struct ProfileDropdown: View {
+    @ObservedObject var tv: TVController
+    private static let side: CGFloat = 132
+
+    var body: some View {
+        let picker = tv.profilePicker ?? ProfilePicker(dropdown: true)
+        let all = tv.profiles.all
+        let count = all.count + 1
+        let rows = stride(from: 0, to: count, by: ProfilePicker.dropdownColumns).map { Array($0..<min($0 + ProfilePicker.dropdownColumns, count)) }
+        VStack(alignment: .trailing, spacing: 26) {
+            ForEach(rows, id: \.self) { row in
+                HStack(alignment: .top, spacing: 34) {
+                    ForEach(row, id: \.self) { index in
+                        item(index, all: all, focused: picker.index == index)
+                    }
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.trailing, TopBar.trailing)
+        .padding(.top, TopBar.top + TopBar.height + 26)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .animation(Motion.focus, value: picker)
+    }
+
+    private func item(_ index: Int, all: [Profile], focused: Bool) -> some View {
+        let profile = all.indices.contains(index) ? all[index] : nil
+        return VStack(spacing: 14) {
+            Group {
+                if let profile {
+                    ProfileAvatar(profile: profile, size: Self.side)
+                } else {
+                    Circle().fill(.white.opacity(0.18))
+                        .overlay(Image(systemName: "plus").font(.system(size: 48, weight: .medium)))
+                        .frame(width: Self.side, height: Self.side)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if profile?.id == tv.profile.id {
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .heavy))
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color(hex: "#30D158")))
+                        .offset(x: 2, y: -2)
+                }
+            }
+            .avatarFocus(focused: focused)
+            Text(profile?.name ?? "Add Profile")
+                .font(.tvMenuDetail)
+                .lineLimit(1)
+                .opacity(focused ? 1 : 0.75)
+        }
+        .frame(width: Self.side + 24)
+        .contentShape(Rectangle())
+        .onTapGesture { tv.activateProfile(index) }
     }
 }

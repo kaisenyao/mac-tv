@@ -38,7 +38,6 @@ struct HomeView: View {
     @ObservedObject var tv: TVController
     @ObservedObject private var siriRemote = SiriRemoteStatus.shared
     @Environment(\.canvasSize) private var canvas
-    @Namespace private var pills
 
     private var shelfFocused: Bool {
         // The status row sits above the Top Shelf, so the banner stays open while it has focus.
@@ -68,43 +67,10 @@ struct HomeView: View {
                 // An expanded banner takes the whole screen; the dock slides away, off the bottom.
                 .offset(y: gridOffset)
 
-            // The status row, as Apple TV's: the time, small status glyphs (a connected remote, the lid staying
-            // awake), the Control Center button and the profile. Up from the Top Shelf focuses it; Left and Right
-            // move between the button and the profile.
-            // At the top bar's sizes (TopBar), as in every app: the button and the avatar the same height.
-            GlassGroup { HStack(spacing: 20) {
-                StatusClock(twentyFour: tv.preferences.twentyFourHourTime)
-                    .padding(.trailing, 4)
-                ForEach(statusGlyphs, id: \.self) { symbol in
-                    Image(systemName: symbol)
-                        .font(.system(size: 24, weight: .medium))
-                        .opacity(0.9)
-                        .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
-                        .transition(.opacity)
-                }
-                // Control Center: white while it's open or focused, like Apple TV's.
-                let lit = tv.focus == .status(.controlCenter) || tv.controlCenter != nil
-                Button { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) } label: {
-                    Image(systemName: "switch.2")
-                        .font(.system(size: 27, weight: .semibold))
-                        .foregroundStyle(lit ? .black : .white)
-                        .frame(width: TopBar.height, height: TopBar.height)
-                        .focusPlatter(Circle(), focused: lit)
-                        .contentShape(Circle())
-                        .scaleEffect(lit ? 1.08 : 1)
-                        .tvGlassID("control-center", in: pills)
-                }
-                .buttonStyle(PressDip())
-                let profileFocused = tv.focus == .status(.profile)
-                Button { tv.activateStatus(.profile) } label: {
-                    ProfileAvatar(profile: tv.profile, size: TopBar.height)
-                        .overlay(Circle().strokeBorder(.white, lineWidth: profileFocused ? 2.5 : 0).padding(-4))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(PressDip())
-            } }
-                .animation(Motion.focus, value: tv.focus)
-                .animation(Motion.appear, value: statusGlyphs)
+            // The status row, as tvOS 26's: a glass capsule with the time and the avatar; up into it (or a click on
+            // it), and while Control Center or the profiles are open, it widens to the status glyphs and the Control
+            // Center button. Left and Right move between the button and the avatar.
+            StatusCapsule(tv: tv, glyphs: statusGlyphs)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.trailing, TopBar.trailing)
                 .padding(.top, TopBar.top)
@@ -133,6 +99,63 @@ extension HomeView {
     private var statusGlyphs: [String] {
         [siriRemote.connected ? "appletvremote.gen4.fill" : nil, tv.controller == nil ? nil : "gamecontroller.fill",
          tv.lidSleepOff ? "laptopcomputer" : nil].compactMap { $0 }
+    }
+}
+
+/// Home's status row, as tvOS 26's: the time and the avatar in a glass capsule. It widens (the glyphs and the
+/// Control Center button come in between) while focus is in it, or Control Center or the profiles are open from it;
+/// the focused button grows on a white platter. Everything in it is as big as the avatar (TopBar).
+private struct StatusCapsule: View {
+    @ObservedObject var tv: TVController
+    let glyphs: [String]
+
+    private var expanded: Bool {
+        if case .status = tv.focus { return true }
+        return tv.controlCenter != nil || tv.profilePicker?.dropdown == true
+    }
+
+    var body: some View {
+        let expanded = expanded
+        HStack(spacing: 16) {
+            StatusClock(twentyFour: tv.preferences.twentyFourHourTime)
+                .padding(.trailing, expanded ? 6 : 0)
+                .contentShape(Rectangle())
+                .onTapGesture { tv.setFocus(.status(.controlCenter)) }   // a click on the time opens the row up
+            if expanded {
+                ForEach(glyphs, id: \.self) { symbol in
+                    Image(systemName: symbol).font(.system(size: 22, weight: .medium)).opacity(0.9)
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
+                // Control Center: white while it's open or focused, like Apple TV's
+                let focused = tv.focus == .status(.controlCenter)
+                let lit = focused || tv.controlCenter != nil
+                Button { tv.controlCenter == nil ? tv.activateStatus(.controlCenter) : (tv.controlCenter = nil) } label: {
+                    Image(systemName: "switch.2")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(lit ? .black : .white)
+                        .frame(width: TopBar.avatar, height: TopBar.avatar)
+                        .background(Circle().fill(.white).opacity(lit ? 1 : 0))
+                        .contentShape(Circle())
+                        .scaleEffect(focused ? 1.15 : 1)
+                        .shadow(color: .black.opacity(focused ? 0.3 : 0), radius: 10, y: 6)
+                }
+                .buttonStyle(PressDip())
+                .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            }
+            Button { tv.activateStatus(.profile) } label: {
+                ProfileAvatar(profile: tv.profile, size: TopBar.avatar)
+                    .avatarFocus(focused: tv.focus == .status(.profile), lit: tv.profilePicker?.dropdown == true)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(PressDip())
+        }
+        .padding(.leading, 22)
+        .padding(.trailing, TopBar.inset)
+        .frame(height: TopBar.height)
+        .tvGlass(in: Capsule())
+        .animation(Motion.focus, value: tv.focus)
+        .animation(Motion.focus, value: expanded)
+        .animation(Motion.appear, value: glyphs)
     }
 }
 

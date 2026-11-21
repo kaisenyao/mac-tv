@@ -657,11 +657,9 @@ private struct DedaoTopBar: View {
         let focused = focused(.account)
         // 账号菜单开着时账号还亮着（菜单是它的）
         let lit = focused || store.menu?.anchor == .account
-        return AccountPill(name: store.user?.name ?? "得到", detail: store.user?.membership, detailColor: DedaoStyle.accent,
-                           focused: focused, lit: lit) {
+        return AccountAvatar(focused: focused, lit: lit) {
             BiliImage(url: store.user?.avatar)
         }
-        .hoverLift()
         .onTapGesture { store.tapTop(.account) }
     }
 }
@@ -723,7 +721,7 @@ private struct DedaoMenuLayer: View {
         let size = height(menu)
         switch menu.anchor {
         case .account:
-            return (CGPoint(x: canvas.width - DedaoStyle.margin - Self.width(menu), y: 56 + 64 + 18), .topTrailing)
+            return (CGPoint(x: canvas.width - TopBar.trailing - Self.width(menu), y: TopBar.top + TopBar.height + 16), .topTrailing)
         case .setting:
             let rowTop = DedaoSettingsPage.rowsTop + CGFloat(store.settingIndex) * DedaoSettingsPage.rowHeight
             let below = rowTop + DedaoSettingsPage.rowHeight + 6, above = rowTop - 6 - size

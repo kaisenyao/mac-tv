@@ -67,25 +67,39 @@ import Testing
         try await render("topbar-speakers", row)
     }
 
-    @Test func pills() async throws {
+    @Test func homeExpanded() async throws {
         try await withTV { tv in
-            let rows = VStack(alignment: .trailing, spacing: 60) {
-                HStack(spacing: 20) {
+            tv.setFocus(.status(.controlCenter))
+            try await render("topbar-home-expanded", HomeView(tv: tv))
+        }
+    }
+
+    @Test func profileDropdown() async throws {
+        try await withTV { tv in
+            _ = tv.profiles.add(named: "Elton")
+            _ = tv.profiles.add(named: "Nisha")
+            tv.setFocus(.status(.profile))
+            tv.openProfiles(dropdown: true)
+            try await render("topbar-profiles", ZStack { HomeView(tv: tv); Color.black.opacity(0.32); ProfileDropdown(tv: tv) })
+        }
+    }
+
+    @Test func appAvatars() async throws {
+        try await withTV { tv in
+            let rows = VStack(alignment: .trailing, spacing: 40) {
+                HStack(spacing: 16) {
                     Text("17:17").font(TopBar.clock)
-                    Image(systemName: "switch.2").font(.system(size: 27, weight: .semibold))
-                        .frame(width: TopBar.height, height: TopBar.height).tvGlass(in: Circle())
-                    ProfileAvatar(profile: tv.profile, size: TopBar.height)
+                    ProfileAvatar(profile: tv.profile, size: TopBar.avatar)
                 }
-                AccountPill(name: "Yooks", detail: "电子书VIP", detailColor: .orange, focused: false) { Color.gray }
-                AccountPill(name: "yks森", focused: false) { Color.pink }
-                AccountPill(name: "yks森", focused: true) { Color.pink }
-                Circle().fill(.gray).frame(width: TopBar.height, height: TopBar.height)
+                .padding(.leading, 22).padding(.trailing, TopBar.inset).frame(height: TopBar.height).tvGlass(in: Capsule())
+                AccountAvatar(focused: false) { Color.gray }
+                AccountAvatar(focused: true) { Color.pink }
             }
             .foregroundStyle(.white)
             .padding(.trailing, TopBar.trailing).padding(.top, TopBar.top)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             .background(Color(hex: "#3A2333"))
-            try await render("topbar-pills", rows)
+            try await render("topbar-avatars", rows)
         }
     }
 }
