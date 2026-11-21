@@ -57,8 +57,11 @@ extension Font {
     static let tvMenuItem = Font.system(size: 27, weight: .semibold)
     /// A menu item's value at its right, and a menu's small heading ("更多", "‹ 倍速").
     static let tvMenuDetail = Font.system(size: 23, weight: .medium)
-    /// The symbol at the start of a menu item or a sidebar item.
+    /// The symbol at the start of a menu item.
     static let tvMenuSymbol = Font.system(size: 27, weight: .semibold)
+    /// A sidebar's item and the symbol before it, the size of Apple TV's own (see TVSidebar).
+    static let tvSidebarItem = Font.system(size: 24, weight: .medium)
+    static let tvSidebarSymbol = Font.system(size: 22, weight: .medium)
 
     /// A small label on artwork: 课程, 直播, a duration, a progress.
     static let tvBadge = Font.system(size: 19, weight: .bold)

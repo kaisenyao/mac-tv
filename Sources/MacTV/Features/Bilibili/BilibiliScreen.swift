@@ -119,49 +119,51 @@ struct BilibiliScreen: View {
     /// 所以是同一样东西在两种状态之间过渡，而不是两层东西一隐一现。
     private var sidebar: some View {
         let open = store.sidebarFocused
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: TVSidebar.step - TVSidebar.row) {
             ForEach(store.visibleTabs) { tab in
                 let current = tab == store.sidebarTab
-                HStack(spacing: 20) {
+                HStack(spacing: TVSidebar.symbolGap) {
                     Image(systemName: tab.symbol)
-                        .font(.tvMenuSymbol)
-                        .frame(width: 44)
+                        .font(.tvSidebarSymbol)
+                        .frame(width: TVSidebar.symbolColumn)
                     Text(tab.title)
-                        .font(.tvMenuItem)
+                        .font(.tvSidebarItem)
                         .fixedSize()
                         .opacity(open ? 1 : 0)
                         .offset(x: open ? 0 : -36)          // 文字往左收
-                        .frame(width: open ? 184 : 0, alignment: .leading)
+                        .frame(width: open ? TVSidebar.titleWidth : 0, alignment: .leading)
                         .clipped()
                 }
                 .foregroundStyle(open && current ? Color.black : Color.white.opacity(current ? 1 : (open ? 0.78 : 0.38)))
                 .animation(open ? BiliMotion.slide : .easeOut(duration: 0.16), value: open)
-                .padding(.horizontal, 22)
-                .frame(width: open ? 292 : 88, height: 78, alignment: .leading)
+                .padding(.leading, TVSidebar.leading).padding(.trailing, TVSidebar.trailing)
+                .frame(width: open ? TVSidebar.width : TVSidebar.rail, height: TVSidebar.row, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture { store.select(tab) }
             }
         }
-        .padding(18)
+        .padding(TVSidebar.inset)
         .background(alignment: .topLeading) {
             // 当前项的白色高亮：展开时是一整条；收起时不跟底板走，而是自己收缩成一个小白点，
             // 停在当前图标的左边，当作"现在在哪一页"的指示。再展开时从这个小白点长回去。
             let index = CGFloat(store.visibleTabs.firstIndex(of: store.sidebarTab) ?? 0)
-            RoundedRectangle(cornerRadius: open ? 22 : 5, style: .continuous)
+            // 一整条胶囊（各个应用的左边栏同一套尺寸，见 TVSidebar）
+            PillOutline()
                 .fill(.white)
-                .frame(width: open ? 292 : 10, height: open ? 78 : 10)
-                .offset(x: open ? 18 : 18, y: 18 + index * 88 + (open ? 0 : 34))
+                .frame(width: open ? TVSidebar.width : TVSidebar.dot, height: open ? TVSidebar.row : TVSidebar.dot)
+                .offset(x: TVSidebar.inset + (open ? 0 : TVSidebar.dotLeading),
+                        y: TVSidebar.inset + index * TVSidebar.step + (open ? 0 : (TVSidebar.row - TVSidebar.dot) / 2))
         }
         .background {
             // 玻璃底板：收起时向左缩并滑出去
             Color.clear
-                .tvPanelSurface(in: RoundedRectangle(cornerRadius: 38, style: .continuous))
+                .tvPanelSurface(in: TVSidebar.panel)
                 .tvShadow(.float)
                 .opacity(open ? 1 : 0)
                 .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
                 .offset(x: open ? 0 : -150)
         }
-        .padding(.leading, open ? 30 : 26)
+        .padding(.leading, TVSidebar.edge)
         .frame(height: canvas.height, alignment: .center)
         .animation(BiliMotion.slide, value: open)
         .animation(BiliMotion.slide, value: store.tab)

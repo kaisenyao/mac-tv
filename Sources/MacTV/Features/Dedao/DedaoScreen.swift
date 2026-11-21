@@ -26,8 +26,8 @@ enum DedaoStyle {
     /// 左边栏展开时，右边整体让开这么多（Apple TV 的做法：内容右移并变暗，而不是被盖住）
     static let sidebarShift: CGFloat = 214
     /// 左边栏一项多高（加上间隔）、最多露出几项（分类多，露不下的跟着高亮滚）
-    static let sidebarItem: CGFloat = 66
-    static let sidebarStep: CGFloat = 72
+    static let sidebarItem = TVSidebar.row
+    static let sidebarStep = TVSidebar.step
     static let sidebarVisible = 11
     /// 左边栏、右边让开时共用的这条带一点弹性的曲线（同哔哩哔哩）
     static let slide = Motion.slide
@@ -535,37 +535,38 @@ private struct DedaoSidebar: View {
         // 上面让出右上角那一排，下面留一点边
         let top: CGFloat = 170
         // 当前项的白色高亮：展开时是一整条；收起时缩成当前图标左边的一个小白点
-        let bar = RoundedRectangle(cornerRadius: open ? 20 : 5, style: .continuous)
-        let barSize = CGSize(width: open ? 292 : 10, height: open ? item : 10)
-        let barY = CGFloat(current) * step + (open ? 0 : item / 2 - 5)
+        let bar = PillOutline()   // 一整条胶囊（各个应用的左边栏同一套尺寸，见 TVSidebar）
+        let barSize = CGSize(width: open ? TVSidebar.width : TVSidebar.dot, height: open ? item : TVSidebar.dot)
+        let barX: CGFloat = open ? 0 : TVSidebar.dotLeading
+        let barY = CGFloat(current) * step + (open ? 0 : (item - TVSidebar.dot) / 2)
         return ZStack(alignment: .topLeading) {
-            bar.fill(.white).frame(width: barSize.width, height: barSize.height).offset(y: barY)
+            bar.fill(.white).frame(width: barSize.width, height: barSize.height).offset(x: barX, y: barY)
             // 字一律同样粗细、同样的颜色，上下走时字本身一点不变（不然每走一格都要淡出淡入一次，走快了字会看不见）；
             // 选中那一项的黑字是同一列字再画一遍、只露出白条底下那一块，跟着白条走
             labels(entries, open: open, dark: false)
             labels(entries, open: open, dark: true)
                 .mask(alignment: .topLeading) {
-                    bar.frame(width: barSize.width, height: barSize.height).offset(y: barY)
+                    bar.frame(width: barSize.width, height: barSize.height).offset(x: barX, y: barY)
                 }
                 .opacity(open ? 1 : 0)
                 .allowsHitTesting(false)
         }
         .offset(y: -CGFloat(first) * step)
-        .frame(width: open ? 292 : 88, height: window, alignment: .topLeading)
+        .frame(width: open ? TVSidebar.width : TVSidebar.rail, height: window, alignment: .topLeading)
         .clipped()
         // 上下还有没露出来的：那一头淡出去
         .mask { ListFadeMask(above: first > 0, below: first + visible < entries.count) }
-        .padding(18)
+        .padding(TVSidebar.inset)
         .background {
             // 玻璃底板：收起时向左缩并滑出去
             Color.clear
-                .tvPanelSurface(in: RoundedRectangle(cornerRadius: 38, style: .continuous))
+                .tvPanelSurface(in: TVSidebar.panel)
                 .tvShadow(.float)
                 .opacity(open ? 1 : 0)
                 .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
                 .offset(x: open ? 0 : -150)
         }
-        .padding(.leading, open ? 30 : 26)
+        .padding(.leading, TVSidebar.edge)
         .frame(height: canvas.height - top - 30, alignment: .center)
         .offset(y: top)
         .animation(DedaoStyle.slide, value: open)
@@ -578,22 +579,22 @@ private struct DedaoSidebar: View {
             ForEach(entries) { entry in
                 // 收起时当前那一项的图标亮一点（换页时才变）；展开时整列一样，当前项靠白条和黑字
                 let shade = dark ? Color.black : Color.white.opacity(open ? 0.78 : (entry.id == store.sidebarSection ? 1 : 0.38))
-                HStack(spacing: 20) {
+                HStack(spacing: TVSidebar.symbolGap) {
                     Image(systemName: entry.symbol)
-                        .font(.tvMenuSymbol)
-                        .frame(width: 44)
+                        .font(.tvSidebarSymbol)
+                        .frame(width: TVSidebar.symbolColumn)
                     Text(entry.title)
-                        .font(.tvMenuItem)
+                        .font(.tvSidebarItem)
                         .fixedSize()
                         .opacity(open ? 1 : 0)
                         .offset(x: open ? 0 : -36)          // 文字往左收
-                        .frame(width: open ? 184 : 0, alignment: .leading)
+                        .frame(width: open ? TVSidebar.titleWidth : 0, alignment: .leading)
                         .clipped()
                 }
                 .foregroundStyle(shade)
                 .animation(open ? DedaoStyle.slide : .easeOut(duration: 0.16), value: open)
-                .padding(.horizontal, 22)
-                .frame(width: open ? 292 : 88, height: DedaoStyle.sidebarItem, alignment: .leading)
+                .padding(.leading, TVSidebar.leading).padding(.trailing, TVSidebar.trailing)
+                .frame(width: open ? TVSidebar.width : TVSidebar.rail, height: DedaoStyle.sidebarItem, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture { store.select(entry.id) }
             }

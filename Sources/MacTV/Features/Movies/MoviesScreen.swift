@@ -827,7 +827,7 @@ private struct MoviesSidebarView: View {
     let pressed: Bool
     @Environment(\.canvasSize) private var canvas
 
-    private static let item: CGFloat = 66, step: CGFloat = 72, heading: CGFloat = 40, visible = 12
+    private static let item = TVSidebar.row, step = TVSidebar.step, heading: CGFloat = 40, visible = 11
 
     var body: some View {
         let firstSource = entries.firstIndex { if case .source = $0 { true } else { $0 == .add } } ?? entries.count
@@ -836,36 +836,36 @@ private struct MoviesSidebarView: View {
         let shown = min(entries.count, Self.visible)
         let first = max(0, min(current - shown / 2, entries.count - shown))
         let window = y(first + shown - 1) - y(first) + Self.item
-        let bar = RoundedRectangle(cornerRadius: open ? 20 : 5, style: .continuous)
-        let barSize = CGSize(width: open ? 292 : 10, height: open ? Self.item : 10)
-        let barY = y(current) + (open ? 0 : Self.item / 2 - 5)
+        let bar = PillOutline()   // a whole capsule: every app's sidebar has the same measures (TVSidebar)
+        let barSize = CGSize(width: open ? TVSidebar.width : TVSidebar.dot, height: open ? Self.item : TVSidebar.dot)
+        let barY = y(current) + (open ? 0 : (Self.item - TVSidebar.dot) / 2)
         ZStack(alignment: .topLeading) {
-            bar.fill(.white).frame(width: barSize.width, height: barSize.height).offset(y: barY)
+            bar.fill(.white).frame(width: barSize.width, height: barSize.height).offset(x: open ? 0 : TVSidebar.dotLeading, y: barY)
                 .scaleEffect(pressed && open ? 0.97 : 1)
             ForEach(Array(entries.enumerated()), id: \.offset) { index, section in
                 if index == firstSource {
                     ZStack(alignment: .leading) {
                         Text("SOURCES").font(.tv(.caption2, emphasized: true)).tracking(1.2)
-                            .foregroundStyle(.white.opacity(0.45)).opacity(open ? 1 : 0).padding(.leading, 22)
-                        Capsule().fill(.white.opacity(0.22)).frame(width: 34, height: 2).padding(.leading, 27).opacity(open ? 0 : 1)
+                            .foregroundStyle(.white.opacity(0.45)).opacity(open ? 1 : 0).padding(.leading, TVSidebar.leading + 6)
+                        Capsule().fill(.white.opacity(0.22)).frame(width: 34, height: 2).padding(.leading, TVSidebar.leading + 4).opacity(open ? 0 : 1)
                     }
                     .frame(height: Self.heading)
                     .offset(y: y(index) - Self.heading + 2)
                 }
                 let (symbol, title, status) = describe(section)
                 let isCurrent = index == current
-                HStack(spacing: 20) {
-                    Image(systemName: symbol).font(.tvMenuSymbol).frame(width: 44)
+                HStack(spacing: TVSidebar.symbolGap) {
+                    Image(systemName: symbol).font(.tvSidebarSymbol).frame(width: TVSidebar.symbolColumn)
                     if open {
-                        Text(title).font(.tvMenuItem).lineLimit(1).minimumScaleFactor(0.75)
+                        Text(title).font(.tvSidebarItem).lineLimit(1).minimumScaleFactor(0.75)
                         Spacer(minLength: 0)
                         if let status { Text(status).font(.tvMenuDetail).opacity(0.6).lineLimit(1) }
                     }
                 }
                 .foregroundStyle(open && isCurrent ? Color.black
                                  : Color.white.opacity(open ? (status == nil ? 0.78 : 0.5) : (isCurrent ? 1 : 0.38)))
-                .padding(.leading, 22).padding(.trailing, 14)
-                .frame(width: open ? 292 : 88, height: Self.item, alignment: .leading)
+                .padding(.leading, TVSidebar.leading).padding(.trailing, TVSidebar.trailing)
+                .frame(width: open ? TVSidebar.width : TVSidebar.rail, height: Self.item, alignment: .leading)
                 .contentShape(Rectangle())
                 .offset(y: y(index))
                 .onTapGesture { tv.tapMovieSidebar(section) }
@@ -873,19 +873,19 @@ private struct MoviesSidebarView: View {
             }
         }
         .offset(y: -y(first))
-        .frame(width: open ? 292 : 88, height: window, alignment: .topLeading)
+        .frame(width: open ? TVSidebar.width : TVSidebar.rail, height: window, alignment: .topLeading)
         .clipped()
         .mask { ListFadeMask(above: first > 0, below: first + shown < entries.count) }
-        .padding(18)
+        .padding(TVSidebar.inset)
         .background {
             Color.clear
-                .tvPanelSurface(in: RoundedRectangle(cornerRadius: 38, style: .continuous))
+                .tvPanelSurface(in: TVSidebar.panel)
                 .tvShadow(.float)
                 .opacity(open ? 1 : 0)
                 .scaleEffect(x: open ? 1 : 0.35, y: open ? 1 : 0.96, anchor: .leading)
                 .offset(x: open ? 0 : -150)
         }
-        .padding(.leading, open ? 30 : 26)
+        .padding(.leading, TVSidebar.edge)
         .frame(height: canvas.height, alignment: .center)
         .animation(Motion.slide, value: open)
         .animation(Motion.slide, value: current)
