@@ -479,6 +479,7 @@ struct ProfileNameField: View {
 struct ProfileDropdown: View {
     @ObservedObject var tv: TVController
     private static let side: CGFloat = 132
+    private static let tick: CGFloat = 28
 
     var body: some View {
         let picker = tv.profilePicker ?? ProfilePicker(dropdown: true)
@@ -516,13 +517,14 @@ struct ProfileDropdown: View {
             // The focus ring first, then the tick on top of it (on the avatar's edge, never under the ring), both
             // growing with the avatar
             .overlay(Circle().strokeBorder(.white, lineWidth: 3).padding(-5).opacity(focused ? 1 : 0))
-            .overlay(alignment: .topTrailing) {
+            .overlay {
+                // As tvOS's: a small green tick whose centre sits on the avatar's edge, up and to the right at 45°
                 if profile?.id == tv.profile.id {
-                    Image(systemName: "checkmark").font(.system(size: 17, weight: .heavy))
-                        .frame(width: 34, height: 34)
+                    let edge = Self.side / 2 * 0.7071
+                    Image(systemName: "checkmark").font(.system(size: 14, weight: .bold))
+                        .frame(width: Self.tick, height: Self.tick)
                         .background(Circle().fill(Color(hex: "#30D158")))
-                        .overlay(Circle().strokeBorder(.black.opacity(0.25), lineWidth: 1))
-                        .offset(x: 8, y: -8)
+                        .offset(x: edge, y: -edge)
                 }
             }
             .scaleEffect(focused ? 1.12 : 1)
@@ -531,6 +533,8 @@ struct ProfileDropdown: View {
                 .font(.tvMenuDetail)
                 .lineLimit(1)
                 .opacity(focused ? 1 : 0.75)
+                // The focused avatar grows by 12 %: its name moves down with it, the same gap below every avatar
+                .offset(y: focused ? Self.side * 0.06 : 0)
         }
         .frame(width: Self.side + 24)
         .contentShape(Rectangle())
