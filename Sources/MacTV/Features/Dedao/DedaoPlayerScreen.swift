@@ -184,7 +184,7 @@ struct DedaoPlayerScreen: View {
                 if let timer = player.sleep {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         let label = timer.label(at: context.date)
-                        Label(label, systemImage: "timer").font(label.allSatisfy(\.isASCII) ? .tvTimecode : NeteaseProgress.cjkStatus.monospacedDigit())
+                        Label(label, systemImage: "gauge.with.needle").font(label.allSatisfy(\.isASCII) ? .tvTimecode : NeteaseProgress.cjkStatus.monospacedDigit())
                     }
                 }
             }
