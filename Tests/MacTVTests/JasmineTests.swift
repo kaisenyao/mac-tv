@@ -151,6 +151,18 @@ import Testing
         #expect(RemoteCommand(json: ["a": "siri", "p": "listen"]) == nil)
     }
 
+    /// A click on Search's field types in it at once, from a result too; a click elsewhere stops typing.
+    @Test func aClickOnSearchsFieldTypesAtOnce() async throws {
+        try await Self.withJasmine { rig in
+            rig.tv.openSystemSearch()
+            rig.tv.systemSearch?.row = 2
+            rig.tv.typeInSystemSearch()
+            #expect(rig.tv.systemSearch?.row == 0 && rig.tv.systemSearch?.typing == true)
+            rig.tv.endTextEditing()
+            #expect(rig.tv.systemSearch?.typing == false && rig.tv.systemSearch != nil)
+        }
+    }
+
     @Test func theKeyboardAndAControllerTimeTheSameButton() async throws {
         try await Self.withJasmine { rig in
             rig.tv.openSystemSearch()

@@ -31,6 +31,13 @@ extension TVController {
         set { sheets.search = newValue }
     }
 
+    /// A click on Search's field: typing in it at once, as on any Mac (no Select first).
+    func typeInSystemSearch() {
+        guard systemSearch != nil else { return }
+        systemSearch?.row = 0
+        systemSearch?.typing = true
+    }
+
     /// What the query finds, apps first, then Settings, then Movies; a few of each.
     func systemSearchResults(_ query: String) -> [(group: String, results: [SystemSearchResult])] {
         let query = query.trimmingCharacters(in: .whitespaces)
@@ -134,18 +141,26 @@ struct SystemSearchSheet: View {
         let search = tv.systemSearch ?? SystemSearch()
         let groups = tv.systemSearchResults(search.query)
         VStack(spacing: 40) {
+            // Typing: white with dark text and a caret, as every field on the TV (Add App's, 哔哩哔哩's search), so it
+            // can't be missed; on the field but not typing: its white outline. A click on it types at once.
+            let typing = search.row == 0 && search.typing
             TVTextField(text: Binding(get: { tv.systemSearch?.query ?? "" }, set: { tv.systemSearch?.query = $0 }),
-                        placeholder: "Search", editing: search.row == 0 && search.typing,
+                        placeholder: "Search", editing: typing,
                         limit: TVController.searchLimit) { tv.systemSearch?.typing = false }
                 .font(.tv(.headline, emphasized: true))
+                .foregroundStyle(typing ? .black : .white)
                 .padding(.trailing, 50)
                 .padding(.horizontal, 40)
                 .frame(width: 900, height: 84, alignment: .leading)
-                .background(.white.opacity(search.row == 0 ? 0.14 : 0.07), in: Capsule())
-                .overlay(PillOutline().strokeBorder(.white.opacity(search.row == 0 ? 0.85 : 0.12), lineWidth: search.row == 0 ? 3 : 1))
+                .background(typing ? .white : .white.opacity(search.row == 0 ? 0.14 : 0.07), in: Capsule())
+                .overlay(PillOutline().strokeBorder(.white.opacity(typing ? 0 : search.row == 0 ? 0.85 : 0.12),
+                                                    lineWidth: search.row == 0 ? 3 : 1))
                 .overlay(alignment: .trailing) {
                     Image(systemName: "magnifyingglass").font(.tv(.headline)).opacity(0.5).padding(.trailing, 34)
                 }
+                .environment(\.colorScheme, typing ? .light : .dark)   // a dark caret on the white field
+                .contentShape(Capsule())
+                .onTapGesture { tv.typeInSystemSearch() }
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
                     let start = groups[..<index].reduce(0) { $0 + $1.results.count }

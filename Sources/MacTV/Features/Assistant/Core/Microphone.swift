@@ -154,8 +154,14 @@ final class Microphone: Hearing {
     private func listen(_ engine: AVAudioEngine) throws {
         let node = engine.inputNode
         node.removeTap(onBus: 0)
-        let format = node.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw Failure.noMicrophone }
+        // The tap in the microphone's own format, read from the hardware. Once the input is switched to another
+        // device, the node's output format can still be the previous device's (44.1 kHz where an MX Brio gives
+        // 48 kHz), and AVAudioEngine refuses a tap in it ("Input HW format and tap format not matching").
+        let hardware = node.inputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, hardware.channelCount > 0,
+              let format = AVAudioFormat(standardFormatWithSampleRate: hardware.sampleRate, channels: hardware.channelCount)
+        else { throw Failure.noMicrophone }
+        Log.app.notice("Jasmine's microphone: \(Int(format.sampleRate), privacy: .public) Hz, \(format.channelCount, privacy: .public) ch")
         guard let converter = PCMConverter(from: format) else { throw Failure.cannotConvert }
         node.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 10), format: format,
                         block: Self.tap(converter) { [weak self] data, level in
